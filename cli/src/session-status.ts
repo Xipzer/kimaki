@@ -36,6 +36,25 @@ export function visibleMessages({
   return revertIndex >= 0 ? messages.slice(0, revertIndex) : messages
 }
 
+// A question only blocks the session when it belongs to the newest assistant
+// message. Questions left behind by an interrupted tool call stay registered
+// in OpenCode while the session keeps working on later messages.
+export function hasLiveQuestion({
+  sessionId,
+  questions,
+  messages,
+}: {
+  sessionId: string
+  questions: Array<{ sessionID: string; tool?: { messageID: string } }>
+  messages: SessionMessage[]
+}): boolean {
+  const latestAssistantId = lastAssistant(messages)?.info.id
+  return questions.some((request) => {
+    if (request.sessionID !== sessionId) return false
+    return !request.tool || request.tool.messageID === latestAssistantId
+  })
+}
+
 export function deriveSessionState({
   messages,
   busy,
