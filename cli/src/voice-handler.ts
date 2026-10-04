@@ -603,16 +603,19 @@ export async function processVoiceAttachment({
   if (projectDirectory) {
     try {
       voiceLogger.log(`Getting project file tree from ${projectDirectory}`)
-      const { stdout } = await execAsync('git ls-files | tree --fromfile -a', {
-        cwd: projectDirectory,
-      })
+      // Non-git folders and hosts without `tree` are common; fall back to a
+      // flat file list instead of failing with a stack trace on every note.
+      const { stdout } = await execAsync(
+        'git rev-parse --is-inside-work-tree >/dev/null 2>&1 || exit 0; if command -v tree >/dev/null 2>&1; then git ls-files | tree --fromfile -a; else git ls-files | head -500; fi',
+        { cwd: projectDirectory },
+      )
 
       if (stdout) {
         transcriptionPrompt = `Discord voice message transcription. Project file structure:\n${stdout}\n\nPlease transcribe file names and paths accurately based on this context.`
         voiceLogger.log(`Added project context to transcription prompt`)
       }
     } catch (e) {
-      voiceLogger.log(`Could not get project tree:`, e)
+      voiceLogger.log(`Could not get project tree: ${e instanceof Error ? e.message.split('\n')[0] : String(e)}`)
     }
   }
 
