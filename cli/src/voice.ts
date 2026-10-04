@@ -29,7 +29,11 @@ import {
 
 const voiceLogger = createLogger(LogPrefix.VOICE)
 
-const OPENAI_BASE_URL = 'https://api.openai.com/v1'
+// OPENAI_BASE_URL lets voice transcription and TTS target any OpenAI-compatible
+// server (local Whisper proxy, gateway). Read per call so env changes apply.
+function getOpenAIBaseUrl(): string {
+  return (process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1').replace(/\/+$/, '')
+}
 const OPENAI_AUDIO_CHAT_MODEL = 'gpt-audio-1.5'
 const GEMINI_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta'
 export const GEMINI_TRANSCRIPTION_MODEL = 'gemini-flash-latest'
@@ -73,7 +77,7 @@ async function postJson({
 
 export async function requestOpenAIAudioTranscription({
   apiKey,
-  baseUrl = OPENAI_BASE_URL,
+  baseUrl = getOpenAIBaseUrl(),
   prompt,
   audioBase64,
   mediaType,
@@ -972,7 +976,7 @@ async function generateSpeechOpenAI({
   speed?: number
 }): Promise<SpeechGenerationErrors | SpeechResult> {
   const response = await fetchSpeech({
-    url: `${OPENAI_BASE_URL}/audio/speech`,
+    url: `${getOpenAIBaseUrl()}/audio/speech`,
     headers: { Authorization: `Bearer ${apiKey}` },
     provider: 'OpenAI',
     body: {
