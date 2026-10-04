@@ -10,6 +10,16 @@ after making important changes to queueing or message handling always run the fu
 
 for checkout validation requests, prefer non-recursive checks unless the user asks otherwise.
 
+## fork rule: Wendy end-to-end gate (owner requirement)
+
+this checkout is the owner's fork (future name: Wendy). any change that Wendy (the voice assistant in `~/WebstormProjects/kimaki-whisper`) calls, parses, or depends on is NOT done until it passes a Wendy end-to-end run, on top of unit tests and tsc:
+
+1. build Wendy from the matching branch and point her `kimaki` calls at this fork's CLI (PATH override), never at the live bot's npx copy.
+2. drive the real Wendy brain (`think()`, real tools; see `test/sim-messy.mjs` there) with spoken-style scenarios that exercise the new feature AND the existing flows (thread status, read latest reply, ask/send, lookup by name, model switch, blocked thread). sends go only to a sandbox thread.
+3. run the same scenarios on the current production pair (Wendy master + published kimaki) as the baseline, and compare: answer correctness, tool calls per turn, turn latency, errors. any regression blocks the change.
+4. check that the brain uses the feature without extra coaching. if it needs rails (tool spec text, prompt rules, guards), add them in Wendy as part of the same change.
+5. record results in `docs/analysis/wendy-e2e-<date>.md`.
+
 ## task-specific docs
 
 read the matching doc **before** starting these tasks. they hold the full procedures and are not repeated here.
