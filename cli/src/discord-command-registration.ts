@@ -4,7 +4,9 @@
 // (post-restart re-registration).
 
 import {
+  type APIApplicationCommand,
   type REST,
+  type RESTPostAPIApplicationCommandsJSONBody,
   Routes,
   SlashCommandBuilder,
 } from 'discord.js'
@@ -42,16 +44,123 @@ function getDiscordCommandSuffix(
   return '-cmd'
 }
 
+export const MAX_DISCORD_COMMANDS = 100
+
+// Other integrations may share this bot application (e.g. a sidecar using the
+// same token). Bulk PUT deletes every command missing from the body, so Kimaki
+// only replaces names it owns: names it generates now, its dynamic suffixes, and
+// static names from older versions. Append removed static commands here so
+// upgrades still clean them up.
+const KIMAKI_DYNAMIC_COMMAND_RE = /^[a-z0-9][a-z0-9-]*-(agent|cmd|skill|mcp-prompt)$/
+const LEGACY_KIMAKI_COMMANDS = new Set([
+  'accept', 'accept-always', 'add-dir', 'add-directory', 'add-new-project',
+  'disable-worktrees', 'enable-worktrees', 'memory-snapshot', 'reject',
+  'resume-session', 'screenshare-stop', 'session', 'sqlitedb', 'stop',
+  'stop-opencode-server', 'toggle-mention-mode', 'toggle-worktrees',
+  'transcription-url', 'unset-model-override',
+])
+
+// KIMAKI_PRESERVE_COMMANDS=whisper-*,deploy-cmd forces matching names to be
+// treated as foreign even if they look like Kimaki dynamic/legacy names.
+export function parsePreservePatterns(raw: string | undefined): RegExp[] {
+  return (raw ?? '')
+    .split(',')
+    .map((s) => s.trim().toLowerCase())
+    .filter(Boolean)
+    .map((p) => new RegExp(`^${p.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*')}$`))
+}
+
+export function isKimakiOwnedCommand({
+  name,
+  ownedNames,
+  preservePatterns = [],
+}: {
+  name: string
+  ownedNames: ReadonlySet<string>
+  preservePatterns?: RegExp[]
+}): boolean {
+  if (ownedNames.has(name)) return true
+  if (preservePatterns.some((p) => p.test(name))) return false
+  return LEGACY_KIMAKI_COMMANDS.has(name) || KIMAKI_DYNAMIC_COMMAND_RE.test(name)
+}
+
+export type ForeignCommandPayload = Omit<
+  APIApplicationCommand,
+  'application_id' | 'guild_id' | 'version' | 'name_localized' | 'description_localized' | 'default_permission'
+>
+
+// Strip response-only fields. `id` is accepted by the bulk PUT schema and keeps
+// the existing command matched in place.
+function toForeignPayload(command: APIApplicationCommand): ForeignCommandPayload {
+  const {
+    application_id,
+    guild_id,
+    version,
+    name_localized,
+    description_localized,
+    default_permission,
+    ...payload
+  } = command
+  return payload
+}
+
+export function mergeWithForeignCommands({
+  owned,
+  existing,
+  reservedOwnedCount = 0,
+  preservePatterns = [],
+  max = MAX_DISCORD_COMMANDS,
+}: {
+  // Kimaki commands in priority order (static first, lowest-priority last)
+  owned: RESTPostAPIApplicationCommandsJSONBody[]
+  existing: APIApplicationCommand[]
+  // Leading owned commands that always fit, even if foreign ones must be dropped
+  reservedOwnedCount?: number
+  preservePatterns?: RegExp[]
+  max?: number
+}) {
+  const ownedNames = new Set(owned.map((c) => c.name))
+  const foreignAll = existing
+    .filter((c) => !isKimakiOwnedCommand({ name: c.name, ownedNames, preservePatterns }))
+    .map(toForeignPayload)
+  const ownedBudget = Math.min(owned.length, Math.max(reservedOwnedCount, max - foreignAll.length))
+  const keptOwned = owned.slice(0, ownedBudget)
+  const foreign = foreignAll.slice(0, max - keptOwned.length)
+  return {
+    body: [...keptOwned, ...foreign],
+    foreign: foreign.map((c) => c.name),
+    trimmedOwned: owned.slice(ownedBudget).map((c) => c.name),
+    droppedForeign: foreignAll.slice(foreign.length).map((c) => c.name),
+  }
+}
+
+async function fetchCommands({ rest, route }: { rest: REST; route: `/${string}` }) {
+  const response = await rest.get(route, {
+    query: new URLSearchParams({ with_localizations: 'true' }),
+  })
+  if (!Array.isArray(response)) return []
+  return response.filter((c): c is APIApplicationCommand => typeof c?.name === 'string')
+}
+
+// Removes legacy global Kimaki commands while keeping other integrations' ones.
 async function clearGlobalCommands({
   rest,
   appId,
+  preservePatterns,
 }: {
   rest: REST
   appId: string
+  preservePatterns: RegExp[]
 }) {
   try {
-    await rest.put(Routes.applicationCommands(appId), { body: [] })
-    cliLogger.info('COMMANDS: Cleared global slash commands')
+    const route = Routes.applicationCommands(appId)
+    const existing = await fetchCommands({ rest, route })
+    const { body, foreign } = mergeWithForeignCommands({ owned: [], existing, preservePatterns })
+    if (foreign.length === existing.length) return
+    await rest.put(route, { body })
+    cliLogger.info(
+      `COMMANDS: Cleared global Kimaki slash commands${foreign.length ? `, kept foreign: ${foreign.join(', ')}` : ''}`,
+    )
   } catch (error) {
     cliLogger.warn(
       `COMMANDS: Could not clear global slash commands: ${error instanceof Error ? error.stack : String(error)}`,
@@ -509,6 +618,8 @@ export async function registerCommands({
   // This ordering matters because we slice to MAX_DISCORD_COMMANDS (100) at the end,
   // so lower-priority dynamic commands get trimmed first if the total exceeds the limit.
   // Skills are last because they are the largest/most disposable set under the cap.
+  // Foreign commands kept in the guild share the same cap.
+  const staticCommandCount = commands.length
 
   // 1. Agent-specific quick commands like /plan-agent, /build-agent
   // Filter to primary/all mode agents (same as /agent command shows), excluding hidden agents
@@ -607,16 +718,7 @@ export async function registerCommands({
   }
   store.setState({ registeredUserCommands: newRegisteredCommands })
 
-  // Discord allows max 100 guild commands. Slice to stay within the limit,
-  // trimming lowest-priority dynamic commands (skills, then MCP) first.
-  const MAX_DISCORD_COMMANDS = 100
-  if (commands.length > MAX_DISCORD_COMMANDS) {
-    cliLogger.warn(
-      `COMMANDS: ${commands.length} commands exceed Discord limit of ${MAX_DISCORD_COMMANDS}, truncating to ${MAX_DISCORD_COMMANDS}`,
-    )
-    commands.length = MAX_DISCORD_COMMANDS
-  }
-
+  const preservePatterns = parsePreservePatterns(process.env.KIMAKI_PRESERVE_COMMANDS)
   const rest = createDiscordRest(token)
   const uniqueGuildIds = Array.from(new Set(guildIds.filter((guildId) => guildId)))
   if (uniqueGuildIds.length === 0) {
@@ -626,21 +728,37 @@ export async function registerCommands({
 
   try {
     // PUT is a bulk overwrite: Discord matches by name, updates changed fields
-    // (description, options, etc.) in place, creates new commands, and deletes
-    // any not present in the body. No local diffing needed.
+    // in place, creates new commands, and deletes any not present in the body.
+    // Foreign commands are fetched first and sent back unchanged so they survive.
     const results = await Promise.allSettled(
       uniqueGuildIds.map(async (guildId) => {
-        const response = await rest.put(
-          Routes.applicationGuildCommands(appId, guildId),
-          {
-            body: commands,
-          },
-        )
+        const route = Routes.applicationGuildCommands(appId, guildId)
+        const existing = await fetchCommands({ rest, route }).catch((error) => {
+          cliLogger.warn(
+            `COMMANDS: Could not fetch existing commands for guild ${guildId}, foreign commands will not be preserved: ${error instanceof Error ? error.message : String(error)}`,
+          )
+          return []
+        })
+        const { body, foreign, trimmedOwned, droppedForeign } = mergeWithForeignCommands({
+          owned: commands,
+          existing,
+          reservedOwnedCount: staticCommandCount,
+          preservePatterns,
+        })
+        if (foreign.length > 0) {
+          cliLogger.info(`COMMANDS: Keeping ${foreign.length} foreign command(s) in guild ${guildId}: ${foreign.join(', ')}`)
+        }
+        if (trimmedOwned.length > 0) {
+          cliLogger.warn(
+            `COMMANDS: Discord limit of ${MAX_DISCORD_COMMANDS} reached in guild ${guildId}, skipped ${trimmedOwned.length} Kimaki command(s): ${trimmedOwned.join(', ')}`,
+          )
+        }
+        if (droppedForeign.length > 0) {
+          cliLogger.warn(`COMMANDS: Dropped foreign command(s) over the limit in guild ${guildId}: ${droppedForeign.join(', ')}`)
+        }
 
-        const registeredCount = Array.isArray(response)
-          ? response.length
-          : commands.length
-
+        const response = await rest.put(route, { body })
+        const registeredCount = Array.isArray(response) ? response.length : body.length
         return { guildId, registeredCount }
       }),
     )
@@ -686,10 +804,7 @@ export async function registerCommands({
     // exist for self-hosted bots that previously registered commands globally.
     const isGateway = store.getState().discordBaseUrl !== 'https://discord.com'
     if (!isGateway) {
-      await clearGlobalCommands({
-        rest,
-        appId,
-      })
+      await clearGlobalCommands({ rest, appId, preservePatterns })
     }
 
     cliLogger.info(
