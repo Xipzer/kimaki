@@ -469,6 +469,7 @@ describe('worktree lifecycle', () => {
       expect(worktreeSession).not.toBe(sessionBefore)
       await expect(getSessionModel(worktreeSession)).resolves.toMatchInlineSnapshot(`
         {
+          "locked": false,
           "modelId": "deterministic-provider/source-model-v2",
           "variant": null,
         }

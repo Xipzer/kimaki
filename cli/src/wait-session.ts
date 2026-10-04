@@ -9,6 +9,7 @@ import { getSessionEventSnapshot, getThreadSession } from './database.js'
 import { initializeOpencodeForDirectory } from './opencode.js'
 import { ShareMarkdown } from './markdown.js'
 import { createLogger, LogPrefix } from './logger.js'
+import { writeStdout } from './write-stdout.js'
 import {
   derivePendingPermissionRequests,
   isAssistantMessageNaturalCompletion,
@@ -195,7 +196,7 @@ async function outputSessionMarkdown({
     })
   }
 
-  process.stdout.write(result)
+  await writeStdout(result)
 }
 
 async function loadPersistedSessionEvents({

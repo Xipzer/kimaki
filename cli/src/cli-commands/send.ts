@@ -15,7 +15,7 @@ import { fileURLToPath } from 'node:url'
 import { spawn, execSync } from 'node:child_process'
 import { createLogger, LogPrefix, initLogFile } from '../logger.js'
 import { createDiscordClient, initDatabase, getChannelDirectory, initializeOpencodeForDirectory, createProjectChannels } from '../discord-bot.js'
-import { getBotTokenWithMode, getThreadSession, getThreadIdBySessionId, getSessionEventSnapshot, getDb, createScheduledTask, listScheduledTasks, cancelScheduledTask, getScheduledTask, updateScheduledTask, getSessionStartSourcesBySessionIds, deleteChannelDirectoryById, findChannelsByDirectory, getChannelWorktreesEnabled } from '../database.js'
+import { getBotTokenWithMode, getThreadSession, getThreadIdBySessionId, getSessionEventSnapshot, getDb, createScheduledTask, listScheduledTasks, cancelScheduledTask, getScheduledTask, updateScheduledTask, getSessionStartSourcesBySessionIds, deleteChannelDirectoryById, findChannelsByDirectory, getChannelWorktreesEnabled, getSessionModel } from '../database.js'
 import {
   flushAnalytics,
   initAnalytics,
@@ -507,6 +507,13 @@ cli
           if (threadModelCheck instanceof Error) {
             cliLogger.error(threadModelCheck.message)
             process.exit(EXIT_NO_RESTART)
+          }
+          const lockedSessionId = options.model ? sessionId || await getThreadSession(targetThreadId) : undefined
+          const lockedModel = lockedSessionId ? await getSessionModel(lockedSessionId) : undefined
+          if (lockedModel?.locked && lockedModel.modelId !== options.model) {
+            cliLogger.warn(
+              `Session ${lockedSessionId} model is locked to ${lockedModel.modelId}; --model ${options.model} will be ignored. Unlock with: kimaki session model ${lockedSessionId} --unlock`,
+            )
           }
 
           // Guard early: fail before sending the message if a feature that

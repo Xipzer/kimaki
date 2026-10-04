@@ -140,6 +140,7 @@ export const session_models = sqliteCore.sqliteTable('session_models', {
   session_id: sqliteCore.text('session_id').primaryKey().notNull(),
   model_id: sqliteCore.text('model_id').notNull(),
   variant: sqliteCore.text('variant'),
+  locked: sqliteCore.integer('locked', { mode: 'number' }).notNull().default(0),
   created_at: datetime('created_at').default(orm.sql`CURRENT_TIMESTAMP`),
 })
 

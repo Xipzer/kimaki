@@ -604,16 +604,18 @@ export async function setGlobalModel({ appId, modelId, variant }: { appId: strin
 export async function getSessionModel(sessionId: string) {
   const db = await getDb()
   const row = await db.query.session_models.findFirst({ where: { session_id: sessionId } })
-  return row ? { modelId: row.model_id, variant: row.variant } : undefined
+  return row ? { modelId: row.model_id, variant: row.variant, locked: row.locked === 1 } : undefined
 }
 
-export async function setSessionModel({ sessionId, modelId, variant }: { sessionId: string; modelId: string; variant?: string | null }) {
+// `locked` is only written when passed, so /model and variant updates keep an existing lock.
+export async function setSessionModel({ sessionId, modelId, variant, locked }: { sessionId: string; modelId: string; variant?: string | null; locked?: boolean }) {
   const db = await getDb()
+  const lockedValue = locked === undefined ? {} : { locked: locked ? 1 : 0 }
   await db.insert(schema.session_models)
-    .values({ session_id: sessionId, model_id: modelId, variant: variant ?? null })
+    .values({ session_id: sessionId, model_id: modelId, variant: variant ?? null, ...lockedValue })
     .onConflictDoUpdate({
       target: schema.session_models.session_id,
-      set: { model_id: modelId, variant: variant ?? null },
+      set: { model_id: modelId, variant: variant ?? null, ...lockedValue },
     })
 }
 

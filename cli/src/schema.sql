@@ -172,6 +172,7 @@ CREATE TABLE IF NOT EXISTS `session_models` (
 	`session_id` text PRIMARY KEY,
 	`model_id` text NOT NULL,
 	`variant` text,
+	`locked` integer DEFAULT 0 NOT NULL,
 	`created_at` datetime DEFAULT CURRENT_TIMESTAMP
 );
 

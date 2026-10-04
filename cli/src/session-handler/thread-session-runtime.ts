@@ -73,6 +73,8 @@ import {
   getThreadParentSessionId,
   setThreadParentSessionId,
   getThreadWorktreeOrWorkspace,
+  getSessionAgent,
+  getSessionModel,
   setSessionAgent,
   setSessionModel,
   clearSessionModel,
@@ -212,6 +214,7 @@ import { createDebouncedProcessFlush } from '../debounced-process-flush.js'
 import { cancelHtmlActionsForThread } from '../html-actions.js'
 import { createDebouncedTimeout } from '../debounce-timeout.js'
 import { extractLeadingOpencodeCommand } from '../opencode-command-detection.js'
+import { resolvePromptModelPreference } from '../session-model-preference.js'
 
 const logger = createLogger(LogPrefix.SESSION)
 const discordLogger = createLogger(LogPrefix.DISCORD)
@@ -1284,6 +1287,40 @@ export class ThreadSessionRuntime {
       modelId: variantModelInfo.model,
       variant: matchedVariant,
     })
+  }
+
+  private async applyPromptPreferences({
+    sessionId,
+    agent,
+    model,
+  }: {
+    sessionId: string
+    agent?: string
+    model?: string
+  }): Promise<string | undefined> {
+    const [currentAgent, sessionModel] = await Promise.all([
+      getSessionAgent(sessionId),
+      getSessionModel(sessionId),
+    ])
+    const decision = resolvePromptModelPreference({
+      requestedAgent: agent,
+      requestedModel: model,
+      currentAgent,
+      sessionModel,
+    })
+    if (decision.setAgent && agent) await setSessionAgent(sessionId, agent)
+    if (decision.clearModel) await clearSessionModel(sessionId)
+    if (decision.ignoredModel && sessionModel) {
+      logger.warn(
+        `[MODEL] Session ${sessionId} model is locked to ${sessionModel.modelId}, ignoring requested ${decision.ignoredModel}`,
+      )
+      await sendThreadMessage(
+        this.thread,
+        `-# model locked to ${sessionModel.modelId}, ignored ${decision.ignoredModel}`,
+        { flags: SILENT_MESSAGE_FLAGS },
+      )
+    }
+    return decision.model
   }
 
   private getAssistantMessageIdsForCurrentTurn({
@@ -3483,14 +3520,15 @@ export class ThreadSessionRuntime {
       // Explicit agent prompts (for example /plan-agent <prompt>) must update
       // the session preference before dispatch. Otherwise the model can resolve
       // from the requested agent while OpenCode keeps running the old agent.
-      if (input.agent) {
-        await setSessionAgent(session.id, input.agent)
-        await clearSessionModel(session.id)
-      }
+      const requestedModel = await this.applyPromptPreferences({
+        sessionId: session.id,
+        agent: input.agent,
+        model: input.model,
+      })
 
-      if (input.model) {
+      if (requestedModel) {
         const validatedModel = await validateModelId({
-          model: input.model,
+          model: requestedModel,
           getClient,
           directory: this.sdkDirectory,
         })
@@ -3507,7 +3545,7 @@ export class ThreadSessionRuntime {
         getClient,
         directory: this.sdkDirectory,
         agentOverride: input.agent,
-        modelOverride: input.model,
+        modelOverride: requestedModel,
         force: createdNewSession,
       })
 
@@ -3537,9 +3575,9 @@ export class ThreadSessionRuntime {
 
       const [modelResult, preferredVariant] = await Promise.all([
         (async () => {
-          if (input.model) {
+          if (requestedModel) {
             return validateModelId({
-              model: input.model,
+              model: requestedModel,
               getClient,
               directory: this.sdkDirectory,
             })
@@ -4558,14 +4596,15 @@ export class ThreadSessionRuntime {
     // Explicit agent prompts (for example /plan-agent <prompt>) must update
     // the session preference before dispatch. Otherwise the model can resolve
     // from the requested agent while OpenCode keeps running the old agent.
-    if (input.agent) {
-      await setSessionAgent(session.id, input.agent)
-      await clearSessionModel(session.id)
-    }
+    const requestedModel = await this.applyPromptPreferences({
+      sessionId: session.id,
+      agent: input.agent,
+      model: input.model,
+    })
 
-    if (input.model) {
+    if (requestedModel) {
       const validatedModel = await validateModelId({
-        model: input.model,
+        model: requestedModel,
         getClient,
         directory: this.sdkDirectory,
       })
@@ -4587,7 +4626,7 @@ export class ThreadSessionRuntime {
       getClient,
       directory: this.sdkDirectory,
       agentOverride: input.agent,
-      modelOverride: input.model,
+      modelOverride: requestedModel,
       force: createdNewSession,
     })
 
@@ -4621,9 +4660,9 @@ export class ThreadSessionRuntime {
 
     const [earlyModelResult, preferredVariant] = await Promise.all([
       (async () => {
-        if (input.model) {
+        if (requestedModel) {
           return validateModelId({
-            model: input.model,
+            model: requestedModel,
             getClient,
             directory: this.sdkDirectory,
           })

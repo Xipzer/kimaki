@@ -468,6 +468,75 @@ describe('getDb', () => {
     }
   })
 
+  test('adds session_models.locked on databases created before model locking', async () => {
+    await closeDb()
+
+    const previousDbUrl = process.env['KIMAKI_DB_URL']
+    const dbPath = path.join(
+      process.cwd(),
+      `tmp/test-db-legacy-models-${crypto.randomUUID().slice(0, 8)}.db`,
+    )
+
+    try {
+      const client = createClient({ url: `file:${dbPath}` })
+      await client.execute(`
+        CREATE TABLE session_models (
+          session_id text PRIMARY KEY,
+          model_id text NOT NULL,
+          variant text,
+          created_at datetime DEFAULT CURRENT_TIMESTAMP
+        )
+      `)
+      await client.execute(`
+        INSERT INTO session_models (session_id, model_id, variant)
+        VALUES ('ses-legacy-model', 'anthropic/claude-opus-4-6', 'high')
+      `)
+      client.close()
+
+      process.env['KIMAKI_DB_URL'] = `file:${dbPath}`
+      await getDb()
+
+      const legacy = await getSessionModel('ses-legacy-model')
+      await setSessionModel({ sessionId: 'ses-legacy-model', modelId: 'anthropic/claude-opus-4-6', variant: 'high', locked: true })
+      const lockedRow = await getSessionModel('ses-legacy-model')
+      await setSessionModel({ sessionId: 'ses-legacy-model', modelId: 'openai/gpt-5', variant: null })
+      const keptLock = await getSessionModel('ses-legacy-model')
+      expect({ legacy, lockedRow, keptLock }).toMatchInlineSnapshot(`
+        {
+          "keptLock": {
+            "locked": true,
+            "modelId": "openai/gpt-5",
+            "variant": null,
+          },
+          "legacy": {
+            "locked": false,
+            "modelId": "anthropic/claude-opus-4-6",
+            "variant": "high",
+          },
+          "lockedRow": {
+            "locked": true,
+            "modelId": "anthropic/claude-opus-4-6",
+            "variant": "high",
+          },
+        }
+      `)
+    } finally {
+      await closeDb()
+      if (previousDbUrl === undefined) {
+        delete process.env['KIMAKI_DB_URL']
+      } else {
+        process.env['KIMAKI_DB_URL'] = previousDbUrl
+      }
+      for (const file of [dbPath, `${dbPath}-wal`, `${dbPath}-shm`]) {
+        try {
+          fs.unlinkSync(file)
+        } catch {
+          // Test cleanup best effort.
+        }
+      }
+    }
+  })
+
   test('rebuilds session_sleeps that still have posted_at from the intermediate schema', async () => {
     await closeDb()
 
@@ -741,6 +810,7 @@ describe('getDb', () => {
       {
         "agent": "opus",
         "model": {
+          "locked": false,
           "modelId": "anthropic/claude-opus-4-6",
           "variant": "thinking",
         },

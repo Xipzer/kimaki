@@ -10,6 +10,7 @@ import { formatDateTime } from './utils.js'
 import { extractNonXmlContent } from './xml.js'
 import { createLogger, LogPrefix } from './logger.js'
 import { SessionNotFoundError, MessagesNotFoundError } from './errors.js'
+import { getMessageError } from './message-error.js'
 
 // Generic error for unexpected exceptions in async operations
 class UnexpectedError extends errore.createTaggedError({
@@ -319,6 +320,10 @@ export class ShareMarkdown {
             ? this.renderPartCompact(part, opts)
             : this.renderPart(part, opts)),
         )
+      }
+      const error = getMessageError(message)
+      if (error && !error.aborted) {
+        body.push(`error: ${error.name}${error.message ? `: ${truncateChars(error.message, 300)}` : ''}`, '')
       }
       if (body.length === 0) return lines
 

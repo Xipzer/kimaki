@@ -860,6 +860,7 @@ describe('agent model resolution', () => {
       `)
       expect(forkedSessionModel).toMatchInlineSnapshot(`
         {
+          "locked": false,
           "modelId": "deterministic-provider/plan-model-v2",
           "variant": null,
         }
@@ -1054,6 +1055,7 @@ describe('agent model resolution', () => {
       `)
       expect(sessionId ? await getSessionModel(sessionId) : undefined).toMatchInlineSnapshot(`
         {
+          "locked": false,
           "modelId": "deterministic-provider/plan-model-v2",
           "variant": "high",
         }

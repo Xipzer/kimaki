@@ -56,6 +56,11 @@ export class SessionNotFoundError extends errore.createTaggedError({
   message: 'Session $sessionId not found',
 }) {}
 
+export class SessionNotLocatedError extends errore.createTaggedError({
+  name: 'SessionNotLocatedError',
+  message: 'Session $sessionId not found in any OpenCode project. Pass --project <dir> with the session directory',
+}) {}
+
 export class SessionCreateError extends errore.createTaggedError({
   name: 'SessionCreateError',
 }) {}
