@@ -47,3 +47,9 @@ Items 1, 2, 4 and the CLI parts of 3 are small and fit upstream. Each should go 
 **A long-lived fork: yes.** The owner already carries 4 patches. The event-scope fix PR has been open about 2 months. Items 3, 9 and the model lock are opinionated and may never land upstream. Upstream is also heading toward an OpenCode v2 plugin rewrite on its own schedule.
 
 **The rename: not yet.** Of 15 opportunities, about 10 are upstream-friendly and only 4–5 are fork-only. A rename adds about 2,500 identifier changes and a data-folder migration, and makes every upstream cherry-pick conflict. Rename once production runs from the fork and the fork-only features (recover, lock, event stream, Wendy hooks) have shipped and proven themselves.
+
+## Naming decision (2026-10-04)
+
+- This fork will be named **Wendy**. The voice add-on for vanilla Kimaki becomes **Wendy for Kimaki** (CLI `wendy-kimaki`; the `wendy` bin moves to the fork).
+- The rename happens at the production switch, as one isolated commit plus a `~/.kimaki` data/env migration. Until then `tailored/main` keeps Kimaki identifiers so upstream fixes still cherry-pick cleanly.
+- Keep the Kimaki MIT copyright line and a "based on Kimaki" note. npm `wendy` and `wendy-cli` are taken; use a scope if publishing.
