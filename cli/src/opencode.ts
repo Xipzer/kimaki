@@ -112,6 +112,7 @@ import {
 } from './opencode-command.js'
 import { execAsync } from './exec-async.js'
 import { computeSkillPermission } from './skill-filter.js'
+import { compactOpencodeLogLine } from './opencode-log-line.js'
 
 const opencodeLogger = createLogger(LogPrefix.OPENCODE)
 
@@ -998,7 +999,7 @@ async function startSingleServer({
         logBuffer.push(`[stdout] ${line}`)
         return
       }
-      opencodeLogger.log(line)
+      opencodeLogger.log(compactOpencodeLogLine(line))
     },
   })
 
@@ -1010,7 +1011,7 @@ async function startSingleServer({
         pushStartupStderrTail({ stderrTail: startupStderrTail, line })
         return
       }
-      opencodeLogger.error(line)
+      opencodeLogger.error(compactOpencodeLogLine(line))
     },
   })
 
@@ -1101,7 +1102,7 @@ async function startSingleServer({
   // Always dump startup logs so plugin loading errors and other startup output
   // are visible in kimaki.log.
   for (const line of logBuffer) {
-    opencodeLogger.log(line)
+    opencodeLogger.log(compactOpencodeLogLine(line))
   }
 
   const server: SingleServer = {
