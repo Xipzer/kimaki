@@ -25,6 +25,7 @@ import {
   clearSessionModel,
   getThreadSession,
   getSessionAgent,
+  getSessionModel,
   getChannelAgent,
   getChannelWorktreesEnabled,
 } from '../database.js'
@@ -274,10 +275,11 @@ export async function setAgentForContext({
 }): Promise<void> {
   if (context.isThread && context.sessionId) {
     await setSessionAgent(context.sessionId, agentName)
-    // Clear session model so the new agent's model takes effect
-    await clearSessionModel(context.sessionId)
+    // Clear session model so the new agent's model takes effect, unless locked
+    const sessionModel = await getSessionModel(context.sessionId)
+    if (!sessionModel?.locked) await clearSessionModel(context.sessionId)
     agentLogger.log(
-      `Set agent ${agentName} for session ${context.sessionId} (cleared session model)`,
+      `Set agent ${agentName} for session ${context.sessionId} (${sessionModel?.locked ? 'kept locked' : 'cleared'} session model)`,
     )
   } else {
     await setChannelAgent(context.channelId, agentName)

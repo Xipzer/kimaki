@@ -13,7 +13,7 @@ import { fileURLToPath } from 'node:url'
 import { spawn, execSync } from 'node:child_process'
 import { createLogger, LogPrefix, initLogFile } from '../logger.js'
 import { createDiscordClient, initDatabase, getChannelDirectory, initializeOpencodeForDirectory, createProjectChannels } from '../discord-bot.js'
-import { getBotTokenWithMode, getThreadSession, getThreadIdBySessionId, getSessionEventSnapshot, getDb, createScheduledTask, listScheduledTasks, cancelScheduledTask, getScheduledTask, updateScheduledTask, getSessionStartSourcesBySessionIds, deleteChannelDirectoryById, findChannelsByDirectory, getThreadWorktreeOrWorkspace, getAllTextChannelDirectories } from '../database.js'
+import { getBotTokenWithMode, getThreadSession, getThreadIdBySessionId, getSessionEventSnapshot, getDb, createScheduledTask, listScheduledTasks, cancelScheduledTask, getScheduledTask, updateScheduledTask, getSessionStartSourcesBySessionIds, deleteChannelDirectoryById, findChannelsByDirectory, getThreadWorktreeOrWorkspace, getAllTextChannelDirectories, getSessionModel, setSessionModel } from '../database.js'
 import { ShareMarkdown } from '../markdown.js'
 import { parseSessionSearchPattern, collectSessionSearchMatches, validateSessionSearchScope, resolveSessionSearchDirectories, parseSessionSearchDays, sessionSearchMinUpdated, SESSION_SEARCH_DEFAULT_DAYS, type SessionSearchMatch } from '../session-search.js'
 import { formatWorktreeName, formatAutoWorktreeName } from '../commands/new-worktree.js'
@@ -23,8 +23,12 @@ import { WORKTREE_PREFIX } from '../commands/merge-worktree.js'
 import type { ThreadStartMarker } from '../system-message.js'
 import { buildOpencodeEventLogLine } from '../session-handler/opencode-session-event-log.js'
 import { createDiscordRest } from '../discord-urls.js'
-import { archiveThread, uploadFilesToDiscord, stripMentions } from '../discord-utils.js'
-import { OpenCodeSdkError } from '../errors.js'
+import { archiveThread, buildThreadStartEmbeds, uploadFilesToDiscord, stripMentions } from '../discord-utils.js'
+import { OpenCodeSdkError, SessionNotLocatedError } from '../errors.js'
+import { writeStdoutAndExit } from '../write-stdout.js'
+import { deriveSessionState, getContextTokens, getLastAssistantText, selectMessages, selectRecoverTarget, toStructuredMessage, visibleMessages, type SessionMessage } from '../session-status.js'
+import { validateCliModelOption } from '../session-handler/model-utils.js'
+import { QUEUE_PREFIX } from '../message-formatting.js'
 import { setDataDir, setProjectsDir, getDataDir, getProjectsDir } from '../config.js'
 import { execAsync, validateWorktreeDirectory } from '../worktrees.js'
 import { upgrade, getCurrentVersion } from '../upgrade.js'
@@ -83,6 +87,126 @@ async function resolveSessionDirectoryFromDatabase({
   return new Error(
     `Session is not linked to a Kimaki thread in the local database: ${sessionId}`,
   )
+}
+
+type OpencodeGetClient = Exclude<Awaited<ReturnType<typeof initializeOpencodeForDirectory>>, Error>
+type LocatedSession = { getClient: OpencodeGetClient; directory: string; session: OpenCodeSession }
+
+async function findSessionInDirectory({
+  sessionId,
+  directory,
+}: {
+  sessionId: string
+  directory: string
+}): Promise<Error | LocatedSession> {
+  const getClient = await initializeOpencodeForDirectory(directory)
+  if (getClient instanceof Error) return getClient
+  const response = await getClient()
+    .session.get({ sessionID: sessionId })
+    .catch((cause) => new OpenCodeSdkError({ operation: 'session.get', cause }))
+  if (response instanceof Error) return response
+  if (!response.data) return new SessionNotLocatedError({ sessionId })
+  return { getClient, directory, session: response.data }
+}
+
+// session.get is scoped to the client's project, so try cwd (or --project),
+// then the directory mapped to the session's Kimaki thread, then every project.
+async function locateSession({
+  sessionId,
+  project,
+}: {
+  sessionId: string
+  project?: string
+}): Promise<Error | LocatedSession> {
+  const preferred = path.resolve(project || '.')
+  const tried = new Set<string>()
+  const tryDirectory = async (directory: string) => {
+    const resolved = path.resolve(directory)
+    if (tried.has(resolved)) return null
+    tried.add(resolved)
+    const found = await findSessionInDirectory({ sessionId, directory: resolved })
+    return found instanceof Error ? null : found
+  }
+
+  cliLogger.log('Connecting to OpenCode server...')
+  const fromPreferred = await tryDirectory(preferred)
+  if (fromPreferred) return fromPreferred
+
+  const databaseDirectory = await resolveSessionDirectoryFromDatabase({ sessionId })
+    .catch((cause) => new Error('Failed to resolve session directory from database', { cause }))
+  const fromDatabase = typeof databaseDirectory === 'string' ? await tryDirectory(databaseDirectory) : null
+  if (fromDatabase) return fromDatabase
+
+  cliLogger.log('Session not in current project, searching all projects...')
+  const getClient = await initializeOpencodeForDirectory(preferred)
+  if (getClient instanceof Error) return getClient
+  const projectsResponse = await getClient()
+    .project.list()
+    .catch((cause) => new OpenCodeSdkError({ operation: 'project.list', cause }))
+  if (projectsResponse instanceof Error) return projectsResponse
+  const projects = (projectsResponse.data || [])
+    .filter((p) => fs.existsSync(p.worktree))
+    .sort((a, b) => b.time.created - a.time.created)
+  for (const project of projects) {
+    const found = await tryDirectory(project.worktree)
+    if (found) return found
+  }
+  return new SessionNotLocatedError({ sessionId })
+}
+
+async function fetchSessionMessages({
+  client,
+  sessionId,
+  limit,
+}: {
+  client: OpencodeClient
+  sessionId: string
+  limit?: number
+}): Promise<Error | SessionMessage[]> {
+  const response = await client.session
+    .messages({ sessionID: sessionId, limit })
+    .catch((cause) => new OpenCodeSdkError({ operation: 'session.messages', cause }))
+  if (response instanceof Error) return response
+  if (!response.data) return new OpenCodeSdkError({ operation: 'session.messages', cause: response.error })
+  return response.data
+}
+
+async function buildSessionStatus({ located, sessionId }: { located: LocatedSession; sessionId: string }) {
+  const client = located.getClient()
+  const directory = located.session.directory
+  const [allMessages, statusResponse, questionsResponse, threadId, sessionModel] = await Promise.all([
+    fetchSessionMessages({ client, sessionId }),
+    client.session.status({ directory }).catch(() => null),
+    client.question.list({ directory }).catch(() => null),
+    getThreadIdBySessionId(sessionId),
+    getSessionModel(sessionId),
+  ])
+  if (allMessages instanceof Error) return allMessages
+  const messages = visibleMessages({ messages: allMessages, revertMessageId: located.session.revert?.messageID })
+  const liveStatus = statusResponse?.data?.[sessionId]
+  const busy = Boolean(liveStatus && liveStatus.type !== 'idle')
+  const pendingQuestion = (questionsResponse?.data || []).some((request) => request.sessionID === sessionId)
+  const { state, lastError } = deriveSessionState({ messages, busy, pendingQuestion })
+  const lastMessage = messages.at(-1)
+  const last = lastMessage ? toStructuredMessage({ message: lastMessage, toolInputMaxChars: 80 }) : null
+  return {
+    sessionId,
+    title: located.session.title || 'Untitled Session',
+    directory,
+    threadId: threadId || null,
+    state,
+    lastError,
+    retry: liveStatus?.type === 'retry' ? { attempt: liveStatus.attempt, message: liveStatus.message } : null,
+    pendingQuestion,
+    agent: last?.agent || null,
+    model: last?.model || null,
+    sessionModel: sessionModel || null,
+    contextTokens: getContextTokens(messages),
+    lastAssistantText: getLastAssistantText({ messages, maxChars: 500 }),
+    lastMessageId: last?.id || null,
+    updated: new Date(located.session.time.updated).toISOString(),
+    messages,
+  }
 }
 
 // Total token footprint of a session (input + output + reasoning + cache).
@@ -162,6 +286,7 @@ cli
       type GatheredSession = {
         session: OpenCodeSession
         projectDirectory: string
+        client: OpencodeClient
         status: 'idle' | 'busy' | 'showing-question'
       }
 
@@ -201,6 +326,7 @@ cli
           gathered.push({
             session,
             projectDirectory,
+            client,
             status: isBusy && sessionsWithPendingQuestion.has(session.id)
               ? 'showing-question'
               : isBusy
@@ -263,7 +389,14 @@ cli
       }
 
       if (options.json) {
-        const output = selected.map((entry) => {
+        // Only the newest message decides blocked/errored, so fetch one per idle session.
+        const health = await Promise.all(selected.map(async (entry) => {
+          if (entry.status !== 'idle') return { state: entry.status === 'busy' ? 'working' : 'question', lastError: null }
+          const messages = await fetchSessionMessages({ client: entry.client, sessionId: entry.session.id, limit: 1 })
+          if (messages instanceof Error) return { state: null, lastError: null }
+          return deriveSessionState({ messages, busy: false, pendingQuestion: false })
+        }))
+        const output = selected.map((entry, index) => {
           const session = entry.session
           const startSource = sessionStartSources.get(session.id)
           const startedBy = startSource
@@ -277,14 +410,15 @@ cli
             source: sessionToThread.has(session.id) ? 'kimaki' : 'opencode',
             threadId: sessionToThread.get(session.id) || null,
             status: entry.status,
+            state: health[index]?.state ?? null,
+            lastError: health[index]?.lastError ?? null,
             model: session.model?.id || null,
             tokens: contextInfo(entry),
             startedBy,
             scheduledTaskId: startSource?.scheduled_task_id || null,
           }
         })
-        console.log(JSON.stringify(output, null, 2))
-        process.exit(0)
+        return writeStdoutAndExit(`${JSON.stringify(output, null, 2)}\n`)
       }
 
       for (const entry of selected) {
@@ -410,7 +544,8 @@ cli
       Read a session conversation as markdown (pipe to file to grep).
 
       Thinking is omitted by default. Tool inputs are truncated. Use
-      \`--thinking\` and \`--verbose\` for the full dump.
+      \`--thinking\` and \`--verbose\` for the full dump. Use \`--json\` for
+      structured messages with ids, model, tool summaries and message errors.
     `,
   )
   .option('--project <path>', 'Project directory (defaults to cwd)')
@@ -420,79 +555,308 @@ cli
     '--tool-input-max-chars <n>',
     z.number().default(80).describe('Max characters for compact tool input'),
   )
+  .option('--json', 'Output structured messages as JSON')
+  .option('--last <n>', z.number().optional().describe('With --json, only the last n messages'))
+  .option('--since <messageId>', 'With --json, only messages after this message id')
   .example('kimaki session read ses_xxx > ./tmp/session.md')
   .example('kimaki session read ses_xxx --thinking --verbose')
+  .example('kimaki session read ses_xxx --json --last 5')
   .action(async (sessionId, options) => {
     try {
-      const projectDirectory = path.resolve(options.project || '.')
-
       await initDatabase()
 
-      cliLogger.log('Connecting to OpenCode server...')
-      const getClient = await initializeOpencodeForDirectory(projectDirectory)
-      if (getClient instanceof Error) {
-        cliLogger.error('Failed to connect to OpenCode:', getClient.message)
+      const located = await locateSession({ sessionId, project: options.project })
+      if (located instanceof Error) {
+        cliLogger.error(located.message)
         process.exit(EXIT_NO_RESTART)
       }
+      const client = located.getClient()
 
-      // Try current project first (fast path)
-      const compactTools = !options.verbose
-      const markdown = new ShareMarkdown(getClient())
-      const result = await markdown.generate({
-        sessionID: sessionId,
-        compactTools,
-        includeThinking: options.thinking,
-        toolInputMaxChars: options.toolInputMaxChars,
-      })
-      if (!(result instanceof Error)) {
-        process.stdout.write(result)
-        process.exit(0)
-      }
-
-      // Session not found in current project, search across all projects.
-      // project.list() returns all known projects globally from any OpenCode server,
-      // but session.list/get are scoped to the server's own project. So we try each.
-      cliLogger.log('Session not in current project, searching all projects...')
-      const projectsResponse = await getClient().project.list()
-      const projects = projectsResponse.data || []
-      const otherProjects = projects
-        .filter((p) => path.resolve(p.worktree) !== projectDirectory)
-        .filter((p) => {
-          try {
-            fs.accessSync(p.worktree, fs.constants.R_OK)
-            return true
-          } catch {
-            return false
-          }
-        })
-        // Sort by most recently created first to find sessions faster
-        .sort((a, b) => b.time.created - a.time.created)
-
-      for (const project of otherProjects) {
-        const dir = project.worktree
-        cliLogger.log(`Trying project: ${dir}`)
-        const otherClient = await initializeOpencodeForDirectory(dir)
-        if (otherClient instanceof Error) continue
-        const otherMarkdown = new ShareMarkdown(otherClient())
-        const otherResult = await otherMarkdown.generate({
+      if (!options.json) {
+        const result = await new ShareMarkdown(client).generate({
           sessionID: sessionId,
-          compactTools,
+          compactTools: !options.verbose,
           includeThinking: options.thinking,
           toolInputMaxChars: options.toolInputMaxChars,
         })
-        if (!(otherResult instanceof Error)) {
-          process.stdout.write(otherResult)
-          process.exit(0)
+        if (result instanceof Error) {
+          cliLogger.error(result.message)
+          process.exit(EXIT_NO_RESTART)
         }
+        return writeStdoutAndExit(result)
       }
 
-      cliLogger.error(`Session ${sessionId} not found in any project`)
-      process.exit(EXIT_NO_RESTART)
+      const messages = await fetchSessionMessages({ client, sessionId })
+      if (messages instanceof Error) {
+        cliLogger.error(messages.message)
+        process.exit(EXIT_NO_RESTART)
+      }
+      const selected = selectMessages({ messages, last: options.last, since: options.since })
+      if (selected instanceof Error) {
+        cliLogger.error(selected.message)
+        process.exit(EXIT_NO_RESTART)
+      }
+      const output = {
+        sessionId,
+        title: located.session.title || 'Untitled Session',
+        directory: located.session.directory,
+        messages: selected.map((message) => {
+          return toStructuredMessage({ message, toolInputMaxChars: options.toolInputMaxChars })
+        }),
+      }
+      return writeStdoutAndExit(`${JSON.stringify(output, null, 2)}\n`)
     } catch (error) {
       cliLogger.error(
         'Error:',
         error instanceof Error ? error.stack : String(error),
       )
+      process.exit(EXIT_NO_RESTART)
+    }
+  })
+
+cli
+  .command(
+    'session status <sessionId>',
+    dedent`
+      Show whether a session is idle, working, blocked, errored or waiting on a question.
+
+      blocked: the last assistant message was refused by a provider content or
+      safety filter, so retrying the same context will not help.
+      errored: the last assistant message ended with any other error.
+      Use \`kimaki session recover\` to revert the failed turn and resend it.
+    `,
+  )
+  .option('--project <path>', 'Project directory (defaults to cwd)')
+  .option('--json', 'Output as JSON')
+  .example('kimaki session status ses_xxx --json')
+  .action(async (sessionId, options) => {
+    try {
+      await initDatabase()
+      const located = await locateSession({ sessionId, project: options.project })
+      if (located instanceof Error) {
+        cliLogger.error(located.message)
+        process.exit(EXIT_NO_RESTART)
+      }
+      const status = await buildSessionStatus({ located, sessionId })
+      if (status instanceof Error) {
+        cliLogger.error(status.message)
+        process.exit(EXIT_NO_RESTART)
+      }
+      const { messages: _messages, ...output } = status
+      if (options.json) return writeStdoutAndExit(`${JSON.stringify(output, null, 2)}\n`)
+
+      const lines = [
+        `session: ${output.sessionId} | ${output.title}`,
+        `state: ${output.state}${output.retry ? ` (retry ${output.retry.attempt}: ${output.retry.message})` : ''}`,
+        output.lastError ? `last error: ${output.lastError.name}${output.lastError.message ? `: ${output.lastError.message}` : ''}` : '',
+        `agent: ${output.agent || '-'} | model: ${output.model || '-'}`,
+        output.sessionModel
+          ? `session model: ${output.sessionModel.modelId}${output.sessionModel.variant ? ` (${output.sessionModel.variant})` : ''}${output.sessionModel.locked ? ' [locked]' : ''}`
+          : '',
+        output.contextTokens ? `context tokens: ${formatTokenCount(output.contextTokens)}` : '',
+        output.threadId ? `thread: ${output.threadId}` : '',
+        output.pendingQuestion ? 'pending question: yes' : '',
+        `updated: ${output.updated}`,
+        output.lastAssistantText ? `last reply: ${output.lastAssistantText}` : '',
+      ]
+      return writeStdoutAndExit(`${lines.filter(Boolean).join('\n')}\n`)
+    } catch (error) {
+      cliLogger.error('Error:', error instanceof Error ? error.stack : String(error))
+      process.exit(EXIT_NO_RESTART)
+    }
+  })
+
+cli
+  .command(
+    'session model <sessionId>',
+    dedent`
+      Show or set the model pinned to a session.
+
+      A locked model is kept when prompts switch agents, and a per-prompt
+      \`kimaki send --model\` is ignored with a warning. Use \`--unlock\` to allow
+      changes again.
+    `,
+  )
+  .option('--set <model>', 'Pin this model (format: provider/model)')
+  .option('--variant <variant>', 'Thinking variant to store with the model')
+  .option('--lock', 'Lock the session model')
+  .option('--unlock', 'Unlock the session model')
+  .option('--project <path>', 'Project directory used to validate the model (defaults to cwd)')
+  .option('--json', 'Output as JSON')
+  .example('kimaki session model ses_xxx')
+  .example('kimaki session model ses_xxx --set anthropic/claude-opus-4-6 --lock')
+  .example('kimaki session model ses_xxx --unlock')
+  .action(async (sessionId, options) => {
+    try {
+      await initDatabase()
+      if (options.lock && options.unlock) {
+        cliLogger.error('Use either --lock or --unlock, not both')
+        process.exit(EXIT_NO_RESTART)
+      }
+
+      const current = await getSessionModel(sessionId)
+      const isUpdate = Boolean(options.set || options.variant || options.lock || options.unlock)
+      const modelId = await (async () => {
+        if (!isUpdate) return current?.modelId
+        if (options.set) return options.set
+        if (options.unlock && !options.variant && !current) return undefined
+        if (current) return current.modelId
+        if (!options.lock) {
+          return new Error('Session has no pinned model. Pass --set provider/model')
+        }
+        const located = await locateSession({ sessionId, project: options.project })
+        if (located instanceof Error) return located
+        const messages = await fetchSessionMessages({ client: located.getClient(), sessionId })
+        if (messages instanceof Error) return messages
+        const lastUser = messages.findLast((message) => message.info.role === 'user')
+        if (lastUser?.info.role !== 'user') {
+          return new Error('Session has no pinned or used model yet. Pass --set provider/model')
+        }
+        return `${lastUser.info.model.providerID}/${lastUser.info.model.modelID}`
+      })()
+      if (modelId instanceof Error) {
+        cliLogger.error(modelId.message)
+        process.exit(EXIT_NO_RESTART)
+      }
+
+      if (isUpdate && modelId) {
+        if (options.set) {
+          const located = await locateSession({ sessionId, project: options.project })
+          if (located instanceof Error) {
+            cliLogger.warn(`Could not reach the session's OpenCode project, only checking the model format: ${located.message}`)
+          }
+          const validated = await validateCliModelOption({
+            model: options.set,
+            directory: located instanceof Error ? undefined : located.directory,
+          })
+          if (validated instanceof Error) {
+            cliLogger.error(validated.message)
+            process.exit(EXIT_NO_RESTART)
+          }
+        }
+        const keepVariant = !options.set || options.set === current?.modelId
+        await setSessionModel({
+          sessionId,
+          modelId,
+          variant: options.variant || (keepVariant ? current?.variant : null) || null,
+          locked: options.lock ? true : options.unlock ? false : undefined,
+        })
+      }
+
+      const result = await getSessionModel(sessionId)
+      const output = {
+        sessionId,
+        model: result?.modelId || null,
+        variant: result?.variant || null,
+        locked: Boolean(result?.locked),
+      }
+      if (options.json) return writeStdoutAndExit(`${JSON.stringify(output, null, 2)}\n`)
+      const text = output.model
+        ? `${output.model}${output.variant ? ` (variant: ${output.variant})` : ''}${output.locked ? ' [locked]' : ''}`
+        : 'No session model pinned (falls back to agent, channel, then global model)'
+      return writeStdoutAndExit(`${text}\n`)
+    } catch (error) {
+      cliLogger.error('Error:', error instanceof Error ? error.stack : String(error))
+      process.exit(EXIT_NO_RESTART)
+    }
+  })
+
+cli
+  .command(
+    'session recover <sessionId>',
+    dedent`
+      Recover a session whose last assistant turn errored or was blocked.
+
+      Reverts the failed assistant messages (never past a successful step) and
+      resends through the Discord thread on the same agent and model. If the
+      whole turn failed, the original user prompt is replayed; if earlier steps
+      of the turn succeeded, only the failed steps are reverted and the agent is
+      asked to continue. Does nothing when the session is idle and healthy.
+    `,
+  )
+  .option('--prompt <prompt>', 'Prompt to send instead of the replayed or continue prompt')
+  .option('--project <path>', 'Project directory (defaults to cwd)')
+  .option('--dry-run', 'Print what would be reverted and sent without changing anything')
+  .example('kimaki session recover ses_xxx --dry-run')
+  .example('kimaki session recover ses_xxx --prompt "Continue, avoid quoting the payload"')
+  .action(async (sessionId, options) => {
+    try {
+      await initDatabase()
+      const located = await locateSession({ sessionId, project: options.project })
+      if (located instanceof Error) {
+        cliLogger.error(located.message)
+        process.exit(EXIT_NO_RESTART)
+      }
+      const status = await buildSessionStatus({ located, sessionId })
+      if (status instanceof Error) {
+        cliLogger.error(status.message)
+        process.exit(EXIT_NO_RESTART)
+      }
+      if (status.state === 'working' || status.state === 'question') {
+        return writeStdoutAndExit(
+          `Session is ${status.state}, nothing to recover. Abort it first with \`kimaki session abort ${sessionId}\`.\n`,
+        )
+      }
+
+      const plan = selectRecoverTarget({
+        messages: status.messages,
+        revertMessageId: located.session.revert?.messageID,
+        prompt: options.prompt,
+      })
+      if (plan.kind === 'healthy') return writeStdoutAndExit(`Session is healthy: ${plan.reason}. Nothing to do.\n`)
+      if (plan.kind === 'unrecoverable') {
+        cliLogger.error(`Cannot recover: ${plan.reason}`)
+        process.exit(EXIT_NO_RESTART)
+      }
+      if (!status.threadId) {
+        cliLogger.error(`Session ${sessionId} is not linked to a Kimaki thread, so the resend cannot go through Discord`)
+        process.exit(EXIT_NO_RESTART)
+      }
+
+      // A pinned session model is used by the bot anyway; pass the failed
+      // model only when nothing is pinned so the retry runs on the same model.
+      const markerModel = status.sessionModel ? undefined : plan.model
+      const summary = [
+        `${options.dryRun ? 'Would recover' : 'Recovering'} session ${sessionId} (${status.state}: ${plan.error.name}${plan.error.message ? `: ${plan.error.message}` : ''})`,
+        `revert from message: ${plan.revertMessageId} (${plan.failedMessageIds.length} failed assistant message(s)${plan.replay ? ' + user prompt' : ''})`,
+        `send to thread ${status.threadId}: agent ${plan.agent}, model ${status.sessionModel?.modelId || plan.model}`,
+        `prompt: ${plan.prompt.length > 300 ? `${plan.prompt.slice(0, 299)}…` : plan.prompt}`,
+      ].join('\n')
+      if (options.dryRun) return writeStdoutAndExit(`${summary}\n`)
+      cliLogger.log(summary)
+
+      const revertResponse = await located.getClient()
+        .session.revert({
+          sessionID: sessionId,
+          directory: located.session.directory,
+          messageID: plan.revertMessageId,
+        })
+        .catch((cause) => new OpenCodeSdkError({ operation: 'session.revert', cause }))
+      if (revertResponse instanceof Error || revertResponse.error) {
+        cliLogger.error(
+          `Failed to revert session: ${revertResponse instanceof Error ? revertResponse.message : JSON.stringify(revertResponse.error)}`,
+        )
+        process.exit(EXIT_NO_RESTART)
+      }
+
+      const { token: botToken } = await resolveBotCredentials()
+      const rest = createDiscordRest(botToken)
+      const marker: ThreadStartMarker = {
+        start: true,
+        agent: plan.agent,
+        ...(markerModel && { model: markerModel }),
+      }
+      await sendDiscordMessageWithOptionalAttachment({
+        channelId: status.threadId,
+        prompt: `${QUEUE_PREFIX}**kimaki-cli:**\n${plan.prompt}`,
+        botToken,
+        embeds: await buildThreadStartEmbeds(marker),
+        rest,
+      })
+      note(`Reverted ${plan.revertMessageId} and resent to thread ${status.threadId}`, 'Recovered')
+      return writeStdoutAndExit(`Session: ${sessionId}\n`)
+    } catch (error) {
+      cliLogger.error('Error:', error instanceof Error ? error.stack : String(error))
       process.exit(EXIT_NO_RESTART)
     }
   })
@@ -768,22 +1132,16 @@ cli
         })
 
       if (options.json) {
-        console.log(
-          JSON.stringify(
-            {
-              query: searchPattern.raw,
-              mode: searchPattern.mode,
-              all: Boolean(options.all),
-              days,
-              projectDirectories: searchedDirectories,
-              scannedSessions,
-              matches: matchedSessions,
-            },
-            null,
-            2,
-          ),
-        )
-        process.exit(0)
+        const output = {
+          query: searchPattern.raw,
+          mode: searchPattern.mode,
+          all: Boolean(options.all),
+          days,
+          projectDirectories: searchedDirectories,
+          scannedSessions,
+          matches: matchedSessions,
+        }
+        return writeStdoutAndExit(`${JSON.stringify(output, null, 2)}\n`)
       }
 
       if (matchedSessions.length === 0) {

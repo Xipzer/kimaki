@@ -204,6 +204,7 @@ async function migrateSchema({
   const alterStatements = [
     'ALTER TABLE channel_models ADD COLUMN variant TEXT',
     'ALTER TABLE session_models ADD COLUMN variant TEXT',
+    'ALTER TABLE session_models ADD COLUMN locked INTEGER NOT NULL DEFAULT 0',
     'ALTER TABLE global_models ADD COLUMN variant TEXT',
     'ALTER TABLE bot_api_keys ADD COLUMN openai_api_key TEXT',
     "ALTER TABLE bot_tokens ADD COLUMN bot_mode TEXT DEFAULT 'self_hosted'",
