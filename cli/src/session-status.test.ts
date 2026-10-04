@@ -6,6 +6,7 @@ import {
   deriveSessionState,
   getContextTokens,
   getLastAssistantText,
+  hasLiveQuestion,
   RECOVER_CONTINUE_PROMPT,
   selectMessages,
   selectRecoverTarget,
@@ -270,5 +271,19 @@ describe('selectRecoverTarget', () => {
     const messages = [imageOnly, assistant('msg_2', 'msg_1', { error: apiError })]
     expect(selectRecoverTarget({ messages }).kind).toBe('unrecoverable')
     expect(selectRecoverTarget({ messages, prompt: 'describe the image' }).kind).toBe('recover')
+  })
+})
+
+describe('hasLiveQuestion', () => {
+  const messages = [user('msg_u1', 'go'), assistant('msg_a1', 'msg_u1', { tool: true }), user('msg_u2', 'next'), assistant('msg_a2', 'msg_u2', { text: 'working' })]
+  test('ignores a question left behind by an earlier assistant message', () => {
+    expect(hasLiveQuestion({ sessionId: sessionID, messages, questions: [{ sessionID, tool: { messageID: 'msg_a1' } }] })).toBe(false)
+  })
+  test('counts a question from the latest assistant message', () => {
+    expect(hasLiveQuestion({ sessionId: sessionID, messages, questions: [{ sessionID, tool: { messageID: 'msg_a2' } }] })).toBe(true)
+  })
+  test('counts a question without tool info and ignores other sessions', () => {
+    expect(hasLiveQuestion({ sessionId: sessionID, messages, questions: [{ sessionID }] })).toBe(true)
+    expect(hasLiveQuestion({ sessionId: sessionID, messages, questions: [{ sessionID: 'ses_other' }] })).toBe(false)
   })
 })

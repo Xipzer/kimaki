@@ -26,7 +26,7 @@ import { createDiscordRest } from '../discord-urls.js'
 import { archiveThread, buildThreadStartEmbeds, uploadFilesToDiscord, stripMentions } from '../discord-utils.js'
 import { OpenCodeSdkError, SessionNotLocatedError } from '../errors.js'
 import { writeStdoutAndExit } from '../write-stdout.js'
-import { deriveSessionState, getContextTokens, getLastAssistantText, selectMessages, selectRecoverTarget, toStructuredMessage, visibleMessages, type SessionMessage } from '../session-status.js'
+import { deriveSessionState, hasLiveQuestion, getContextTokens, getLastAssistantText, selectMessages, selectRecoverTarget, toStructuredMessage, visibleMessages, type SessionMessage } from '../session-status.js'
 import { validateCliModelOption } from '../session-handler/model-utils.js'
 import { QUEUE_PREFIX } from '../message-formatting.js'
 import { setDataDir, setProjectsDir, getDataDir, getProjectsDir } from '../config.js'
@@ -185,7 +185,7 @@ async function buildSessionStatus({ located, sessionId }: { located: LocatedSess
   const messages = visibleMessages({ messages: allMessages, revertMessageId: located.session.revert?.messageID })
   const liveStatus = statusResponse?.data?.[sessionId]
   const busy = Boolean(liveStatus && liveStatus.type !== 'idle')
-  const pendingQuestion = (questionsResponse?.data || []).some((request) => request.sessionID === sessionId)
+  const pendingQuestion = hasLiveQuestion({ sessionId, questions: questionsResponse?.data || [], messages })
   const { state, lastError } = deriveSessionState({ messages, busy, pendingQuestion })
   const lastMessage = messages.at(-1)
   const last = lastMessage ? toStructuredMessage({ message: lastMessage, toolInputMaxChars: 80 }) : null
