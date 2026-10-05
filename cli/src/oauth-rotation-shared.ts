@@ -61,10 +61,63 @@ export async function readJson<T>(filePath: string, fallback: T): Promise<T> {
   }
 }
 
+// Atomic: write a temp file then rename, so a reader in another process never
+// sees a half-written store.
 export async function writeJson(filePath: string, value: unknown) {
   await fs.mkdir(path.dirname(filePath), { recursive: true })
-  await fs.writeFile(filePath, JSON.stringify(value, null, 2), 'utf8')
+  const tmp = `${filePath}.tmp-${process.pid}-${Date.now()}`
+  await fs.writeFile(tmp, JSON.stringify(value, null, 2), { encoding: 'utf8', mode: 0o600 })
+  await fs.rename(tmp, filePath)
   await fs.chmod(filePath, 0o600)
+}
+
+// Account stores must never be read as empty when the file exists but can't be
+// parsed: the next save would then overwrite every account. Retry briefly for
+// a concurrent writer, then keep a copy of the bad file and fail loudly.
+export async function readAccountStoreJson<T>(filePath: string): Promise<T | null> {
+  for (let attempt = 0; attempt < 4; attempt++) {
+    const text = await fs.readFile(filePath, 'utf8').catch((error: unknown) => {
+      if (getErrorCode(error) === 'ENOENT') return null
+      throw error
+    })
+    if (text === null) return null
+    try {
+      return JSON.parse(text) as T
+    } catch {
+      await new Promise((resolve) => setTimeout(resolve, 50 * (attempt + 1)))
+    }
+  }
+  const copy = `${filePath}.corrupt-${Date.now()}`
+  await fs.copyFile(filePath, copy).catch(() => {})
+  throw new Error(`OAuth account store ${filePath} is not valid JSON; kept a copy at ${copy} and refused to treat it as empty`)
+}
+
+export function removedAccountsLogPath(storePath: string) {
+  return path.join(path.dirname(storePath), 'removed-oauth-accounts.jsonl')
+}
+
+// Every removal leaves a restorable record (same 0600 protection as the store)
+// so an account can never disappear without a trace.
+export async function archiveRemovedAccount({
+  storePath,
+  provider,
+  label,
+  reason,
+  account,
+}: {
+  storePath: string
+  provider: string
+  label: string
+  reason: string
+  account: AccountRecord
+}) {
+  const file = removedAccountsLogPath(storePath)
+  await fs.mkdir(path.dirname(file), { recursive: true })
+  const line = JSON.stringify({ at: new Date().toISOString(), provider, label, reason, account })
+  await fs.appendFile(file, `${line}\n`, { encoding: 'utf8', mode: 0o600 })
+  await fs.chmod(file, 0o600)
+  console.warn(`[oauth-accounts] removed ${provider} account ${label}: ${reason} (archived to ${file})`)
+  return file
 }
 
 // --- Auth file path ---
