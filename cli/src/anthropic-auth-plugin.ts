@@ -981,7 +981,7 @@ async function getFreshOAuth(
         });
       } catch (error) {
         if (!failedAuth || !isPermanentOAuthRefreshFailure(error)) throw error;
-        const removed = await removeAccountByAuth(failedAuth, client);
+        const removed = await removeAccountByAuth(failedAuth, client, `refresh token permanently rejected: ${error instanceof Error ? error.message.slice(0, 300) : String(error).slice(0, 300)}`);
         if (!removed) throw error;
         client.tui
           .showToast({

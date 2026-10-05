@@ -23,6 +23,8 @@ import {
   isOAuthStored,
   normalizeAccountStore,
   readJson,
+  readAccountStoreJson,
+  archiveRemovedAccount,
   upsertAccount,
   withAuthStateLock,
   writeJson,
@@ -79,7 +81,7 @@ export function openaiAccountsFilePath() {
 // --- Store I/O ---
 
 export async function loadOpenAIAccountStore(): Promise<AccountStore> {
-  const raw = await readJson<Partial<AccountStore> | null>(openaiAccountsFilePath(), null)
+  const raw = await readAccountStoreJson<Partial<AccountStore>>(openaiAccountsFilePath())
   return normalizeAccountStore(raw)
 }
 
@@ -267,6 +269,8 @@ export async function removeOpenAIAccount(index: number) {
       throw new Error(`Account ${index + 1} does not exist`)
     }
 
+    const removed = store.accounts[index]!
+    await archiveRemovedAccount({ storePath: openaiAccountsFilePath(), provider: 'openai', label: accountLabel(removed, index), reason: 'removed manually', account: removed })
     store.accounts.splice(index, 1)
     if (store.accounts.length === 0) {
       store.activeIndex = 0

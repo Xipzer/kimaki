@@ -24,6 +24,8 @@ import {
   isPermanentOAuthRefreshFailure,
   normalizeAccountStore,
   readJson,
+  readAccountStoreJson,
+  archiveRemovedAccount,
   upsertAccount as sharedUpsertAccount,
   withAuthStateLock,
   writeJson,
@@ -65,7 +67,7 @@ export function accountsFilePath() {
 // --- Store I/O ---
 
 export async function loadAccountStore() {
-  const raw = await readJson<Partial<AccountStore> | null>(accountsFilePath(), null)
+  const raw = await readAccountStoreJson<Partial<AccountStore>>(accountsFilePath())
   return normalizeAccountStore(raw)
 }
 
@@ -240,6 +242,8 @@ export async function removeAccount(index: number) {
     if (!Number.isInteger(index) || index < 0 || index >= store.accounts.length) {
       throw new Error(`Account ${index + 1} does not exist`)
     }
+    const removed = store.accounts[index]!
+    await archiveRemovedAccount({ storePath: accountsFilePath(), provider: 'anthropic', label: accountLabel(removed, index), reason: 'removed manually', account: removed })
     return spliceAccountAndPromote({ store, index })
   })
 }
@@ -251,6 +255,7 @@ export async function removeAccount(index: number) {
 export async function removeAccountByAuth(
   auth: OAuthStored,
   client: OpencodeClient,
+  reason = 'refresh token permanently rejected',
 ): Promise<RemoveAccountByAuthResult | undefined> {
   return withAuthStateLock(async () => {
     const store = await loadAccountStore()
@@ -262,6 +267,7 @@ export async function removeAccountByAuth(
     const removed = store.accounts[index]
     if (!removed) return undefined
     const removedLabel = accountLabel(removed, index)
+    await archiveRemovedAccount({ storePath: accountsFilePath(), provider: 'anthropic', label: removedLabel, reason, account: removed })
     const result = await spliceAccountAndPromote({ store, index, client })
     return {
       removedLabel,

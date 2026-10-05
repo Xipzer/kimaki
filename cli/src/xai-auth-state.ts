@@ -26,6 +26,8 @@ import {
   isOAuthStored,
   normalizeAccountStore,
   readJson,
+  readAccountStoreJson,
+  archiveRemovedAccount,
   upsertAccount,
   withAuthStateLock,
   writeJson,
@@ -76,7 +78,7 @@ export function xaiAccountsFilePath() {
 // --- Store I/O ---
 
 export async function loadXAIAccountStore(): Promise<AccountStore> {
-  const raw = await readJson<Partial<AccountStore> | null>(xaiAccountsFilePath(), null)
+  const raw = await readAccountStoreJson<Partial<AccountStore>>(xaiAccountsFilePath())
   return normalizeAccountStore(raw)
 }
 
@@ -264,6 +266,8 @@ export async function removeXAIAccount(index: number) {
       throw new Error(`Account ${index + 1} does not exist`)
     }
 
+    const removed = store.accounts[index]!
+    await archiveRemovedAccount({ storePath: xaiAccountsFilePath(), provider: 'xai', label: accountLabel(removed, index), reason: 'removed manually', account: removed })
     store.accounts.splice(index, 1)
     if (store.accounts.length === 0) {
       store.activeIndex = 0
