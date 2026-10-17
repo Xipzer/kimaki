@@ -11,6 +11,7 @@ import { registerAgentUiCommands, registerDiscordCommands } from './cli/discord.
 import { registerChannelPreferenceCommands, registerChannelWorktreeCommand, registerProjectCommands, registerWorktreeCommands } from './cli/project.ts'
 import { registerScheduleCommands, registerSendCommand } from './cli/schedule.ts'
 import { registerSessionActionCommands, registerSessionHistoryCommands, registerSessionQueryCommands } from './cli/session.ts'
+import { registerSessionSearchCommand } from './cli/session-search.ts'
 
 const cli = goke('kimaki')
 
@@ -22,6 +23,7 @@ registerProjectCommands(cli)
 
 cli.section('Session')
 registerSessionQueryCommands(cli)
+registerSessionSearchCommand(cli)
 registerChannelPreferenceCommands(cli)
 registerSessionActionCommands(cli)
 registerAgentUiCommands(cli)
