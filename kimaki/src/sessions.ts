@@ -31,7 +31,7 @@ import { SILENT_MESSAGE_FLAGS } from './format-parts.ts'
 import { createLogger } from './logger.ts'
 import type { OpenCodeClient, OpencodeEndpoint } from './opencode-server.ts'
 import { prompt, runInSession } from './prompt.ts'
-import { formatEcho } from './queue.ts'
+import { echoChunks } from './echo-chunks.ts'
 import type { Route } from './routes.ts'
 import * as schema from './schema.ts'
 import { disabledSkillRules } from './builtin-skills.ts'
@@ -459,10 +459,14 @@ export async function startSession(
   if (showInput) {
     const names = files.map((file) => file.name).join(', ')
     const shown = names ? `${text}\nFiles: ${names}` : text
+    const [head = '', ...more] = echoChunks({ username: author.username, text: shown })
     const echo = await thread
-      .send({ content: formatEcho({ username: author.username, text: shown }), allowedMentions: { parse: [] }, flags: SILENT_MESSAGE_FLAGS })
+      .send({ content: head, allowedMentions: { parse: [] }, flags: SILENT_MESSAGE_FLAGS })
       .catch((cause) => new DiscordError({ operation: 'send first input', cause }))
     if (echo instanceof Error) return echo
+    for (const chunk of more) {
+      await thread.send({ content: chunk, allowedMentions: { parse: [] }, flags: SILENT_MESSAGE_FLAGS }).catch((cause) => logger.warn('first input chunk failed', cause))
+    }
   }
 
   const first = route.kind === 'steer' ? { kind: 'steer' as const, text: route.text } : route
