@@ -33,7 +33,8 @@ import { createLogger } from './logger.ts'
 import { parseInput, sendInput } from './lock-routes.ts'
 import { cancelQueuedPrompt, dispatch, requeueEdited, send } from './prompt.ts'
 import { REMOTE_PROMPT_FILE, REMOTE_RESULT_PREFIX, REMOTE_SEND_PREFIX } from './remote-send.ts'
-import { formatEcho, queuedItemFor } from './queue.ts'
+import { echoChunks } from './echo-chunks.ts'
+import { queuedItemFor } from './queue.ts'
 import { parseTextMessage, type Route } from './routes.ts'
 import { primaryAgents, startSession } from './sessions.ts'
 import { isVoiceAttachment, parseVoiceMessage, transcribe, voiceMediaType, type AttachmentLike } from './voice.ts'
@@ -260,7 +261,11 @@ async function handleMessage(bot: Bot, message: Message) {
   logger.log(`${route.kind}${detail} from ${author.username} in ${thread ? `thread ${thread.id}` : `channel ${channelId}`}${attached}`)
   // The transcription is not visible anywhere else.
   if (voice && thread && route.kind !== 'shell' && route.kind !== 'command' && route.kind !== 'skill') {
-    await message.reply({ content: formatEcho({ username: author.username, text: route.text }), allowedMentions: { parse: [] }, flags: SILENT_MESSAGE_FLAGS })
+    const [head = '', ...more] = echoChunks({ username: author.username, text: route.text })
+    await message.reply({ content: head, allowedMentions: { parse: [] }, flags: SILENT_MESSAGE_FLAGS })
+    for (const chunk of more) {
+      await thread.send({ content: chunk, allowedMentions: { parse: [] }, flags: SILENT_MESSAGE_FLAGS }).catch((cause) => logger.warn('voice echo chunk failed', cause))
+    }
   }
 
   if (!thread) {
