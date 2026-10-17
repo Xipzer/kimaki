@@ -34,6 +34,7 @@
 // Discord allows 100 commands per guild; skills are cut first.
 
 import { isBuiltinSkill } from './builtin-skills.ts'
+import { keepForeignCommands, preservePatterns } from './foreign-commands.ts'
 import {
   ApplicationCommand,
   ApplicationCommandType,
@@ -453,8 +454,18 @@ export function registerSlashCommands(
       logger.warn(live)
       return
     }
-    const plan = diffCommands({ live: [...live.values()], wanted: built.commands })
-    dynamic.set(guild.id, built.dynamic)
+    // Fork: commands other apps registered on this application are left alone (foreign-commands.ts).
+    const liveCommands = [...live.values()]
+    const foreign = keepForeignCommands({
+      built: built.commands,
+      fixedCount: registry.definitions.length,
+      live: liveCommands,
+      preserve: preservePatterns(process.env['KIMAKI_PRESERVE_COMMANDS']),
+    })
+    const plan = diffCommands({ live: liveCommands.filter((command) => !foreign.kept.includes(command.name)), wanted: foreign.wanted })
+    dynamic.set(guild.id, new Map([...built.dynamic].filter(([name]) => !foreign.skipped.includes(name))))
+    if (foreign.skipped.length > 0) logger.log(`${foreign.skipped.length} shortcuts left out to make room for other apps' commands in guild ${guild.id}: ${foreign.skipped.join(', ')}`)
+    if (foreign.droppedForeign.length > 0) logger.warn(`no room for other apps' commands in guild ${guild.id}: ${foreign.droppedForeign.join(', ')}`)
     if (plan.remove.length + plan.edit.length + plan.create.length === 0) return
     let created = 0
     const result = await (async () => {
