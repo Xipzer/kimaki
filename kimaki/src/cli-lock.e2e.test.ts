@@ -112,6 +112,14 @@ test('CLI help documents the supported P7 commands', async () => {
       session url <id>                  Print the Discord URL of a session or thread
         --data-dir <path>               Data directory (default: ~/.kimaki)
 
+      session search <query>            Search titles, then real message content
+        --data-dir <path>               Data directory (default: ~/.kimaki)
+        --project <path>                Project (default: current directory)
+        -c, --channel <id>              Project of this Discord channel
+        --all                           All projects
+        --days <n>                      Recent days (default: 14; 0 = all)
+        --json                          Output as JSON
+
       channel agent [value]             Set channel agent through the running bot
         --data-dir <path>               Data directory (default: ~/.kimaki)
         -c, --channel <id>              Target channel (default: current project)
