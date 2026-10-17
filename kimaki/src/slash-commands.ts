@@ -33,6 +33,8 @@
 // Discord allows 100 commands per guild; skills are cut first.
 
 import { isBuiltinSkill } from './builtin-skills.ts'
+import { Routes, type APIApplicationCommand } from 'discord-api-types/v10'
+import { mergeForeignCommands, preservePatterns } from './foreign-commands.ts'
 import {
   Events,
   MessageFlags,
@@ -398,27 +400,45 @@ export function registerSlashCommands(
   const registered = new Map<string, string>()
 
   async function registerGuild(guild: Guild, built: ReturnType<typeof buildCommands>): Promise<void> {
-    const signature = JSON.stringify(built.commands)
-    if (registered.get(guild.id) === signature) {
-      // Another Kimaki on the same app can overwrite the list, so compare with Discord.
-      const live = await discord.application?.commands.fetch({ guildId: guild.id }).catch(() => null)
-      const same = !live || (live.size === built.commands.length && built.commands.every((command) => live.some((entry) => entry.name === command.name)))
-      if (same) {
-        dynamic.set(guild.id, built.dynamic)
-        return
-      }
-      logger.warn(`commands in guild ${guild.id} changed outside this bot, registering again`)
+    // Fork: keep commands other apps registered on this application (foreign-commands.ts).
+    const appId = discord.application?.id ?? bot.appId
+    const live = await discord.rest
+      .get(Routes.applicationGuildCommands(appId, guild.id), { query: new URLSearchParams({ with_localizations: 'true' }) })
+      .then((data) => data as APIApplicationCommand[])
+      .catch((e) => new DiscordError({ operation: `read commands of ${guild.id}`, cause: e }))
+    if (live instanceof Error) {
+      // A blind PUT would delete other apps' commands; the next catalog event or reconnect retries.
+      logger.warn(live)
+      return
     }
-    const result = await discord.application?.commands
-      .set(built.commands, guild.id)
+    const merged = mergeForeignCommands({
+      built: built.commands,
+      fixedCount: registry.definitions.length,
+      live,
+      preserve: preservePatterns(process.env['KIMAKI_PRESERVE_COMMANDS']),
+    })
+    const guildDynamic = new Map([...built.dynamic].filter(([name]) => !merged.skipped.includes(name)))
+    const signature = JSON.stringify(merged.commands)
+    const liveNames = new Set(live.map((command) => command.name))
+    const same = liveNames.size === merged.commands.length && merged.commands.every((command) => liveNames.has(command.name))
+    if (registered.get(guild.id) === signature && same) {
+      dynamic.set(guild.id, guildDynamic)
+      return
+    }
+    if (registered.has(guild.id) && !same) logger.warn(`commands in guild ${guild.id} changed outside this bot, registering again`)
+    const result = await discord.rest
+      .put(Routes.applicationGuildCommands(appId, guild.id), { body: merged.commands })
       .catch((e) => new DiscordError({ operation: `register commands in ${guild.id}`, cause: e }))
     if (result instanceof Error) {
       logger.warn(result)
       return
     }
     registered.set(guild.id, signature)
-    dynamic.set(guild.id, built.dynamic)
-    logger.info(`registered ${built.commands.length} commands in guild ${guild.id}`)
+    dynamic.set(guild.id, guildDynamic)
+    const extra = merged.kept.length > 0 ? `, kept ${merged.kept.length} from other apps (${merged.kept.join(', ')})` : ''
+    logger.info(`registered ${merged.commands.length - merged.kept.length} commands in guild ${guild.id}${extra}`)
+    if (merged.skipped.length > 0) logger.log(`${merged.skipped.length} shortcuts left out to make room in guild ${guild.id}: ${merged.skipped.join(', ')}`)
+    if (merged.droppedForeign.length > 0) logger.warn(`no room for other apps' commands in guild ${guild.id}: ${merged.droppedForeign.join(', ')}`)
   }
 
   function dynamicCommand(interaction: { guildId: string | null; commandName: string }) {
