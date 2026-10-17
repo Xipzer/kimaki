@@ -16,6 +16,7 @@ import { callBot, DEFAULT_LOCK_PORT, RESTART_EXIT_CODE, startLockServer } from '
 import { parseDuration } from '../duration.ts'
 import { createLogger, setLogFile } from '../logger.ts'
 import { action, DATA_DIR_HELP, dataDirOrDefault, discordApi, fail, openCliDb, printJson } from './shared.ts'
+import { transcriptionBaseUrlsFromEnv } from '../voice-env.ts'
 
 const logger = createLogger('CLI')
 
@@ -221,6 +222,7 @@ export function registerStartCommand(cli: Goke) {
         allowAllUsers: Boolean(options.allowAllUsers),
         disabledSkills,
         messageTool: Boolean(options.messageTool),
+        transcriptionBaseUrls: transcriptionBaseUrlsFromEnv(),
       })
       if (bot instanceof Error) failStartup(bot)
       // exit() keeps process.exitCode: the restart route sets RESTART_EXIT_CODE before its SIGTERM.
@@ -324,7 +326,7 @@ export function registerToolCommands(cli: Goke) {
       if (!(opened instanceof Error)) opened.close()
       const key = audioKeyCandidates(stored).find((candidate) => !options.provider || candidate.provider === options.provider)
       if (!key) fail(new Error('No OpenAI or Gemini key. Set OPENAI_API_KEY or GEMINI_API_KEY'))
-      const result = await generateSpeech({ text: input, apiKey: key.apiKey, provider: key.provider, voice: options.voice, instructions: options.instructions, speed })
+      const result = await generateSpeech({ text: input, apiKey: key.apiKey, provider: key.provider, voice: options.voice, instructions: options.instructions, speed, baseUrls: transcriptionBaseUrlsFromEnv() })
       if (result instanceof Error) fail(result)
       const output = path.resolve(options.output ?? `speech.${result.mediaType === 'audio/mp3' ? 'mp3' : 'wav'}`)
       await fs.promises.writeFile(output, result.audio)
