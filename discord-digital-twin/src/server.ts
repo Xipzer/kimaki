@@ -426,6 +426,29 @@ export function createServer({
     })
     .route({
       method: 'GET',
+      path: '/applications/:application_id/guilds/:guild_id/commands',
+      async handler({ params }): Promise<APIApplicationCommand[]> {
+        const commands = await prisma.applicationCommand.findMany({
+          where: { applicationId: params.application_id, guildId: params.guild_id },
+          orderBy: { name: 'asc' },
+        })
+        return commands.map((cmd) => ({
+          id: cmd.id,
+          application_id: cmd.applicationId,
+          guild_id: cmd.guildId ?? undefined,
+          name: cmd.name,
+          description: cmd.description,
+          type: cmd.type as ApplicationCommandType,
+          options: JSON.parse(cmd.options),
+          default_member_permissions: cmd.defaultMemberPermissions ?? null,
+          dm_permission: cmd.dmPermission,
+          nsfw: cmd.nsfw,
+          version: cmd.version,
+        }))
+      },
+    })
+    .route({
+      method: 'GET',
       path: '/applications/:application_id/guilds/:guild_id/commands/:command_id',
       async handler({ params }): Promise<APIApplicationCommand> {
         const cmd = await prisma.applicationCommand.findFirst({
