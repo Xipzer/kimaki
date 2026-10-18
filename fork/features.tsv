@@ -1,0 +1,8 @@
+# Fork features and how to tell that upstream now covers them (then the fork commit is redundant).
+# id	commit subject (prefix)	upstream files the fork hooks into	probe	pattern (git grep -E)	pathspec
+# probe=present: upstream covers it when the pattern appears. probe=absent: upstream covers it when the pattern disappears.
+voice-base-url	feat(voice): honour OPENAI_BASE_URL	kimaki/src/cli/bot.ts,kimaki/src/voice.ts,kimaki/src/main.ts	present	env(\[['"]|\.)OPENAI_BASE_URL	kimaki/src
+echo-split	feat(voice): post long voice transcripts in full	kimaki/src/ingress.ts,kimaki/src/sessions.ts,kimaki/src/queue.ts	absent	slice\(0, ECHO_LIMIT - 1\)	kimaki/src/queue.ts
+foreign-commands	fix(commands): keep other apps' slash commands	kimaki/src/slash-commands.ts	absent	\.set\(built\.commands	kimaki/src/slash-commands.ts
+session-search	feat(cli): keep kimaki session search	kimaki/src/cli.ts,kimaki/src/cli/session.ts	present	command\('session search	kimaki/src/cli
+model-precedence	fix(models): keep the session model	kimaki/src/sessions.ts,kimaki/src/prompt.ts,kimaki/src/commands/preference-commands.ts	present	info\.agent === selected\.agent|reselect	kimaki/src/sessions.ts
