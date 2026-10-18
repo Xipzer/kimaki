@@ -150,10 +150,29 @@ export async function agentSelection(bot: Bot, { directory, agent }: { directory
 // OpenCode switches the agent and model separately, including the configured variant.
 export async function switchAgent(
   bot: Bot,
-  { sessionId, directory, agent, model }: { sessionId: string; directory: string; agent: string; model?: ModelChoice | null },
+  {
+    sessionId,
+    directory,
+    agent,
+    model,
+    reselect = false,
+  }: {
+    sessionId: string
+    directory: string
+    agent: string
+    model?: ModelChoice | null
+    // An explicit agent pick by the user (/agent, /<agent>-agent): apply the agent's model even when unchanged.
+    reselect?: boolean
+  },
 ) {
   const selected = await agentSelection(bot, { directory, agent })
   if (selected instanceof Error) return selected
+  // Fork: naming the session's current agent again (agents pass --agent <current_agent>
+  // on every send) keeps the model the session runs on, e.g. one set with /model.
+  if (!model && !reselect) {
+    const info = await oc(bot, 'session.get', (client) => client.session.get({ sessionID: sessionId }))
+    if (!(info instanceof Error) && info.agent === selected.agent) return { ...selected, model: null }
+  }
   const choice = model ?? selected.model
   if (choice) {
     const switched = await oc(bot, 'session.switchModel', (client) => client.session.switchModel({
