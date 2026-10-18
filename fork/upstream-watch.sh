@@ -7,7 +7,8 @@
 #
 # Usage: fork/upstream-watch.sh [--force]   (--force reports even when nothing changed)
 # Env:   FORK_REPO (default: this checkout), FORK_BRANCH (tailored/v1), UPSTREAM (upstream),
-#        FORK_WATCH_STATE (~/.local/state/kimaki-fork-watch), FORK_WATCH_NO_FETCH=1 (tests)
+#        FORK_WATCH_STATE (~/.local/state/kimaki-fork-watch), FORK_WATCH_NO_FETCH=1 (tests),
+#        FORK_WATCH_QUEUE_SUFFIX=1 (end with Kimaki's `queue` suffix line)
 
 set -u
 export LC_ALL=C GIT_TERMINAL_PROMPT=0
@@ -112,6 +113,8 @@ fi
 g diff --name-status "$since" "$upstream/main" -- plans docs .changeset ':!.changeset/readme.md' | sed 's/^/- /' | head -30
 echo
 echo "Full logs: \`git -C $repo log $since..$upstream/main\`. Process: \`fork/SYNC.md\`."
+# Kimaki prompt suffix on its own last line: wait for a running turn instead of interrupting it.
+[ -n "${FORK_WATCH_QUEUE_SUFFIX:-}" ] && printf '\nqueue\n'
 
 printf '%s\n' "$main" > "$state/main"
 printf '%s\n' "$signature" > "$state/signature"
