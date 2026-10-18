@@ -264,7 +264,7 @@ async function setAgent(bot: Bot, { target, agent, model }: { target: Interactio
   if (before instanceof Error) return before
   const sessionId = target.sessionId
   const selected = sessionId
-    ? await switchAgent(bot, { sessionId, directory: target.directory, agent, model })
+    ? await switchAgent(bot, { sessionId, directory: target.directory, agent, model, reselect: true })
     : await agentSelection(bot, { directory: target.directory, agent })
   if (selected instanceof Error) return selected
   if (!sessionId) {
