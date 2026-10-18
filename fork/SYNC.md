@@ -10,5 +10,5 @@ Goal: `tailored/v1` = latest upstream + only the fork commits that still add som
 4. Build (`pnpm build` in `kimaki`) and run the suite in the isolated environment from `docs/fork/README.md`. Compare against the same suite on unmodified upstream; only failures upstream also has are acceptable.
 5. Wendy-facing changes (CLI output, commands, voice): run the Wendy check from `docs/fork/README.md`.
 6. Before pushing, keep the old head as `backup/tailored-v1-<old-sha>`. Then push with `--force-with-lease` over SSH (`git@github.com:Xipzer/kimaki.git`). End commit messages with the thread link.
-7. Direction signals: for new feature branches and plans, note what upstream is building that overlaps or conflicts with fork plans, and propose (don't build) any front-run.
+7. Direction signals: read `docs/fork/upstream-direction.md` (private notes, local only, never committed), then for new feature branches and plans note what upstream is building that overlaps or conflicts with fork plans, and propose (don't build) any front-run.
 8. Report in the thread: what was dropped, kept, and changed, with test results compared to upstream. **Never switch production without the owner's go-ahead.**
