@@ -227,6 +227,20 @@ export function createEffectsRunner({ discord, markViewed }: { discord: Client; 
       await pulseTyping(threadId)
       return
     }
+    // Fork: live thinking line (thinking-status.ts): post once, then edit in place.
+    if (effect.type === 'status') {
+      const ids = thread.prompts.get(effect.key)
+      if (effect.final) thread.prompts.delete(effect.key)
+      if (ids && ids.length > 0) {
+        const channel = await sendableChannel(threadId)
+        if (channel && !lifecycle.closed) await edit({ channel, messageId: ids[0]!, message: effect.message })
+        return
+      }
+      const id = await post({ threadId, options: { content: effect.message.content, components: [] }, notify: false })
+      if (id && !effect.final) thread.prompts.set(effect.key, [id])
+      await refreshTyping(threadId)
+      return
+    }
     if (effect.type === 'edit') {
       const ids = thread.prompts.get(effect.key)
       thread.prompts.delete(effect.key)
