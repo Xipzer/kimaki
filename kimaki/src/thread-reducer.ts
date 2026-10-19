@@ -30,6 +30,7 @@ import type {
 } from '@opencode/client'
 
 import type { Verbosity } from './db.ts'
+import { thinkingDelta, thinkingEnded, thinkingStarted, type Thinking, type ThinkingEffect } from './thinking-status.ts'
 import {
   asSubtext,
   button,
@@ -117,6 +118,8 @@ export type ThreadView = {
   // Kimaki runs an OpenCode command (kimaki.command): the next root user item
   // without Discord metadata is its expanded prompt, shown as the typed command.
   commandPending: { text: string; username: string } | null
+  // Fork: the root reasoning block with a live status line (thinking-status.ts).
+  thinking: Thinking | null
   // Questions and permission requests waiting for the user (root and children).
   forms: Readonly<Record<string, PendingForm>>
   permissions: Readonly<Record<string, PendingPermission>>
@@ -131,6 +134,7 @@ export type Effect =
   // Model markdown, rendered and split by the executor.
   | { type: 'markdown'; text: string; blankLineBefore: boolean }
   | { type: 'typing'; on: boolean }
+  | ThinkingEffect
   // Files from `kimaki upload-to-discord` (never from the reducer). `settle`
   // answers the waiting CLI call: null once posted, or why not.
   | { type: 'attachments'; files: readonly UploadFile[]; settle: (error: Error | null) => void }
@@ -218,6 +222,7 @@ export function emptyView({
     cached: null,
     inbox: [],
     commandPending: null,
+    thinking: null,
     forms: {},
     permissions: {},
   }
@@ -338,6 +343,14 @@ function applyOpencode({ draft, event, prefs, emit }: Context & { event: V2Event
   applyRoot({ draft, prefs, emit, event })
 }
 
+// Fork: a run that ends mid-reasoning finalizes its status line.
+function closeThinking({ draft, emit }: Context, at: number) {
+  if (!draft.thinking) return
+  const status = thinkingEnded({ thinking: draft.thinking, text: null, at })
+  draft.thinking = null
+  if (status) emit(status)
+}
+
 function applyRoot(context: Context & { event: V2Event }) {
   const { draft, event, prefs, emit } = context
   switch (event.type) {
@@ -368,6 +381,22 @@ function applyRoot(context: Context & { event: V2Event }) {
         toolLine(context, formatCacheMiss({ read: tokens.cache.read, expected: previous.tokens, idleMs: event.created - previous.at }))
       }
       draft.cached = { tokens: tokens.cache.read + tokens.cache.write, at: event.created }
+      return
+    }
+    case 'session.reasoning.started':
+      draft.thinking = thinkingStarted({ key: `thinking:${event.data.assistantMessageID}:${event.data.ordinal}`, at: event.created })
+      return
+    case 'session.reasoning.delta': {
+      if (draft.thinking?.key !== `thinking:${event.data.assistantMessageID}:${event.data.ordinal}`) return
+      const status = thinkingDelta({ thinking: draft.thinking, delta: event.data.delta, at: event.created })
+      if (status) emit(status)
+      return
+    }
+    case 'session.reasoning.ended': {
+      if (draft.thinking?.key !== `thinking:${event.data.assistantMessageID}:${event.data.ordinal}`) return
+      const status = thinkingEnded({ thinking: draft.thinking, text: event.data.text ?? null, at: event.created })
+      if (status) emit(status)
+      draft.thinking = null
       return
     }
     case 'session.text.ended': {
@@ -405,6 +434,7 @@ function applyRoot(context: Context & { event: V2Event }) {
     case 'session.compaction.failed':
       return toolLine(context, formatError(`compaction failed: ${event.data.error.message}`))
     case 'session.execution.succeeded': {
+      closeThinking(context, event.created)
       const turn = draft.turn
       draft.turn = null
       draft.lastKind = null
@@ -413,12 +443,14 @@ function applyRoot(context: Context & { event: V2Event }) {
       return
     }
     case 'session.execution.failed':
+      closeThinking(context, event.created)
       draft.turn = null
       draft.lastKind = null
       emit({ type: 'send', text: formatError(event.data.error.message), notify: true })
       emit({ type: 'viewed', sessionId: draft.sessionId, idle: event.created })
       return
     case 'session.execution.interrupted':
+      closeThinking(context, event.created)
       draft.turn = null
       draft.lastKind = null
       // A shutdown does not make the session idle in OpenCode.
