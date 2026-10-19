@@ -358,11 +358,10 @@ function applyOpencode({ draft, event, prefs, emit }: Context & { event: V2Event
 }
 
 // Fork: a run that ends mid-reasoning finalizes its status line.
-function closeThinking({ draft, emit }: Context, at: number) {
+function closeThinking({ draft, emit }: Context) {
   if (!draft.thinking) return
-  const status = thinkingEnded({ thinking: draft.thinking, text: null, at })
+  emit(thinkingEnded(draft.thinking, null))
   draft.thinking = null
-  if (status) emit(status)
 }
 
 function applyRoot(context: Context & { event: V2Event }) {
@@ -397,19 +396,21 @@ function applyRoot(context: Context & { event: V2Event }) {
       draft.cached = { tokens: tokens.cache.read + tokens.cache.write, at: event.created }
       return
     }
-    case 'session.reasoning.started':
-      draft.thinking = thinkingStarted({ key: `thinking:${event.data.assistantMessageID}:${event.data.ordinal}`, at: event.created })
+    case 'session.reasoning.started': {
+      const started = thinkingStarted(`thinking:${event.data.assistantMessageID}:${event.data.ordinal}`)
+      draft.thinking = started.thinking
+      emit(started.effect)
       return
+    }
     case 'session.reasoning.delta': {
       if (draft.thinking?.key !== `thinking:${event.data.assistantMessageID}:${event.data.ordinal}`) return
-      const status = thinkingDelta({ thinking: draft.thinking, delta: event.data.delta, at: event.created })
-      if (status) emit(status)
+      const update = thinkingDelta(draft.thinking, event.data.delta)
+      if (update) emit(update)
       return
     }
     case 'session.reasoning.ended': {
       if (draft.thinking?.key !== `thinking:${event.data.assistantMessageID}:${event.data.ordinal}`) return
-      const status = thinkingEnded({ thinking: draft.thinking, text: event.data.text ?? null, at: event.created })
-      if (status) emit(status)
+      emit(thinkingEnded(draft.thinking, event.data.text ?? null))
       draft.thinking = null
       return
     }
@@ -452,7 +453,7 @@ function applyRoot(context: Context & { event: V2Event }) {
     case 'session.compaction.failed':
       return toolLine(context, formatError(`compaction failed: ${event.data.error.message}`))
     case 'session.execution.succeeded': {
-      closeThinking(context, event.created)
+      closeThinking(context)
       const turn = draft.turn
       draft.turn = null
       draft.lastKind = null
@@ -461,14 +462,14 @@ function applyRoot(context: Context & { event: V2Event }) {
       return
     }
     case 'session.execution.failed':
-      closeThinking(context, event.created)
+      closeThinking(context)
       draft.turn = null
       draft.lastKind = null
       emit({ type: 'send', text: formatError(event.data.error.message), notify: true })
       emit({ type: 'viewed', sessionId: draft.sessionId, idle: event.created })
       return
     case 'session.execution.interrupted':
-      closeThinking(context, event.created)
+      closeThinking(context)
       draft.turn = null
       draft.lastKind = null
       // A shutdown does not make the session idle in OpenCode.
