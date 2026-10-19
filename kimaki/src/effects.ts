@@ -26,6 +26,7 @@ import {
 } from 'discord.js'
 
 import { formatFooter, NOTIFY_MESSAGE_FLAGS, SILENT_MESSAGE_FLAGS, type UiMessage } from './format-parts.ts'
+import { createThinkingLines } from './thinking-status.ts'
 import { createLogger } from './logger.ts'
 import { segmentPayloads, type DiscordPayload } from './markdown/components.ts'
 import { DISCORD_TEXT_LIMIT, renderMarkdown } from './markdown/render-markdown.ts'
@@ -133,6 +134,26 @@ export function createEffectsRunner({ discord, markViewed }: { discord: Client; 
   // After stop(): no more sends or typing, even from effects already queued.
   const lifecycle = { closed: false }
 
+  const thinking = new Map<string, ReturnType<typeof createThinkingLines>>()
+  function thinkingLines(threadId: string) {
+    const existing = thinking.get(threadId)
+    if (existing) return existing
+    const created = createThinkingLines({
+      queueTick: (key) => run(threadId, [{ type: 'thinking', key, phase: 'tick', headline: '' }]),
+      post: async (message) => {
+        const id = await post({ threadId, options: { content: message.content, components: [] }, notify: false })
+        await refreshTyping(threadId)
+        return id
+      },
+      edit: async (messageId, message) => {
+        const channel = await sendableChannel(threadId)
+        if (channel && !lifecycle.closed) await edit({ channel, messageId, message })
+      },
+    })
+    thinking.set(threadId, created)
+    return created
+  }
+
   function worker(threadId: string): ThreadWorker {
     const existing = workers.get(threadId)
     if (existing) return existing
@@ -227,18 +248,9 @@ export function createEffectsRunner({ discord, markViewed }: { discord: Client; 
       await pulseTyping(threadId)
       return
     }
-    // Fork: live thinking line (thinking-status.ts): post once, then edit in place.
-    if (effect.type === 'status') {
-      const ids = thread.prompts.get(effect.key)
-      if (effect.final) thread.prompts.delete(effect.key)
-      if (ids && ids.length > 0) {
-        const channel = await sendableChannel(threadId)
-        if (channel && !lifecycle.closed) await edit({ channel, messageId: ids[0]!, message: effect.message })
-        return
-      }
-      const id = await post({ threadId, options: { content: effect.message.content, components: [] }, notify: false })
-      if (id && !effect.final) thread.prompts.set(effect.key, [id])
-      await refreshTyping(threadId)
+    // Fork: live thinking line (thinking-status.ts).
+    if (effect.type === 'thinking') {
+      await thinkingLines(threadId).apply(effect)
       return
     }
     if (effect.type === 'edit') {
@@ -322,13 +334,15 @@ export function createEffectsRunner({ discord, markViewed }: { discord: Client; 
     thread.running = false
   }
 
+  function run(threadId: string, effects: Effect[]): void {
+    if (effects.length === 0) return
+    if (lifecycle.closed) return drop(effects)
+    worker(threadId).queue.push(...effects)
+    void drain(threadId)
+  }
+
   return {
-    run(threadId: string, effects: Effect[]): void {
-      if (effects.length === 0) return
-      if (lifecycle.closed) return drop(effects)
-      worker(threadId).queue.push(...effects)
-      void drain(threadId)
-    },
+    run,
     // The thread no longer shows a session: drop what is pending and stop typing.
     dispose(threadId: string): void {
       const thread = workers.get(threadId)
@@ -336,6 +350,7 @@ export function createEffectsRunner({ discord, markViewed }: { discord: Client; 
       drop(thread.queue.splice(0))
       thread.generation++
       thread.prompts.clear()
+      thinking.get(threadId)?.clear()
       stopTyping(threadId)
     },
     stop(): void {
@@ -344,6 +359,7 @@ export function createEffectsRunner({ discord, markViewed }: { discord: Client; 
         drop(thread.queue.splice(0))
         stopTyping(threadId)
       }
+      for (const lines of thinking.values()) lines.clear()
     },
   }
 }

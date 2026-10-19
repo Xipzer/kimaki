@@ -1,7 +1,7 @@
 import type { V2Event } from '@opencode/client'
 import { describe, expect, test } from 'vitest'
 
-import { headline, thinkingDelta, thinkingEnded, thinkingStarted } from './thinking-status.ts'
+import { createThinkingLines, headline, thinkingDelta, thinkingEnded, thinkingStarted, type ThinkingEffect } from './thinking-status.ts'
 import { effectLines, loadFixture, replay } from './test/replay.ts'
 
 describe('headline', () => {
@@ -13,40 +13,86 @@ describe('headline', () => {
   })
 })
 
-describe('status line timing', () => {
-  test('short blocks post nothing; long ones post after 4 s, edit every 5 s, finalize', () => {
-    const thinking = thinkingStarted({ key: 'thinking:m:0', at: 0 })
-    expect(thinkingDelta({ thinking, delta: '**Planning**', at: 1_000 })).toBe(null)
-    expect(thinkingDelta({ thinking, delta: ' more', at: 4_500 })?.message.content).toBe('-# thinking · 5s · Planning')
-    expect(thinkingDelta({ thinking, delta: ' **Checking tests**', at: 7_000 })).toBe(null)
-    expect(thinkingDelta({ thinking, delta: '', at: 9_600 })?.message.content).toBe('-# thinking · 10s · Checking tests')
-    expect(thinkingEnded({ thinking, text: null, at: 31_000 })).toEqual({
-      type: 'status',
-      key: 'thinking:m:0',
-      final: true,
-      message: { content: '-# thought for 31s · Checking tests', components: [] },
+test('reducer side emits start, headline changes only, and end', () => {
+  const { thinking, effect } = thinkingStarted('thinking:m:0')
+  expect(effect.phase).toBe('start')
+  expect(thinkingDelta(thinking, '**Planning**')?.headline).toBe('Planning')
+  expect(thinkingDelta(thinking, ' still planning')).toBe(null)
+  expect(thinkingEnded(thinking, null)).toEqual({ type: 'thinking', key: 'thinking:m:0', phase: 'end', headline: 'Planning' })
+})
+
+describe('executor lines', () => {
+  function harness() {
+    let clock = 0
+    const timers: Array<{ at: number; fn: () => void; id: number }> = []
+    const log: string[] = []
+    let ids = 0
+    const queued: string[] = []
+    const lines = createThinkingLines({
+      now: () => clock,
+      schedule: (fn, ms) => {
+        const id = ++ids
+        timers.push({ at: clock + ms, fn, id })
+        return id as unknown as ReturnType<typeof setTimeout>
+      },
+      cancel: (timer) => {
+        const index = timers.findIndex((entry) => entry.id === (timer as unknown as number))
+        if (index >= 0) timers.splice(index, 1)
+      },
+      queueTick: (key) => void queued.push(key),
+      post: async (message) => {
+        log.push(`post ${message.content}`)
+        return 'msg1'
+      },
+      edit: async (id, message) => void log.push(`edit ${id} ${message.content}`),
     })
-    const quick = thinkingStarted({ key: 'thinking:m:1', at: 0 })
-    thinkingDelta({ thinking: quick, delta: 'fast', at: 500 })
-    expect(thinkingEnded({ thinking: quick, text: 'fast', at: 2_000 })).toBe(null)
+    const advance = async (to: number) => {
+      clock = to
+      for (const timer of timers.filter((entry) => entry.at <= to)) {
+        timers.splice(timers.indexOf(timer), 1)
+        timer.fn()
+      }
+      while (queued.length) await lines.apply({ type: 'thinking', key: queued.shift()!, phase: 'tick', headline: '' })
+    }
+    const apply = (effect: Omit<ThinkingEffect, 'type'>) => lines.apply({ type: 'thinking', ...effect })
+    return { log, advance, apply }
+  }
+
+  test('long block: posts at 4 s, edits every 5 s even without a summary, finalizes', async () => {
+    const { log, advance, apply } = harness()
+    await apply({ key: 'k', phase: 'start', headline: '' })
+    await advance(3_000)
+    expect(log).toEqual([])
+    await advance(4_000)
+    await apply({ key: 'k', phase: 'update', headline: 'Checking tests' })
+    await advance(9_000)
+    await apply({ key: 'k', phase: 'end', headline: 'Checking tests' })
+    await advance(30_000)
+    expect(log).toEqual([
+      'post -# thinking · 4s',
+      'edit msg1 -# thinking · 9s · Checking tests',
+      'edit msg1 -# thought for 9s · Checking tests',
+    ])
+  })
+
+  test('short block posts nothing', async () => {
+    const { log, advance, apply } = harness()
+    await apply({ key: 'k', phase: 'start', headline: '' })
+    await advance(2_000)
+    await apply({ key: 'k', phase: 'end', headline: 'quick' })
+    await advance(20_000)
+    expect(log).toEqual([])
   })
 })
 
-test('a long reasoning block in a recorded turn shows a live line before the answer', () => {
-  const events = loadFixture('queue-parked.events.jsonl')
-  const started = events.findIndex((event) => event.type === 'session.reasoning.started')
-  const delta = events[events.findIndex((event) => event.type === 'session.reasoning.delta')]!
-  const base = events[started]!.created
-  // Stretch the recorded block to 12 s with deltas every 3 s.
-  const stretched: V2Event[] = [1, 2, 3, 4].map((i) => ({ ...delta, id: `${delta.id}-${i}`, created: base + i * 3_000 }) as V2Event)
-  const shifted = events.map((event, index) => (index > started && event.type !== 'session.reasoning.delta' && event.created > base ? ({ ...event, created: event.created + 12_000 } as V2Event) : event))
-  const withDeltas = [...shifted.slice(0, started + 1), ...stretched, ...shifted.slice(started + 1).filter((event) => event.type !== 'session.reasoning.delta')]
-  const lines = effectLines(replay({ events: withDeltas }).effects).filter((line) => line.startsWith('[status'))
+test('the reducer emits thinking effects for a recorded reasoning block', () => {
+  const events: V2Event[] = loadFixture('queue-parked.events.jsonl')
+  const lines = effectLines(replay({ events }).effects).filter((line) => line.startsWith('[thinking'))
   expect(lines).toMatchInlineSnapshot(`
     [
-      "[status thinking:msg_0f203a843001C3vIwuaGEy2VtK:0] -# thinking · 6s · Answering about apple",
-      "[status thinking:msg_0f203a843001C3vIwuaGEy2VtK:0] -# thinking · 12s · Answering about apple",
-      "[status final thinking:msg_0f203a843001C3vIwuaGEy2VtK:0] -# thought for 13s · Answering about apple",
+      "[thinking start thinking:msg_0f203a843001C3vIwuaGEy2VtK:0]",
+      "[thinking update thinking:msg_0f203a843001C3vIwuaGEy2VtK:0] Answering about apple",
+      "[thinking end thinking:msg_0f203a843001C3vIwuaGEy2VtK:0] Answering about apple",
     ]
   `)
 })
