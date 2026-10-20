@@ -1,6 +1,7 @@
 // Discord ingress (spec 4): gates every messageCreate, parses it into a Route
-// and calls actions. Gates, in order: bots (including ourselves), channel
-// ownership (only channels mapped in this machine's SQLite), permission.
+// and calls actions. Gates, in order: webhooks and our own messages (except
+// remote send envelopes), channel ownership (only channels mapped in this
+// machine's SQLite), permission (other bots need the Kimaki role).
 // Messages of one channel are handled in arrival order, after OpenCode is ready.
 //
 // Messages sent while the bot was offline are not fetched here: gateway-proxy
@@ -66,6 +67,8 @@ function authorCanUseKimaki(bot: Bot, message: Message<true>): Promise<boolean> 
 function memberCanUseKimaki(bot: Pick<Bot, 'allowAllUsers'>, member: GuildMember): boolean {
   const roleNames = member.roles.cache.map((role) => role.name.toLowerCase())
   if (roleNames.includes('no-kimaki')) return false
+  // Other bots are opt-in: only the Kimaki role lets them in, never admin rights or --allow-all-users.
+  if (member.user.bot) return roleNames.includes('kimaki')
   if (bot.allowAllUsers) return true
   if (member.guild.ownerId === member.id) return true
   if (member.permissions.has(PermissionFlagsBits.Administrator)) return true
@@ -222,8 +225,7 @@ async function handleMessage(bot: Bot, message: Message) {
     })
     return
   }
-  if (message.author.bot) {
-    if (message.author.id !== bot.discord.user?.id) return
+  if (message.author.id === bot.discord.user?.id) {
     return handleRemoteEnvelope(bot, { message, channelId, threadId: thread?.id ?? null })
   }
   if (!(await authorCanUseKimaki(bot, message))) {
@@ -303,7 +305,9 @@ export function registerIngress(bot: Bot) {
   }
 
   bot.discord.on(Events.MessageCreate, (message) => {
-    if (message.author.bot && !message.embeds[0]?.footer?.text.startsWith(REMOTE_SEND_PREFIX)) return
+    // Webhooks have no member to check. Own messages only matter as remote send envelopes.
+    if (message.webhookId) return
+    if (message.author.id === bot.discord.user?.id && !message.embeds[0]?.footer?.text.startsWith(REMOTE_SEND_PREFIX)) return
     serialize(message.channelId, () => handleMessage(bot, message))
   })
   // Deleting a queued Discord message removes it from the queue.

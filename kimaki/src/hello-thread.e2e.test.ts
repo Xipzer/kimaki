@@ -177,6 +177,41 @@ test('message from a user without permission creates no thread', async () => {
   await expectNoNewThread({ channelId, before })
 })
 
+test('another bot needs the Kimaki role, and no-kimaki still denies it', async () => {
+  const { discord, channelId } = twin
+  const helperBotId = '200000000000000050'
+  const guildId = discord.guildId
+  await discord.prisma.user.create({ data: { id: helperBotId, username: 'helper-bot', bot: true } })
+  await discord.prisma.guildMember.create({ data: { guildId, userId: helperBotId } })
+  const member = { guildId_userId: { guildId, userId: helperBotId } }
+  const helper = discord.channel(channelId).user(helperBotId)
+
+  const before = (await discord.channel(channelId).getThreads()).length
+  await helper.sendMessage({ content: 'no role bot-marker hello-marker' })
+  await expectNoNewThread({ channelId, before })
+
+  const guild = await bot.discord.guilds.fetch(guildId)
+  const kimakiRole = await guild.roles.create({ name: 'Kimaki' })
+  const denyRole = await guild.roles.create({ name: 'no-kimaki' })
+  await discord.prisma.guildMember.update({ where: member, data: { roles: JSON.stringify([kimakiRole.id]) } })
+  await helper.sendMessage({ content: 'with role bot-marker hello-marker' })
+  const thread = await discord.channel(channelId).waitForThread({ predicate: (thread) => thread.name?.startsWith('with role bot-marker') ?? false })
+  await waitForFooter({ discord, threadId: thread.id })
+  expect(await discord.thread(thread.id).text()).toMatchInlineSnapshot(`
+    "--- from: assistant (helper-bot)
+    with role bot-marker hello-marker
+    --- from: assistant (TestBot)
+    -# *using deterministic-provider/deterministic-v2 ⋅ build*
+    Hello from the deterministic model.
+    -# *project ⋅ main ⋅ Ns ⋅ N% ⋅ deterministic-v2*"
+  `)
+
+  const withRole = (await discord.channel(channelId).getThreads()).length
+  await discord.prisma.guildMember.update({ where: member, data: { roles: JSON.stringify([kimakiRole.id, denyRole.id]) } })
+  await helper.sendMessage({ content: 'denied bot-marker hello-marker' })
+  await expectNoNewThread({ channelId, before: withRole })
+})
+
 test('message in a channel without a project creates no thread', async () => {
   const { discord, unregisteredChannelId } = twin
   await discord.channel(unregisteredChannelId).user(TEST_USER_ID).sendMessage({ content: 'hello-marker' })
