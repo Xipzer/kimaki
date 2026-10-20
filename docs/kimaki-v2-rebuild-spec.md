@@ -1643,7 +1643,7 @@ removed). `--mention-mode` becomes the `channels.mention_only` default.
 | `user list --guild --query` | mention IDs |
 | `upload-to-discord --session files…` | attach files to the thread |
 | `tts text -o file` | speech via OpenAI / Gemini |
-| `tunnel [-t id] -- cmd` | traforo public URL, `TRAFORO_URL` env |
+| `tunnel [-t id] -- cmd` | opentunnel.xyz public URL, `KIMAKI_TUNNEL_URL` env |
 | `screenshare` | noVNC over tunnel |
 | `merge-worktree` | CLI version of `/merge-worktree` |
 | `bot install-url / token / status set / status clear`, `discord-install-url` | bot admin |

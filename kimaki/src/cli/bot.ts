@@ -1,6 +1,6 @@
 // Bot lifecycle and setup: the root command (start + onboarding), provider
 // login, tools (tunnel, tts), and bot status, logs, credentials and keys.
-// main.ts, onboarding.ts, traforo, SQLite and voice are loaded only by the
+// main.ts, onboarding.ts, tunnel.ts, SQLite and voice are loaded only by the
 // commands that run them (see the note in shared.ts).
 
 import { spawn, type ChildProcess } from 'node:child_process'
@@ -283,9 +283,9 @@ export function registerLoginCommands(cli: Goke) {
 
 // tunnel, tts
 export function registerToolCommands(cli: Goke) {
-  cli.command('tunnel', 'Run a command and expose its local port with a public URL. The child gets TRAFORO_URL')
+  cli.command('tunnel', 'Run a command and expose its local port with a public opentunnel.xyz URL. The child gets KIMAKI_TUNNEL_URL')
     .option('-p, --port <port>', 'Local port (default: read from the command output)')
-    .option('-t, --tunnel-id <id>', 'Fixed tunnel ID (default: random). Only for public-safe services')
+    .option('-t, --tunnel-id <id>', 'Fixed subdomain (default: random). Only for public-safe services')
     .option('--host <host>', 'Local host (default: localhost)')
     .option('-k, --kill', 'Kill the process on --port first')
     .example('kimaki tunnel -- pnpm dev')
@@ -294,8 +294,9 @@ export function registerToolCommands(cli: Goke) {
       const port = options.port ? Number(options.port) : undefined
       if (port !== undefined && (!Number.isInteger(port) || port < 1 || port > 65_535)) fail(new Error(`Invalid --port ${options.port}`))
       if (!port && command.length === 0) fail(new Error('Pass a command after --, or --port <port>. Example: kimaki tunnel -- pnpm dev'))
-      const { runTunnel } = await import('traforo/run-tunnel')
-      await runTunnel({ port, command: command.length > 0 ? command : undefined, tunnelId: options.tunnelId, localHost: options.host, baseDomain: 'kimaki.dev', kill: options.kill })
+      const { runTunnel } = await import('../tunnel.ts')
+      const result = await runTunnel({ port, command: command.length > 0 ? command : undefined, name: options.tunnelId, host: options.host, kill: options.kill })
+      if (result instanceof Error) fail(result)
     })
 
   cli.command('tts [text]', 'Text to speech with OpenAI or Gemini. Reads stdin if no text is given')

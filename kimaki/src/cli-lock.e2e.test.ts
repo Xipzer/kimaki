@@ -321,9 +321,9 @@ test('CLI help documents the supported P7 commands', async () => {
         -c, --channel <id>              Kimaki voice channel to post in (default in voice calls: KIMAKI_CHANNEL_ID)
 
       Tools:
-      tunnel                            Run a command and expose its local port with a public URL. The child gets TRAFORO_URL
+      tunnel                            Run a command and expose its local port with a public opentunnel.xyz URL. The child gets KIMAKI_TUNNEL_URL
         -p, --port <port>               Local port (default: read from the command output)
-        -t, --tunnel-id <id>            Fixed tunnel ID (default: random). Only for public-safe services
+        -t, --tunnel-id <id>            Fixed subdomain (default: random). Only for public-safe services
         --host <host>                   Local host (default: localhost)
         -k, --kill                      Kill the process on --port first
 
