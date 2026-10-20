@@ -1,3 +1,4 @@
+import type { JsonValue } from '@opencode/client'
 import { Plugin, Skill } from '@opencode/plugin'
 import { Schema } from 'effect'
 import { execFile } from 'node:child_process'
@@ -7,7 +8,7 @@ import path from 'node:path'
 import { autostartBot } from '../autostart.ts'
 import { readBuiltinSkills } from '../builtin-skills.ts'
 import { fileEditTool, recordToolEdits } from '../file-edit-log.ts'
-import { turnContext } from '../system-prompt.ts'
+import { MESSAGE_MODE_INSTRUCTIONS, MESSAGE_TOOL, MESSAGE_TOOL_DESCRIPTION, MESSAGE_TOOL_INPUT, turnContext } from '../system-prompt.ts'
 
 const exec = promisify(execFile)
 
@@ -31,17 +32,32 @@ export default Plugin.define({
         }
       })
     }
-    async function marker(sessionID: string) {
+    // metadata.kimaki of the session, or of the thread's root for a subagent (`root: false`).
+    async function marker(sessionID: string): Promise<{ fields: Map<string, JsonValue>; root: boolean } | null> {
       const session = await ctx.session.get({ sessionID }).catch(() => null)
       const value: unknown = session?.metadata?.['kimaki']
       if (!value || typeof value !== 'object' || Array.isArray(value)) return null
       const current = new Map(Object.entries(value))
-      if (!session?.parentID) return current
+      if (!session?.parentID) return { fields: current, root: true }
       const parent = await ctx.session.get({ sessionID: session.parentID }).catch(() => null)
       const parentMarker = parent?.metadata?.['kimaki']
-      if (parentMarker && typeof parentMarker === 'object' && !Array.isArray(parentMarker) && parentMarker['threadId'] === current.get('threadId')) return marker(session.parentID)
-      return current
+      if (parentMarker && typeof parentMarker === 'object' && !Array.isArray(parentMarker) && parentMarker['threadId'] === current.get('threadId')) {
+        const root = await marker(session.parentID)
+        return root && { fields: root.fields, root: false }
+      }
+      return { fields: current, root: true }
     }
+    // Registered for every session; the context hook removes it outside message mode.
+    await ctx.tool.transform((editor) => {
+      editor.add({
+        name: MESSAGE_TOOL,
+        description: MESSAGE_TOOL_DESCRIPTION,
+        input: MESSAGE_TOOL_INPUT,
+        options: { codemode: false },
+        // Discord renders the call input (thread-reducer.ts); the tool itself does nothing.
+        execute: async () => ({ content: 'Message sent to the user.' }),
+      })
+    })
     // The git branch reaches the model as a synthetic message saved right before
     // the user prompt, only when it changed. Text in event.system would change the
     // cached prompt prefix on every branch switch. The prompt hook runs before
@@ -58,11 +74,28 @@ export default Plugin.define({
       if (last?.type === 'synthetic' && last.text === text) return
       await ctx.session.synthetic({ sessionID: event.sessionID, text, delivery: event.delivery, resume: false }).catch(() => undefined)
     })
+    // send_message only for root sessions of a bot started with --message-tool.
+    // Every request kind that carries the tool list gets the same tools and system
+    // text, so the prompt cache keeps hitting and no other session ever sees the tool.
+    async function applyMessageMode(event: { sessionID: string; tools: Record<string, unknown>; system: Array<{ type: 'text'; text: string }> }) {
+      const info = await marker(event.sessionID)
+      const messageMode = info?.root === true && info.fields.get('messageTool') === true
+      if (!messageMode) delete event.tools[MESSAGE_TOOL]
+      else event.system.push({ type: 'text', text: MESSAGE_MODE_INSTRUCTIONS })
+      return info
+    }
+    await ctx.session.hook('compaction', async (event) => {
+      await applyMessageMode(event)
+    })
+    await ctx.session.hook('generate', async (event) => {
+      await applyMessageMode(event)
+    })
     await ctx.session.hook('context', async (event) => {
       // The only prompt change for every session, TUI included. The ID never
       // changes in a session, so the cached prompt prefix stays stable.
       event.system.push({ type: 'text', text: `OpenCode session ID: ${event.sessionID}` })
-      if (!(await marker(event.sessionID))) return
+      const info = await applyMessageMode(event)
+      if (!info) return
       // The <discord-user> context of each prompt, built from its metadata, so the
       // stored text stays clean for the TUI and other clients. Same metadata, same
       // text on every request: the cached prompt prefix stays stable.
@@ -92,8 +125,8 @@ export default Plugin.define({
     await ctx.tool.hook('execute.before', async (event) => {
       if (event.tool !== 'shell' || !event.input || typeof event.input !== 'object' || Array.isArray(event.input)) return
       const info = await marker(event.sessionID)
-      const dataDir = info?.get('dataDir')
-      const lockPort = info?.get('lockPort')
+      const dataDir = info?.fields.get('dataDir')
+      const lockPort = info?.fields.get('lockPort')
       if (typeof dataDir !== 'string' || typeof lockPort !== 'number') return
       if (!('command' in event.input) || typeof event.input.command !== 'string') return
       const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`
@@ -102,7 +135,7 @@ export default Plugin.define({
     // File edits feed `kimaki session editors` (v1-compatible JSONL index).
     await ctx.tool.hook('execute.after', async (event) => {
       if (event.status !== 'completed' || !fileEditTool(event.tool)) return
-      const dataDir = (await marker(event.sessionID))?.get('dataDir')
+      const dataDir = (await marker(event.sessionID))?.fields.get('dataDir')
       if (typeof dataDir !== 'string') return
       // Plugins stay silent: a failed append only loses one index entry.
       const recorded = await recordToolEdits({ dataDir, directory: ctx.location.directory, sessionId: event.sessionID, tool: event.tool, input: event.input })

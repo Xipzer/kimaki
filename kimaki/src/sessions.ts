@@ -12,6 +12,7 @@ import * as orm from 'drizzle-orm'
 import {
   cliContext,
   globalModel,
+  markerIsCurrent,
   oc,
   parseModel,
   projectOf,
@@ -273,7 +274,7 @@ export async function ensureSessionMarker(
   const info = await oc(bot, `get session ${sessionId}`, (client) => client.session.get({ sessionID: sessionId }))
   if (info instanceof Error) return info
   const marker = readMarker(info.metadata)
-  if (marker && marker.dataDir === bot.dataDir && marker.lockPort === bot.lockPort) return
+  if (marker && markerIsCurrent(bot, marker)) return
   // Instructions first: the marker means "set up", so a failure here is retried on the next input.
   if (!marker) {
     logger.log(`adopting legacy session ${sessionId} of thread ${thread.id}`)
@@ -303,7 +304,7 @@ export async function refreshCliContext(bot: Bot) {
     }
     const marker = readMarker(info.metadata)
     if (!marker) continue
-    if (marker.dataDir === bot.dataDir && marker.lockPort === bot.lockPort) continue
+    if (markerIsCurrent(bot, marker)) continue
     const metadata = { ...info.metadata, kimaki: { ...marker.fields, ...cliContext(bot) } }
     const result = await oc(bot, 'refresh Kimaki CLI context', (client) => client.session.update({ sessionID: sessionId, metadata }))
     if (result instanceof Error) return result

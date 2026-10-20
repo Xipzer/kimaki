@@ -55,6 +55,37 @@ test('text-only turn: banner, text, typing, footer with context percent', () => 
   expect(view.turn).toBe(null)
 })
 
+test('message mode: send_message shows as markdown, plain text only when the turn sent nothing', () => {
+  const turn = loadFixture('tools.events.jsonl').filter((event) => !event.type.startsWith('session.tool.'))
+  const prefs = { ...DEFAULT_PREFS, messageTool: true }
+  const textIndex = turn.findIndex((event) => event.type === 'session.text.ended')
+  const text = turn[textIndex]!
+  if (text.type !== 'session.text.ended') throw new Error('Expected text')
+  const call = { sessionID: text.data.sessionID, assistantMessageID: text.data.assistantMessageID, id: 'call_message' }
+  const durable = { aggregateID: text.data.sessionID, seq: 1, version: 1 as const }
+  const message: V2Event[] = [
+    { id: 'evt_message_input', created: text.created, durable, type: 'session.tool.input.started', data: { ...call, name: 'send_message' } },
+    { id: 'evt_message_called', created: text.created, durable, type: 'session.tool.called', data: { ...call, executed: false, input: { text: 'Visible **reply**' } } },
+  ]
+  const sent = replay({ prefs, events: [...turn.slice(0, textIndex), ...message, ...turn.slice(textIndex)] })
+  const silent = replay({ prefs, events: turn })
+  const lines = (effects: typeof sent.effects) => effectLines(effects).filter((line) => !line.startsWith('»') && !line.startsWith('[typing'))
+  expect({ sent: lines(sent.effects), silent: lines(silent.effects) }).toMatchInlineSnapshot(`
+    {
+      "sent": [
+        "-# *using openai/gpt-6-luna low ⋅ build*",
+        "Visible **reply**",
+        "-# *project ⋅ main ⋅ 17s ⋅ 6% ⋅ gpt-6-luna*",
+      ],
+      "silent": [
+        "-# *using openai/gpt-6-luna low ⋅ build*",
+        "Done. \`tmp-events/hello.txt\` contains \`hello world\`.",
+        "-# *project ⋅ main ⋅ 17s ⋅ 6% ⋅ gpt-6-luna*",
+      ],
+    }
+  `)
+})
+
 test('kimaki sleep in a turn makes its footer silent, the next turn notifies again', () => {
   const turn = loadFixture('tools.events.jsonl').filter((event) => !event.type.startsWith('session.tool.'))
   const end = turn.findIndex((event) => event.type === 'session.execution.succeeded')

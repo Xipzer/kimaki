@@ -69,6 +69,8 @@ export type Bot = {
   allowAllUsers: boolean
   // Built-in skill ids (builtin-skills.ts) denied through the permissions of new sessions.
   disabledSkills: readonly string[]
+  // `kimaki --message-tool`: root sessions also reply through send_message; Discord hides their plain text.
+  messageTool: boolean
   features: BotFeatures
 }
 
@@ -134,6 +136,7 @@ export type SessionMarker = {
   fields: { readonly [key: string]: JsonValue }
   dataDir: string | null
   lockPort: number | null
+  messageTool: boolean
   // Explicit `kimaki send --parent-session`, so /resume keeps the instruction line.
   parentSessionId: string | null
   // The scheduled run stored at session.create, so /resume keeps the same instruction section.
@@ -147,7 +150,7 @@ function jsonObject(value: JsonValue | undefined): { readonly [key: string]: Jso
 export function readMarker(metadata: SessionMetadata | undefined): SessionMarker | null {
   const fields = jsonObject(metadata?.['kimaki'])
   if (!fields) return null
-  const { dataDir, lockPort, parentSessionId } = fields
+  const { dataDir, lockPort, messageTool, parentSessionId } = fields
   const task = jsonObject(fields['task'])
   const taskId = task?.['id']
   const cronExpr = task?.['cronExpr']
@@ -156,6 +159,7 @@ export function readMarker(metadata: SessionMetadata | undefined): SessionMarker
     fields,
     dataDir: typeof dataDir === 'string' ? dataDir : null,
     lockPort: typeof lockPort === 'number' ? lockPort : null,
+    messageTool: messageTool === true,
     parentSessionId: typeof parentSessionId === 'string' ? parentSessionId : null,
     task: typeof taskId === 'number'
       ? { id: taskId, cronExpr: typeof cronExpr === 'string' ? cronExpr : null, timezone: typeof timezone === 'string' ? timezone : null }
@@ -163,9 +167,15 @@ export function readMarker(metadata: SessionMetadata | undefined): SessionMarker
   }
 }
 
-// The marker fields that point the agent's `kimaki` calls at this bot.
-export function cliContext(bot: Bot) {
-  return { dataDir: bot.dataDir, lockPort: bot.lockPort }
+// The marker fields that follow this bot run: where the agent's `kimaki` calls
+// go, and whether the plugin gives the session send_message.
+export function cliContext(bot: Pick<Bot, 'dataDir' | 'lockPort' | 'messageTool'>) {
+  return { dataDir: bot.dataDir, lockPort: bot.lockPort, messageTool: bot.messageTool }
+}
+
+// False when the session marker was written by another bot run or with another --message-tool.
+export function markerIsCurrent(bot: Pick<Bot, 'dataDir' | 'lockPort' | 'messageTool'>, marker: SessionMarker): boolean {
+  return marker.dataDir === bot.dataDir && marker.lockPort === bot.lockPort && marker.messageTool === bot.messageTool
 }
 
 // Default model of new sessions in channels without their own (/model "All channels").

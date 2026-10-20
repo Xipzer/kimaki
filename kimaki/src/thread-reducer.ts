@@ -55,6 +55,7 @@ import {
 import { closePermission, hydratePermissions, showPermission, STATUS, type PendingPermission } from './permissions.ts'
 import { closeForm, formatAnswer, hydrateForms, showForm, withAnswer, type PendingForm } from './questions.ts'
 import { cancelQueued, deliverQueued, enqueueInput, hydrateQueue, promoteQueued, queuedItems, type PendingInput } from './queue.ts'
+import { MESSAGE_TOOL } from './system-prompt.ts'
 
 export type Turn = {
   startedAt: number
@@ -64,6 +65,14 @@ export type Turn = {
   tokens: number
   // `kimaki sleep` ran in this turn: the session wakes later, so the footer is silent.
   slept: boolean
+  // Message mode (Prefs.messageTool): a send_message call was shown in this turn.
+  messaged: boolean
+  // Message mode: the last hidden text, shown at the end if the turn sent no message.
+  unsent: string | null
+}
+
+function newTurn(at: number): Turn {
+  return { startedAt: at, model: null, agent: null, tokens: 0, slept: false, messaged: false, unsent: null }
 }
 
 export type Child = {
@@ -186,6 +195,8 @@ export type Prefs = {
   verbosity: Verbosity
   // "providerID/modelID" -> context window size in tokens.
   contextLimits: Readonly<Record<string, number>>
+  // `kimaki --message-tool`: Discord hides root plain text (kept for the TUI), only send_message shows.
+  messageTool: boolean
 }
 
 const RETRY_NOTICE_INTERVAL_MS = 10_000
@@ -281,6 +292,9 @@ function contextPercent({ turn, prefs }: { turn: Draft<Turn>; prefs: Prefs }): n
 
 // The footer closing the answer of `turn` at `at`.
 function emitFooter({ draft, prefs, emit, turn, at, notify }: Context & { turn: Draft<Turn>; at: number; notify: boolean }) {
+  // Message mode: a model that never called send_message would leave the user in silence.
+  if (!turn.messaged && turn.unsent) emit({ type: 'markdown', text: turn.unsent, blankLineBefore: draft.lastKind === 'tool' })
+  turn.unsent = null
   // No model step ran (a compaction-only execution): nothing to summarize.
   if (!turn.model) return
   // A child still runs: the answer comes later.
@@ -346,11 +360,11 @@ function applyRoot(context: Context & { event: V2Event }) {
       emit({ type: 'send', text: asSubtext(`Working directory changed to ${event.data.location.directory}`) })
       return
     case 'session.execution.started':
-      draft.turn ??= { startedAt: event.created, model: null, agent: null, tokens: 0, slept: false }
+      draft.turn ??= newTurn(event.created)
       return
     case 'session.step.started': {
       const model = { providerID: event.data.model.providerID, id: event.data.model.id }
-      draft.turn ??= { startedAt: event.created, model: null, agent: null, tokens: 0, slept: false }
+      draft.turn ??= newTurn(event.created)
       draft.turn.model = model
       draft.turn.agent = event.data.agent
       if (draft.bannerPending) emit({ type: 'send', text: formatBanner({ model: event.data.model, agent: event.data.agent }) })
@@ -373,6 +387,10 @@ function applyRoot(context: Context & { event: V2Event }) {
     case 'session.text.ended': {
       const text = event.data.text.trim()
       if (!text) return
+      if (prefs.messageTool && draft.turn) {
+        draft.turn.unsent = text
+        return
+      }
       emit({ type: 'markdown', text, blankLineBefore: draft.lastKind === 'tool' })
       draft.lastKind = 'text'
       return
@@ -434,6 +452,7 @@ function applyRoot(context: Context & { event: V2Event }) {
         emitFooter({ ...context, turn: draft.turn, at: event.created, notify: false })
         draft.turn.startedAt = event.created
         draft.turn.slept = false
+        draft.turn.messaged = false
         draft.lastKind = null
       }
       return deliverQueued({ draft, emit, inboxID: event.data.inboxID })
@@ -494,6 +513,15 @@ function applyTool(context: Context & { event: V2Event; label: string | undefine
         if (reused) Object.assign(reused, { ...call, agent: call.agent || reused.agent })
       }
       draft.tools[key] = tool
+      // The plugin offers send_message to root sessions only (MESSAGE_TOOL).
+      if (name === MESSAGE_TOOL && label === undefined) {
+        const text = stringInput(input, 'text').trim()
+        if (draft.turn) draft.turn.messaged = true
+        if (!text) return
+        context.emit({ type: 'markdown', text, blankLineBefore: draft.lastKind === 'tool' })
+        draft.lastKind = 'text'
+        return
+      }
       if (render && isToolVisible({ name, input }, prefs.verbosity)) toolLine(context, formatToolLine({ name, input }, { label }))
       return
     }
@@ -613,7 +641,7 @@ function applyKimaki({ draft, event, prefs, emit }: Context & { event: KimakiEve
       const active = new Set(event.activeSessionIds)
       for (const [id, child] of Object.entries(draft.children)) child.running = active.has(id)
       if (!active.has(draft.sessionId)) draft.turn = null
-      else draft.turn ??= { startedAt: event.at, model: null, agent: null, tokens: 0, slept: false }
+      else draft.turn ??= newTurn(event.at)
       // Nothing runs: tool calls whose end was missed while disconnected are over.
       if (!isBusy(draft)) draft.tools = {}
       for (const session of event.sessions) {
@@ -645,9 +673,13 @@ export function replayEffects({
   const blocks = messages.flatMap((message): Block[] => {
     if (message.type !== 'assistant') return []
     return message.content.flatMap((part): Block[] => {
-      if (part.type === 'text') return part.text.trim() ? [{ kind: 'text', text: part.text.trim() }] : []
+      if (part.type === 'text') return part.text.trim() && !prefs.messageTool ? [{ kind: 'text', text: part.text.trim() }] : []
       if (part.type !== 'tool' || part.state.status === 'streaming') return []
       const { input, metadata } = part.state
+      if (part.name === MESSAGE_TOOL) {
+        const text = stringInput(input, 'text').trim()
+        return text ? [{ kind: 'text', text }] : []
+      }
       const isExecute = part.name === 'execute'
       const lines = [{ name: part.name, input }, ...(isExecute ? executeCalls(metadata) : [])]
         .filter((call) => isToolVisible(call, prefs.verbosity))
