@@ -31,12 +31,28 @@ export function detectPortFromText(text: string): number | null {
   return null
 }
 
+// Traforo accepted any tunnel ID, so map it to a DNS label instead of failing: `My_App` becomes `my-app`.
+function toRouteLabel(raw: string): string {
+  const label = raw.toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 63).replace(/-+$/, '')
+  return ROUTE_NAME.test(label) ? label : ''
+}
+
 // Explicit name, then the tuistory session ID (stable URL across restarts of one session), then random.
 export function routeName({ name, tuistorySessionId }: { name?: string; tuistorySessionId?: string }): string | Error {
-  if (name) return ROUTE_NAME.test(name) ? name : new Error(`Invalid tunnel ID ${JSON.stringify(name)}: use lowercase letters, digits and dashes`)
-  const fromSession = tuistorySessionId?.toLowerCase()
-  if (fromSession && ROUTE_NAME.test(fromSession)) return fromSession
-  return crypto.randomBytes(8).toString('hex')
+  if (name) return toRouteLabel(name) || new Error(`Invalid tunnel ID ${JSON.stringify(name)}: use letters, digits and dashes`)
+  return toRouteLabel(tuistorySessionId ?? '') || crypto.randomBytes(8).toString('hex')
+}
+
+// Parses `netstat -ano` output on Windows: `TCP  0.0.0.0:5173  0.0.0.0:0  LISTENING  1234`.
+export function parseNetstatListeningPids({ stdout, port }: { stdout: string; port: number }): number[] {
+  const pids = new Set<number>()
+  for (const line of stdout.split('\n')) {
+    const [protocol, local, , state, pid] = line.trim().split(/\s+/)
+    if (protocol !== 'TCP' || state !== 'LISTENING' || !local?.endsWith(`:${port}`)) continue
+    const parsed = Number(pid)
+    if (Number.isInteger(parsed) && parsed > 0) pids.add(parsed)
+  }
+  return [...pids]
 }
 
 function isPortInUse({ port, host }: { port: number; host: string }): Promise<boolean> {
@@ -55,6 +71,10 @@ async function waitForPort({ port, host, signal }: { port: number; host: string;
 }
 
 async function listeningPids(port: number): Promise<number[]> {
+  if (process.platform === 'win32') {
+    const { stdout } = await execFileAsync('netstat', ['-ano'], { timeout: 5_000 }).catch(() => ({ stdout: '' }))
+    return parseNetstatListeningPids({ stdout, port })
+  }
   const { stdout } = await execFileAsync('lsof', ['-ti', `tcp:${port}`, '-sTCP:LISTEN'], { timeout: 5_000 }).catch(() => ({ stdout: '' }))
   return stdout.split('\n').map(Number).filter((pid) => Number.isInteger(pid) && pid > 0)
 }

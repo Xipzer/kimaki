@@ -4,7 +4,7 @@ description: Expose a local dev server to a public URL so you can view it on you
 icon: lucide:globe
 ---
 
-The **`kimaki tunnel`** command exposes a local port as a public HTTPS URL. The user driving the bot from Discord is not at the terminal, so `localhost:3000` is useless to them; a tunnel gives them a real URL to open.
+The **`kimaki tunnel`** command exposes a local port as a public HTTPS URL through [opentunnel.xyz](https://opentunnel.xyz). The user driving the bot from Discord is not at the terminal, so `localhost:3000` is useless to them; a tunnel gives them a real URL to open. TLS ends on your machine, so the relay never sees the traffic.
 
 ## Basic usage
 
@@ -21,23 +21,27 @@ kimaki tunnel --port 3000
 ```
 
 ```diagram
-  pnpm dev ──▶ tunnel ──▶ https://<id>-tunnel.kimaki.dev ──▶ open anywhere
+  pnpm dev ──▶ tunnel ──▶ https://<name>.<machine id>.opentunnel.xyz ──▶ open anywhere
 ```
+
+The first run on a machine creates its tunnel and waits up to a minute for a certificate. The tunnel identity lives in `~/.local/share/opentunnel/default` and is shared with the `opentunnel` CLI.
 
 ## Passing the public URL to your app
 
-`kimaki tunnel` injects **`TRAFORO_URL`** into the child process. Wire your app to that variable so OAuth callbacks, webhook URLs, and absolute links use the public tunnel instead of localhost:
+`kimaki tunnel` injects **`KIMAKI_TUNNEL_URL`** into the child process. Wire your app to that variable so OAuth callbacks, webhook URLs, and absolute links use the public tunnel instead of localhost. `TRAFORO_URL` is set to the same URL for older setups.
 
 ```bash
 # Next.js
-kimaki tunnel -- sh -c 'APP_URL=$TRAFORO_URL exec pnpm dev'
+kimaki tunnel -- sh -c 'APP_URL=$KIMAKI_TUNNEL_URL exec pnpm dev'
 
 # better-auth
-kimaki tunnel -- sh -c 'BETTER_AUTH_URL=$TRAFORO_URL exec pnpm dev'
+kimaki tunnel -- sh -c 'BETTER_AUTH_URL=$KIMAKI_TUNNEL_URL exec pnpm dev'
 
 # Vite
-kimaki tunnel -- sh -c 'VITE_BASE_URL=$TRAFORO_URL exec pnpm dev'
+kimaki tunnel -- sh -c 'VITE_BASE_URL=$KIMAKI_TUNNEL_URL exec pnpm dev'
 ```
+
+The app receives the request unchanged over plain HTTP, with the public `Host` header and no `X-Forwarded-*` headers. Dev servers that check the host must allow it, for example Vite with `server.allowedHosts: ['.opentunnel.xyz']`.
 
 <Aside>
 <Tip>
@@ -50,13 +54,13 @@ When launching a dev server through `kimaki tunnel -- ...`, the local port is au
 | Option | Description |
 |---|---|
 | `-p, --port <port>` | Local port (default: read from the command output) |
-| `-t, --tunnel-id <id>` | Fixed tunnel ID (default: random). Only for public-safe services |
+| `-t, --tunnel-id <id>` | Fixed subdomain (default: random). Only for public-safe services |
 | `--host <host>` | Local host (default: localhost) |
 | `-k, --kill` | Kill the process on `--port` first |
 
 <Aside>
 <Note>
-Use a **random** tunnel ID by default. Only pass `-t` to pick a stable, guessable ID when the service is safe to be publicly discoverable.
+Use a **random** tunnel ID by default. Only pass `-t` to pick a stable, guessable ID when the service is safe to be publicly discoverable. The ID is lowercased and other characters become dashes, so `-t My_App` gives `my-app`. Inside a tuistory session the session ID is used, so restarting the session keeps the URL.
 </Note>
 </Aside>
 
