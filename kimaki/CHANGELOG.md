@@ -1,5 +1,48 @@
 # Changelog
 
+## 1.3.0
+
+1. **New `kimaki --message-tool` mode.** Discord shows only a concise reply that the agent sends with a `send_message` tool. Off by default.
+
+   ```bash
+   kimaki --message-tool
+   ```
+
+   The agent still writes its normal text, so the session stays fully readable in the OpenCode TUI. Threads skip "I'll read the file" narration and show only real updates and results.
+
+   ```
+   model text             ──▶ OpenCode TUI (hidden in Discord)
+   send_message({ text }) ──▶ Discord message, rendered as markdown
+   ```
+
+   - Only root sessions of the thread get the tool. Subagents and your own OpenCode TUI sessions never see it.
+   - The tool list and system text stay the same for the whole session, so the prompt cache keeps hitting.
+   - If a turn ends without a `send_message` call, Kimaki posts the last plain text, so a turn is never silent.
+   - Autostart and `kimaki restart` keep the flag.
+
+2. **`kimaki tunnel` uses [opentunnel.xyz](https://opentunnel.xyz) instead of traforo.** TLS ends on your machine, so the relay never sees the traffic.
+
+   ```bash
+   kimaki tunnel -- pnpm dev
+   # Local:  http://localhost:5173
+   # Tunnel: https://3f9c2a71d04be6e8.7bnpwpr25iaa.opentunnel.xyz
+   ```
+
+   - URLs are `https://<name>.<machine id>.opentunnel.xyz`. `-t <name>` sets a fixed name.
+   - The child process gets `KIMAKI_TUNNEL_URL`. `TRAFORO_URL` is still set to the same URL, so existing setups keep working:
+
+     ```bash
+     kimaki tunnel -- sh -c 'BETTER_AUTH_URL=$KIMAKI_TUNNEL_URL exec pnpm dev'
+     ```
+
+   - The first run on a machine creates its tunnel and waits up to a minute for a certificate. The identity is shared with the `opentunnel` CLI (`~/.local/share/opentunnel/default`).
+   - Vite rejects unknown `Host` headers: set `server.allowedHosts: ['.opentunnel.xyz']`.
+
+3. **Bots with the Kimaki role can use Kimaki again**, as in 0.31 and as the docs say. This restores multi-agent setups where one bot sends prompts to Kimaki.
+   - A bot needs the `Kimaki` role. Administrator, Manage Server and `--allow-all-users` do not let a bot in, so notifier bots never start sessions by accident.
+   - The `no-kimaki` role still blocks a bot.
+   - Webhook messages and Kimaki's own messages are still ignored, except `kimaki send` remote envelopes.
+
 ## 1.2.0
 
 1. **`--allow-all-users` is back.** Every member of the server can use the bot, without the Kimaki role, Administrator or Manage Server. Useful for public demo servers:
