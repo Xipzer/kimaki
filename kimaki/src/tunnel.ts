@@ -155,6 +155,8 @@ export async function runTunnel(options: {
         ...process.env,
         ...(options.port && { PORT: String(options.port) }),
         KIMAKI_TUNNEL_URL: url,
+        // Old name from traforo, kept so existing app configs still work.
+        TRAFORO_URL: url,
         // wrangler dev passes parent env vars as worker bindings, so workers can read KIMAKI_TUNNEL_URL.
         CLOUDFLARE_INCLUDE_PROCESS_ENV: 'true',
         FORCE_COLOR: '1',

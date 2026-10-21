@@ -11,7 +11,7 @@ kimaki tunnel -- pnpm dev
 ```
 
 - URLs are now `https://<name>.<machine id>.opentunnel.xyz`. `-t <name>` sets a fixed name.
-- The child process gets `KIMAKI_TUNNEL_URL` instead of `TRAFORO_URL`:
+- The child process gets `KIMAKI_TUNNEL_URL`. `TRAFORO_URL` is still set to the same URL, so existing setups keep working:
 
   ```bash
   kimaki tunnel -- sh -c 'BETTER_AUTH_URL=$KIMAKI_TUNNEL_URL exec pnpm dev'
