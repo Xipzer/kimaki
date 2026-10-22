@@ -41,7 +41,7 @@ kimaki tunnel -- sh -c 'BETTER_AUTH_URL=$KIMAKI_TUNNEL_URL exec pnpm dev'
 kimaki tunnel -- sh -c 'VITE_BASE_URL=$KIMAKI_TUNNEL_URL exec pnpm dev'
 ```
 
-The app receives the request unchanged over plain HTTP, with the public `Host` header and no `X-Forwarded-*` headers. Dev servers that check the host must allow it, for example Vite with `server.allowedHosts: ['.opentunnel.xyz']`.
+The app receives plain HTTP with **`Host: localhost:<port>`**, so dev servers that check the host (Vite) work with no `allowedHosts` config. The public host is in `X-Forwarded-Host` and the scheme in `X-Forwarded-Proto: https`.
 
 <Aside>
 <Tip>

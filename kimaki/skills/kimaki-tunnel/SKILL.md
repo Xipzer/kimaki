@@ -7,10 +7,11 @@ description: Share a local dev server with the user through a public URL. Use wh
 
 Localhost URLs are useless from Discord. Wrap the dev server in `kimaki tunnel` to get a public `https://<name>.<id>.opentunnel.xyz` URL, and run it in a named background `tuistory` session so you can wait for output, read logs and stop it later. Name the session descriptively (e.g. `projectname-dev`) and reuse it. Run `tuistory --help` first (or `bunx tuistory` when it is not installed). Invoke `kimaki` directly, not via `npx` or `bunx`.
 
+- **Validate on localhost.** The agent runs on the same machine as the server, so playwriter, curl and tests must use the `Local:` URL. It is much faster. The tunnel URL is only for the user.
 - Use random names by default. Pass `-t <name>` only for services that are safe to be publicly discoverable.
 - `kimaki tunnel` detects the local port from the child output. Pass `--port` only when the server prints no detectable localhost URL.
 - `kimaki tunnel` injects `KIMAKI_TUNNEL_URL` into the child process. Wire the app to it so OAuth callbacks, webhook URLs and absolute links use the public URL.
-- TLS ends on this machine and the request reaches the app unchanged. Dev servers that check the `Host` header (Vite) must allow it, e.g. `server.allowedHosts: true` or `['.opentunnel.xyz']`.
+- The app gets `Host: localhost:<port>` and the public host in `X-Forwarded-Host`, so Vite needs no `allowedHosts` config.
 - The first run on a machine creates the tunnel and waits up to a minute for its certificate.
 
 ```bash

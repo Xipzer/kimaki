@@ -5,6 +5,7 @@
 
 import crypto from 'node:crypto'
 import { execFile, spawn, type ChildProcess } from 'node:child_process'
+import http from 'node:http'
 import net from 'node:net'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { promisify, stripVTControlCharacters } from 'node:util'
@@ -127,6 +128,64 @@ function killChild(child: ChildProcess | undefined, signal: NodeJS.Signals = 'SI
 
 const log = (line: string) => process.stderr.write(`${line}\n`)
 
+function forwardedHeaders({ headers, target }: { headers: http.IncomingHttpHeaders; target: string }): http.OutgoingHttpHeaders {
+  return {
+    ...headers,
+    host: target,
+    'x-forwarded-host': headers['x-forwarded-host'] ?? headers.host,
+    'x-forwarded-proto': headers['x-forwarded-proto'] ?? 'https',
+  }
+}
+
+function rawResponseHead(response: http.IncomingMessage): string {
+  let head = `HTTP/1.1 ${response.statusCode} ${response.statusMessage}\r\n`
+  for (let i = 0; i < response.rawHeaders.length; i += 2) head += `${response.rawHeaders[i]}: ${response.rawHeaders[i + 1]}\r\n`
+  return `${head}\r\n`
+}
+
+// opentunnel forwards the raw bytes, so the app would see the public Host header. Vite and other dev
+// servers reject unknown hosts (DNS rebinding protection) with 403. This loopback proxy sends
+// Host: localhost:<port> and keeps the public host in X-Forwarded-Host, like traforo did.
+export function startHostProxy({ host, port }: { host: string; port: number }): Promise<http.Server | Error> {
+  const target = `${host}:${port}`
+  const server = http.createServer((req, res) => {
+    const upstream = http.request({ host, port, method: req.method, path: req.url, headers: forwardedHeaders({ headers: req.headers, target }) }, (response) => {
+      res.writeHead(response.statusCode ?? 502, response.statusMessage, response.rawHeaders)
+      response.pipe(res)
+    })
+    upstream.on('error', () => {
+      if (!res.headersSent) res.writeHead(502)
+      res.end()
+    })
+    req.pipe(upstream)
+  })
+
+  // WebSocket upgrades (Vite HMR): replay the handshake upstream, then pipe both sockets.
+  server.on('upgrade', (req, socket, head) => {
+    const upstream = http.request({ host, port, method: req.method, path: req.url, headers: forwardedHeaders({ headers: req.headers, target }) })
+    upstream.on('upgrade', (response, upstreamSocket, upstreamHead) => {
+      socket.write(rawResponseHead(response))
+      if (upstreamHead.length > 0) socket.write(upstreamHead)
+      if (head.length > 0) upstreamSocket.write(head)
+      upstreamSocket.on('error', () => socket.destroy())
+      socket.on('error', () => upstreamSocket.destroy())
+      upstreamSocket.pipe(socket).pipe(upstreamSocket)
+    })
+    upstream.on('response', (response) => {
+      socket.write(rawResponseHead(response))
+      response.pipe(socket)
+    })
+    upstream.on('error', () => socket.destroy())
+    socket.on('error', () => upstream.destroy())
+    upstream.end()
+  })
+
+  return new Promise((resolve) => {
+    server.once('error', (cause) => resolve(new Error('Could not start the tunnel proxy', { cause })))
+    server.listen(0, '127.0.0.1', () => resolve(server))
+  })
+}
+
 export async function runTunnel(options: {
   port?: number
   command?: string[]
@@ -206,16 +265,23 @@ export async function runTunnel(options: {
   if (!port) return fail(new Error('Could not find the local port. Pass --port'))
   const ready = await waitForPort({ port, host, signal: portSignal })
   if (ready instanceof Error) return fail(ready)
+  const proxy = await startHostProxy({ host, port })
+  if (proxy instanceof Error) return fail(proxy)
+  const proxyAddress = proxy.address()
+  if (!proxyAddress || typeof proxyAddress === 'string') return fail(new Error('Tunnel proxy has no TCP address'))
 
   // connect retries route_conflict forever, so a route held by another process would hang here.
-  const connecting = client.tunnel.connect({ routes: { [route]: `${host}:${port}` } })
+  const connecting = client.tunnel.connect({ routes: { [route]: `127.0.0.1:${proxyAddress.port}` } })
   const timeout = sleep(ATTACH_TIMEOUT_MS, null, { ref: false })
   const attached = await Promise.race([connecting, timeout]).catch((cause: unknown) => new Error('Could not connect the tunnel', { cause }))
   if (attached instanceof Error) return fail(attached)
   if (!attached) return fail(new Error(`Tunnel did not attach in ${ATTACH_TIMEOUT_MS / 1000}s. Another process may use the tunnel ID ${route}`))
   connection = attached
 
-  process.stdout.write(`\nLocal:  http://${host}:${port}\nTunnel: ${url}\n\n`)
+  process.stdout.write(
+    `\nLocal:  http://${host}:${port}\nTunnel: ${url}\n` +
+      `Agents: validate with the Local URL (playwriter, curl), it is much faster. The Tunnel URL is for the user.\n\n`,
+  )
 
   void (async () => {
     for await (const event of attached.events) {
