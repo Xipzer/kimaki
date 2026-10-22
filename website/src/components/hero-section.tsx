@@ -1,6 +1,5 @@
 /**
- * Full-bleed hero with serif title, install CTA, and Discord playground.
- * Centered heading and CTA above, full-width playground below.
+ * Full-bleed hero with serif title and install CTA.
  */
 'use client'
 
@@ -15,7 +14,6 @@ function GithubIcon({ size = 14 }: { size?: number }) {
 }
 import { InstallCommand } from './install-command.tsx'
 import { StradaBrowser } from '../strada-browser.tsx'
-import { DiscordPlayground } from './discord-playground.tsx'
 import { HeroDither } from './hero-dither.tsx'
 
 const GITHUB_URL = 'https://github.com/remorses/kimaki'
@@ -62,9 +60,6 @@ export function HeroSection() {
               Discord
             </a>
           </div>
-        </div>
-        <div className='w-full min-w-0 max-w-[920px]'>
-          <DiscordPlayground />
         </div>
       </div>
     </div>

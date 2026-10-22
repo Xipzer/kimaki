@@ -1,5 +1,5 @@
 /**
- * Interactive Discord playground for the homepage hero.
+ * Interactive Discord playground for the homepage Playground section.
  * Scripted Kimaki sessions (voice, queue, permissions, selects, worktrees)
  * with Discord UI. Sizes are em-based so the parent font-size scales the window.
  */
@@ -907,17 +907,17 @@ export function DiscordPlayground() {
       </div>
 
       <div className='flex min-h-0 flex-1'>
-        <div className='flex w-[4.5em] shrink-0 flex-col items-center bg-[#1e1f22] pt-[0.25em] pb-[0.5em]'>
-          <div className='flex size-[3em] items-center justify-center rounded-[1em] bg-[#313338] text-[#dbdee1]'>
+        <div className='flex w-[3.75em] shrink-0 flex-col items-center bg-[#1e1f22] pt-[0.25em] pb-[0.5em] text-[0.8em]'>
+          <div className='flex size-[2.75em] items-center justify-center rounded-[0.85em] bg-[#313338] text-[#dbdee1]'>
             <ClydeIcon />
           </div>
-          <div className='my-[0.5em] h-[0.125em] w-[2em] rounded-full bg-[#35363c]' />
+          <div className='my-[0.5em] h-[0.125em] w-[1.6em] rounded-full bg-[#35363c]' />
           <div className='relative flex w-full justify-center'>
-            <span className='absolute top-1/2 left-[0.25em] h-[2em] w-[0.25em] -translate-y-1/2 rounded-full bg-white' />
+            <span className='absolute top-1/2 left-0 h-[1.6em] w-[0.2em] -translate-y-1/2 rounded-r-full bg-white' />
             <img
               src='/logo.jpeg'
               alt='Kimaki'
-              className='size-[3em] rounded-[1em] object-cover'
+              className='m-0 size-[2.75em] rounded-[0.85em] object-cover'
             />
           </div>
         </div>
