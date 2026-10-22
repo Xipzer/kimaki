@@ -9,13 +9,18 @@ import http from 'node:http'
 import net from 'node:net'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { promisify, stripVTControlCharacters } from 'node:util'
-import { create as createOpenTunnel, type OpenTunnelConnection } from '@opentunnel/client'
+import {
+  create as createOpenTunnel,
+  isValidRouteName,
+  OpenTunnelClientError,
+  publicUrl,
+  type OpenTunnelClientEvent,
+  type OpenTunnelConnection,
+} from '@opentunnel/client'
 
 const execFileAsync = promisify(execFile)
 
-const ROUTE_NAME = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/
 const PORT_WAIT_MS = 30_000
-const ATTACH_TIMEOUT_MS = 60_000
 const CHILD_KILL_GRACE_MS = 5_000
 
 // Only lines with host:port, so "Port 5173 is in use" does not match.
@@ -35,7 +40,7 @@ export function detectPortFromText(text: string): number | null {
 // Traforo accepted any tunnel ID, so map it to a DNS label instead of failing: `My_App` becomes `my-app`.
 function toRouteLabel(raw: string): string {
   const label = raw.toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 63).replace(/-+$/, '')
-  return ROUTE_NAME.test(label) ? label : ''
+  return isValidRouteName(label) ? label : ''
 }
 
 // Explicit name, then the tuistory session ID (stable URL across restarts of one session), then random.
@@ -128,6 +133,11 @@ function killChild(child: ChildProcess | undefined, signal: NodeJS.Signals = 'SI
 
 const log = (line: string) => process.stderr.write(`${line}\n`)
 
+function logTunnelEvent(event: OpenTunnelClientEvent) {
+  if (event.type === 'disconnected') log(`Tunnel disconnected: ${event.reason}`)
+  if (event.type === 'connected') log('Tunnel connected')
+}
+
 function forwardedHeaders({ headers, target }: { headers: http.IncomingHttpHeaders; target: string }): http.OutgoingHttpHeaders {
   return {
     ...headers,
@@ -206,11 +216,18 @@ export async function runTunnel(options: {
   }
 
   const client = createOpenTunnel()
-  const existing = await client.tunnel.get().catch(() => undefined)
-  if (!existing) log('Creating the opentunnel.xyz tunnel of this machine (waits for a certificate, up to a minute)...')
-  const identity = await client.tunnel.ensure().catch((cause: unknown) => new Error('Could not create the opentunnel tunnel', { cause }))
+  let waitLogged = false
+  const identity = await client.tunnel
+    .ensure({
+      onProgress: (stage) => {
+        if (waitLogged || stage === 'checking-certificate' || stage === 'ready') return
+        waitLogged = true
+        log('Getting a certificate for the opentunnel.xyz tunnel of this machine (up to a minute)...')
+      },
+    })
+    .catch((cause) => new Error('Could not create the opentunnel tunnel', { cause }))
   if (identity instanceof Error) return identity
-  const url = `https://${route}.${identity.hostname}`
+  const url = publicUrl(route, identity.hostname)
 
   let child: ChildProcess | undefined
   let connection: OpenTunnelConnection | undefined
@@ -270,12 +287,15 @@ export async function runTunnel(options: {
   const proxyAddress = proxy.address()
   if (!proxyAddress || typeof proxyAddress === 'string') return fail(new Error('Tunnel proxy has no TCP address'))
 
-  // connect retries route_conflict forever, so a route held by another process would hang here.
-  const connecting = client.tunnel.connect({ routes: { [route]: `127.0.0.1:${proxyAddress.port}` } })
-  const timeout = sleep(ATTACH_TIMEOUT_MS, null, { ref: false })
-  const attached = await Promise.race([connecting, timeout]).catch((cause: unknown) => new Error('Could not connect the tunnel', { cause }))
+  const attached = await client.tunnel
+    .connect({ routes: { [route]: `127.0.0.1:${proxyAddress.port}` }, onRouteConflict: 'fail', onEvent: logTunnelEvent })
+    .catch((cause) => {
+      if (cause instanceof OpenTunnelClientError && cause.code === 'route_conflict') {
+        return new Error(`Tunnel ID ${route} is already used by another process. Pass a different -t`, { cause })
+      }
+      return new Error('Could not connect the tunnel', { cause })
+    })
   if (attached instanceof Error) return fail(attached)
-  if (!attached) return fail(new Error(`Tunnel did not attach in ${ATTACH_TIMEOUT_MS / 1000}s. Another process may use the tunnel ID ${route}`))
   connection = attached
 
   process.stdout.write(
@@ -283,13 +303,6 @@ export async function runTunnel(options: {
       `Agents: validate with the Local URL (playwriter, curl), it is much faster. The Tunnel URL is for the user.\n\n`,
   )
 
-  void (async () => {
-    for await (const event of attached.events) {
-      if (event.type === 'disconnected') log(`Tunnel disconnected: ${event.reason}`)
-      if (event.type === 'connected') log('Tunnel connected')
-    }
-  })()
-
-  const closed = await attached.closed.then(() => undefined, (cause: unknown) => new Error('Tunnel stopped', { cause }))
+  const closed = await attached.closed.then(() => undefined, (cause) => new Error('Tunnel stopped', { cause }))
   return fail(closed ?? new Error('Tunnel stopped'))
 }
