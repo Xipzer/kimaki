@@ -5,6 +5,7 @@
 //        ├─ table                ──▶ table segment (Components V2 later)
 //        ├─ heading depth > 3    ──▶ clamped to ###
 //        ├─ list with code items ──▶ code lifted after its item
+//        ├─ blockquote           ──▶ bare ">" lines become "> "
 //        └─ other nodes          ──▶ original source slices, packed into ≤ limit
 //
 // Text is sliced from the original source by node offsets, never
@@ -217,7 +218,8 @@ function nodePieces(source: string, node: RootContent, limit: number): string[] 
     return unnestList(source, node, limit).flatMap((piece) => (piece.length <= limit ? [piece] : splitText(piece, limit)))
   }
   if (node.type === 'code') return codePieces(source, node, limit)
-  const text = slice(source, node)
+  // Discord quotes need "> " plus a space; a bare ">" line shows as a literal ">".
+  const text = node.type === 'blockquote' ? slice(source, node).replace(/^( *>)$/gm, '$1 ') : slice(source, node)
   if (text.length <= limit) return [text]
   if (node.type === 'list') {
     const items = node.children.map((item) => slice(source, item))

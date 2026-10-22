@@ -412,3 +412,14 @@ test('edge cases: 2500-char code line, fence info line inside a fence, oversized
 
   expect(markdownPayloads('<callout accent="#ef4444"></callout>')).toMatchInlineSnapshot(`[]`)
 })
+
+test('empty blockquote lines get a trailing space so Discord keeps the quote', () => {
+  const text = '**1. To a@b.com**\n\n> Hi Mohammad,\n>\n> Your subscription is cancelled.\n>\n> Tommy\n\nDone.'
+  const segments = renderMarkdown(text)
+  expect(segments.map((segment) => ('markdown' in segment ? JSON.stringify(segment.markdown.split('\n')) : segment.kind)))
+    .toMatchInlineSnapshot(`
+      [
+        "["**1. To a@b.com**","","> Hi Mohammad,","> ","> Your subscription is cancelled.","> ","> Tommy","","Done."]",
+      ]
+    `)
+})
