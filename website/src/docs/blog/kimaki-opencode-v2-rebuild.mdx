@@ -1,0 +1,209 @@
+---
+$schema: https://holocron.so/frontmatter.json
+title: "OpenCode V2 support: a full rebuild from first principles"
+sidebarTitle: "OpenCode V2 rebuild"
+description: "Kimaki now runs on OpenCode V2. I rebuilt the Discord bot from scratch around your shared OpenCode service, one event stream and a pure reducer."
+mode: center
+icon: lucide:hammer
+prompt: |
+  Write a first-person launch post by Tommy announcing that Kimaki supports
+  OpenCode V2 and that the bot was rebuilt from scratch.
+  Sources: the 1.0.0 to 1.3.0 entries in @/kimaki/CHANGELOG.md, the rebuild
+  rationale and the review of the old migration branch in
+  @/docs/kimaki-v2-rebuild-spec.md, the architecture and the "not ported from
+  V1 yet" list in @/AGENTS.md, the reducer in @/kimaki/src/thread-reducer.ts,
+  @/kimaki/src/effects.ts, @/kimaki/src/event-loop.ts, the V1 import in
+  @/kimaki/src/migrations.ts, the install steps in @/README.md and the bug
+  report flow in @/website/src/docs/docs/guides/report-bugs.mdx.
+  Cover why a rebuild, the new architecture, what users get, how to upgrade,
+  and what was dropped or is not ported yet.
+---
+
+<Above>
+<div className='flex flex-col gap-3 my-12'>
+<h1 className='text-5xl font-bold text-balance leading-tight'>OpenCode V2 support: a full rebuild from first principles</h1>
+<p className='text-muted-foreground'>October 22, 2026 · Tommy De Rossi</p>
+</div>
+</Above>
+
+Kimaki now runs on **OpenCode V2**. It shipped as Kimaki 1.0, and it is not a port. I threw the old bot away and wrote a new one from first principles.
+
+In Discord almost nothing looks different. One channel per project, one thread per session, the same footer, the same slash commands. Everything under it is new.
+
+```bash
+npx -y kimaki@latest
+```
+
+## Why not just swap the SDK
+
+My first try was a **migration branch** that swapped the OpenCode SDK under the old architecture. The codebase turned into a mess.
+
+The problem was that V1 Kimaki carried a lot of state that OpenCode V2 now owns. The branch kept all of it and translated between the two worlds:
+
+- **Two queues.** Kimaki kept its own queue in SQLite, then sent each item to the OpenCode inbox. A queued message waited twice.
+- **Mirrored state.** An event buffer persisted to SQLite, maps of sent part IDs, a fake busy flag.
+- **Old IPC.** The plugin still talked to the bot by writing rows into SQLite and polling every 200 to 300 ms.
+- **Fake V1 parts.** New V2 events were turned back into V1-shaped parts, so the old formatter kept working.
+
+The thread runtime was still **4606 lines** on that branch. So I stopped and wrote a spec instead: what Kimaki does for the user, how each part works today, and what OpenCode V2 can do for us so Kimaki does not have to.
+
+<Aside>
+<Note>
+**Naming trap:** Kimaki 0.x already imported `@opencode-ai/sdk/v2`. That is a client for OpenCode 1. The real V2 packages are `@opencode/client` and `@opencode/plugin`.
+</Note>
+</Aside>
+
+## What OpenCode V2 changed
+
+OpenCode V2 is a different **protocol**, not a new version of the same API. These are the parts that made the rebuild worth it:
+
+| OpenCode V2 has                                        | So Kimaki no longer needs                        |
+| ------------------------------------------------------ | ------------------------------------------------ |
+| one background service shared by the TUI and clients   | its own OpenCode server per bot, ports, password |
+| a durable inbox with `steer` and `queue` delivery      | its own queue, the abort plugin, prompt replay   |
+| `session.execution.*` events for each busy period      | guessed busy and idle flags                      |
+| forms for questions, `permission.*` events             | a separate question pipeline                     |
+| instruction entries that keep the system prompt stable | rewriting the system prompt each turn            |
+
+## The new architecture
+
+The rule for the rebuild: **OpenCode events are the source of truth.** Kimaki keeps only facts OpenCode cannot know, like which Discord thread maps to which session and which channel maps to which folder.
+
+```diagram
+  Kimaki 0.x   Discord <──> kimaki ──spawns──> private opencode server, one per bot
+
+  Kimaki 1.x   Discord <──> kimaki ──HTTP + events──┐
+                                                    ├──> your OpenCode 2 service
+               terminal ──> opencode TUI ───────────┘    sessions, queue, forms,
+                                                         permissions, event log
+```
+
+Inside the bot the data flows **one way**. Discord messages turn into OpenCode calls. OpenCode events come back on one stream and become Discord messages:
+
+```diagram
+  Discord message ──> ingress.ts ──> prompt.ts ──> session.prompt (steer | queue)
+                                                         │
+                                                         v
+                                              your OpenCode 2 service
+                                                         │
+                                                         │ one /api/event stream
+                                                         v
+                                              event-loop.ts (route by sessionID)
+                                                         │
+                                                         v
+  Discord <── effects.ts (only writer) <── thread-reducer.ts (pure)
+```
+
+### A pure reducer
+
+The core is `thread-reducer.ts`. It folds each event into a **thread view** and returns a list of effects. It never touches Discord, OpenCode, SQLite or the clock:
+
+```ts
+export function reduce({ view, event, prefs }: { view: ThreadView; event: ThreadEvent; prefs: Prefs }): {
+  view: ThreadView
+  effects: Effect[]
+}
+```
+
+`effects.ts` is the only code that writes session output to Discord. It runs one FIFO worker per thread, so the order in Discord is the order of the events.
+
+After a reconnect the event loop asks OpenCode for the current state (active sessions, inbox, forms, permissions) and folds it through the **same reducer**. No replay logic, no second render path.
+
+<Aside>
+<Note>
+For scale: the V1 `thread-session-runtime.ts` was **5752 lines**. Today the reducer, event loop and effects together are about 1500 lines.
+</Note>
+</Aside>
+
+### Who wrote it
+
+Fun detail: the rebuild was written by **agents running in Kimaki V1**. An orchestrator session started one worker session per phase with `kimaki send`, and waited with `kimaki session wait`. Each worker then asked an oracle agent to review its phase. The phase commits (`cli2 P0` to `cli2 P9`) landed on September 30 and October 1. Kimaki 1.0 shipped on October 12.
+
+## What you get
+
+**Sessions survive restarts.** Runs, queues, questions and permissions live in OpenCode, not in the bot. `kimaki restart`, a crash or an update does not stop a running turn. When the bot is back it reads the state from OpenCode and carries on.
+
+**Discord and the TUI share sessions.** Every Kimaki session is a normal OpenCode session. Run `/session-id` in a thread and open it in the terminal:
+
+```bash
+opencode /path/to/project --session ses_abc123
+```
+
+Prompts you type there show up in the thread as `» **user:** ...`. `/resume` brings a TUI session into a Discord thread. See [Use the OpenCode TUI with Kimaki sessions](../docs/remote-access/opencode-server.mdx).
+
+**Your OpenCode config is used as is.** Agents, commands, skills, MCP servers, providers and plugins come from `~/.config/opencode` and the project, the same as in your TUI.
+
+### Cheaper sessions
+
+OpenCode V2 freezes the **system prompt** of a session until compaction. Kimaki writes its prompt once as an instruction entry, and sends the Discord user and attachments as prompt metadata. A new git branch is a short note before your prompt, not a new system prompt. So the provider cache keeps hitting.
+
+When it does not, the thread tells you:
+
+```
+-# ⬦ prompt cache miss: 0 of 85k tokens cached, 12m 3s after the last request
+```
+
+### Native steer, queue and btw
+
+A message sent while the agent works **steers** it: your text goes in at once. `/queue` or a `. queue` suffix hands the message to the OpenCode inbox, so queued messages survive a bot restart. `. btw` forks the session into a new thread and reuses the cache of the source session. Details in [Queue](../docs/features/queue.mdx) and [btw](../docs/features/btw.mdx).
+
+### Bug reports with ground truth
+
+Kimaki records the **OpenCode events** of every thread to a JSONL file. You can export them and attach them to an issue. Because the reducer is pure, I can replay the file through it and see the decisions the bot made in your thread:
+
+```bash
+kimaki session events ses_xxx > ./tmp/ses_xxx.jsonl
+jq -r .event.type ./tmp/ses_xxx.jsonl | sort | uniq -c
+```
+
+The full flow is in [Debug sessions and report bugs](../docs/guides/report-bugs.mdx).
+
+### A faster CLI
+
+Agents call `kimaki` many times per session, so **startup** matters. Subcommands now start in about 0.06s and 70 MB of memory. In 0.x it was 0.46s and 330 MB.
+
+## How to upgrade
+
+Install **OpenCode 2** first if you do not have it. If Kimaki finds no OpenCode at all, it runs this for you:
+
+```bash
+curl -fsSL https://opencode.ai/v2/install | bash
+```
+
+Then start the new Kimaki:
+
+```bash
+npm i -g kimaki@latest
+kimaki
+```
+
+- **Your data comes along.** On first start Kimaki imports `~/.kimaki/discord-sessions.db` into a new `~/.kimaki/kimaki.db`: bot credentials, channels, thread bindings, scheduled tasks, model and verbosity settings. No onboarding again.
+- **The V1 file is never changed.** It is opened read-only, so going back to 0.31 still works.
+- **The new bot stops the old one.** It takes over the lock port from a running 0.x bot.
+- **OpenCode 1 is not replaced.** Kimaki stops with the install command instead, and never pins an OpenCode version, because that would restart the shared service and kill your TUI sessions.
+
+<Aside>
+<Note>
+Must stay on **OpenCode 1**? Pin the old line with `npm i -g kimaki@0.31`. For plugins and SDK code, read the [OpenCode V2 migration guide](./opencode-v2-migration.mdx).
+</Note>
+</Aside>
+
+## What is gone, and what is not ported yet
+
+A rebuild is a good moment to **delete** things. Each removed feature added a branch to ingress, the event loop or the renderer. Some of them I want back; some are gone for good.
+
+| Feature from 0.x                                        | Now                                                             |
+| ------------------------------------------------------- | --------------------------------------------------------------- |
+| Kimaki-owned OpenCode server, `--opencode-port`         | the shared service, `opencode service restart`                  |
+| self-upgrade (`kimaki upgrade`, `/upgrade-and-restart`) | not ported yet: `npm i -g kimaki@latest`, then `kimaki restart` |
+| image optimizer and kitty graphics plugins              | not ported yet                                                  |
+| syncing your own skills (`sync-skills`)                 | not ported yet                                                  |
+| prompt injection guard, `--injection-guard`             | none yet                                                        |
+| external session sync (`--enable-sync`)                 | `/resume`, `kimaki session read`                                |
+| subrouter and built-in account rotation                 | `@kimaki/plugin-fallback`                                       |
+| thinking lines, the third verbosity level               | reasoning is never shown, two levels                            |
+| thread rename from the OpenCode title                   | `kimaki session title`                                          |
+
+The full list, with behavior differences, is in the [1.0.0 changelog](https://github.com/remorses/kimaki/blob/main/kimaki/CHANGELOG.md).
+
+If something you used in 0.x is missing and you need it, open an issue on [remorses/kimaki](https://github.com/remorses/kimaki/issues) or ping me on X at [@\_\_morse](https://x.com/__morse).

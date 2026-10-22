@@ -1,0 +1,27 @@
+---
+$schema: https://holocron.so/frontmatter.json
+title: "Blog: OpenCode, Discord and AI coding agents"
+sidebarTitle: All posts
+description: "Posts about Kimaki, OpenCode V2 and running AI coding agents from Discord: migration guides, release notes and how the bot works inside."
+mode: center
+icon: lucide:list
+prompt: |
+  Write the blog index for the posts in @./opencode-v2-migration.mdx and
+  @./kimaki-opencode-v2-rebuild.mdx. One card per post, newest first.
+---
+
+<Above>
+<div className='flex flex-col gap-3 my-12'>
+<h1 className='text-5xl font-bold text-balance leading-tight'>Blog: OpenCode, Discord and AI coding agents</h1>
+<p className='text-muted-foreground'>Notes from building Kimaki on OpenCode V2.</p>
+</div>
+</Above>
+
+<CardGroup cols={1}>
+<Card title='OpenCode V2 migration guide: config, plugins and SDK' icon='arrow-right-left' href='/blog/opencode-v2-migration' cta='Read the guide'>
+How to move from OpenCode V1 to V2: install, config changes, the new plugin API, `@opencode/client`, events and the gotchas we hit porting Kimaki.
+</Card>
+<Card title='OpenCode V2 support: a full rebuild from first principles' icon='hammer' href='/blog/kimaki-opencode-v2-rebuild' cta='Read the post'>
+Kimaki now runs on OpenCode V2. Why I rebuilt the Discord bot from scratch around one event stream and a pure reducer, and how to upgrade.
+</Card>
+</CardGroup>

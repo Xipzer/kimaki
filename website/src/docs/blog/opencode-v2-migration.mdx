@@ -1,0 +1,358 @@
+---
+$schema: https://holocron.so/frontmatter.json
+title: "OpenCode V2 migration guide: config, plugins and SDK"
+sidebarTitle: OpenCode V2 migration
+description: "How to migrate from OpenCode V1 to V2: install, config changes, plugin API, the new @opencode/client SDK, events and the gotchas we hit porting Kimaki."
+mode: center
+icon: lucide:arrow-right-left
+prompt: |
+  Write an SEO blog post that ranks for "opencode v2", "opencode v2 migration",
+  "opencode v2 vs v1", "opencode v2 plugins", "opencode sdk v2" and
+  "@opencode-ai/sdk v2". Base it on the official guides
+  @https://opencode.ai/v2/docs/migrate-v1/ and
+  @https://opencode.ai/v2/docs/build/plugins/migrate-v1, plus the lessons from
+  porting Kimaki in @/docs/opencode-v2-in-place-migration.md,
+  @/docs/kimaki-v2-rebuild-spec.md, @/kimaki/src/opencode-server.ts,
+  @/kimaki/src/prompt.ts and @/kimaki/src/plugin/index.ts.
+---
+
+<Above>
+<div className='flex flex-col gap-3 my-12'>
+<h1 className='text-5xl font-bold text-balance leading-tight'>OpenCode V2 migration guide: config, plugins and SDK</h1>
+<p className='text-muted-foreground'>October 22, 2026 · Tommy De Rossi</p>
+</div>
+</Above>
+
+**OpenCode V2** is a rewrite of the server, the plugin API and the SDK. Your config, agents, skills and `AGENTS.md` files keep working. Your **plugins and server integrations do not**.
+
+We ported [Kimaki](../index.mdx), a Discord bot that drives OpenCode sessions, from V1 to V2. This guide is what we wish we had on day one: the official migration steps in one page, plus the traps we found in real code.
+
+```diagram
+  OpenCode V1                             OpenCode V2
+  ───────────────────────────             ──────────────────────────────────────
+  opencode.json (permission, agent) ───>  same file works, native shape optional
+  .opencode/ agents, skills, commands ─>  works unchanged
+  tui.json                          ───>  ~/.config/opencode/cli.json (automatic)
+  plugin: fn returning hooks        ───>  Plugin.define({ id, setup })   REWRITE
+  @opencode-ai/sdk (and its /v2)    ───>  @opencode/client               REWRITE
+  one server per client             ───>  one shared background service
+```
+
+## OpenCode V2 vs V1: what breaks
+
+The official [migrate from V1 guide](https://opencode.ai/v2/docs/migrate-v1/) lists **three intentional breaking changes**. Everything else is meant to stay compatible, so a regression outside these areas is a bug you should report.
+
+| Area                   | OpenCode V1                       | OpenCode V2                                 | Action             |
+| ---------------------- | --------------------------------- | ------------------------------------------- | ------------------ |
+| Plugins                | function returning a hooks object | `Plugin.define({ id, setup })`              | **rewrite**        |
+| Server API             | `@opencode-ai/sdk`                | `@opencode/client`                          | **rewrite**        |
+| Terminal config        | layered `tui.json(c)`             | one global `cli.json`                       | automatic          |
+| Config, agents, skills | `opencode.json`, `.opencode/`     | same files and paths                        | none               |
+| Process model          | each client starts a server       | one shared service for TUI, desktop and web | check integrations |
+
+<Aside>
+<Warning>
+**V1 and V2 both install as `opencode`.** They do not run side by side. The V2 installer replaces the V1 binary, so keep a copy of your V1 setup while you test.
+</Warning>
+</Aside>
+
+## Install OpenCode V2
+
+Remove a package-managed V1 install first, then run the **V2 installer**:
+
+```bash
+curl -fsSL https://opencode.ai/v2/install | bash
+opencode --version
+```
+
+The suggested order from the official guide:
+
+1. Keep your existing configuration and file-based definitions.
+2. Start V2 and check models, credentials, agents, permissions and MCP servers.
+3. Port plugins. V1 plugin code does not run in V2.
+4. Port integrations that call the server API.
+5. Optionally convert config to the native V2 shape.
+
+## Migrate the configuration (optional)
+
+V2 reads **the same config locations** as V1 and normalizes V1 fields in memory. It never rewrites your file. You can stay on the V1 shape, or ask OpenCode to convert it:
+
+```txt
+Migrate my OpenCode configuration, including file-based definitions, from the V1 format
+to the native V2 format. Preserve its behavior and all unrelated settings.
+```
+
+### Permissions
+
+V1 groups effects by tool. V2 uses one **ordered `permissions` array**. Actions were renamed too: `bash` is `shell`, `task` is `subagent`, `write` and `patch` are `edit`.
+
+```jsonc
+// V1
+{
+  "permission": { "bash": { "git push *": "ask" }, "edit": "allow" },
+  "tools": { "websearch": false }
+}
+
+// V2
+{
+  "permissions": [
+    { "action": "shell", "resource": "git push *", "effect": "ask" },
+    { "action": "edit", "resource": "*", "effect": "allow" },
+    { "action": "websearch", "resource": "*", "effect": "deny" }
+  ]
+}
+```
+
+<Aside>
+<Warning>
+**`external_directory` is allowed by default in V2.** V1 asked before reading paths outside the project. Add `{ "action": "external_directory", "resource": "*", "effect": "ask" }` to keep the old behavior.
+</Warning>
+</Aside>
+
+### Renamed fields
+
+Most changes are **singular to plural** renames, plus model variants joined with `#`:
+
+| V1                                    | V2                                                                 |
+| ------------------------------------- | ------------------------------------------------------------------ |
+| `agent`, `mode`                       | `agents` (`prompt` becomes `system`, `disable` becomes `disabled`) |
+| `model` + `variant`                   | `"anthropic/claude-sonnet-4-5#high"`                               |
+| `command` (`subtask`)                 | `commands` (`subagent`)                                            |
+| `plugin: ["pkg", ["./x.ts", opts]]`   | `plugins: ["pkg", { "package": "./x.ts", "options": opts }]`       |
+| `mcp.<name>` with `enabled`           | `mcp.servers.<name>` with `disabled`                               |
+| `provider` with `npm`, `api`          | `providers` with `package: "aisdk:..."`, `settings.baseURL`        |
+| `skills.paths`, `skills.urls`         | one `skills` array                                                 |
+| `snapshot`, `attachment`, `reference` | `snapshots`, `media`, `references`                                 |
+| `compaction.preserve_recent_tokens`   | `compaction.keep.tokens`                                           |
+
+Two things are **gone, not renamed**. V2 keeps `lsp` config but runs no language servers. It also reads only `AGENTS.md`, not `CLAUDE.md`. Todos are off by default; enable them with `experimental.todo: true`.
+
+## Migrate OpenCode plugins to V2
+
+This is the real work. A V1 plugin returned an object of hooks keyed by string. A V2 plugin **default-exports a definition** with a stable `id` and registers everything inside `setup(ctx)`. The full reference is the [plugin migration guide](https://opencode.ai/v2/docs/build/plugins/migrate-v1).
+
+```ts
+import { Plugin } from '@opencode/plugin'
+
+export default Plugin.define({
+  id: 'company.guard',
+  async setup(ctx) {
+    await ctx.tool.hook('execute.before', (event) => {
+      const input = event.input as { filePath?: string }
+      if (event.tool === 'read' && input.filePath?.includes('.env')) {
+        throw new Error('Do not read .env files')
+      }
+    })
+
+    await ctx.shell.hook('create.before', (event) => {
+      event.env.COMPANY_ENV = 'development'
+    })
+  },
+})
+```
+
+### Hook mapping
+
+Each hook now lives on **the domain that owns it**. The callback gets one mutable `event` instead of `input` and `output`.
+
+| V1 hook                                             | V2 API                                                   |
+| --------------------------------------------------- | -------------------------------------------------------- |
+| `event`                                             | `ctx.event.subscribe()`                                  |
+| `tool` map, `tool.definition`                       | `ctx.tool.transform(...)`                                |
+| `tool.execute.before` / `after`                     | `ctx.tool.hook('execute.before' / 'execute.after', ...)` |
+| `shell.env`                                         | `ctx.shell.hook('create.before', ...)`                   |
+| `chat.message`                                      | `ctx.session.hook('prompt', ...)`                        |
+| `chat.params`, `experimental.chat.system.transform` | `ctx.session.hook('context', ...)`                       |
+| `chat.headers`                                      | `ctx.session.hook('model.request', ...)`                 |
+| `permission.ask`                                    | `ctx.permission.hook('evaluate', ...)`                   |
+| `auth`                                              | `ctx.integration.transform(...)`                         |
+| `experimental.session.compacting`                   | `ctx.session.hook('compaction', ...)`                    |
+| `dispose`                                           | cleanup function returned by `setup`                     |
+
+<Aside>
+<Tip>
+**`context` runs only before agent requests.** Register `compaction`, `generate` and `title` hooks too if a change must reach every model request. Kimaki registers all four.
+</Tip>
+</Aside>
+
+### Custom tools
+
+The old `tool()` helper is gone. Tools use **plain JSON Schema** and return structured content. Transforms are replayed, so keep the callback synchronous and free of side effects.
+
+```ts
+import { Plugin } from '@opencode/plugin'
+
+export default Plugin.define({
+  id: 'greeting',
+  async setup(ctx) {
+    await ctx.tool.transform((editor) => {
+      editor.add({
+        name: 'greeting',
+        description: 'Create a greeting',
+        input: {
+          type: 'object',
+          properties: { name: { type: 'string' } },
+          required: ['name'],
+          additionalProperties: false,
+        },
+        async execute(input) {
+          return { content: `Hello ${(input as { name: string }).name}!` }
+        },
+      })
+    })
+  },
+})
+```
+
+### Plugins and the prompt cache
+
+OpenCode V2 **freezes the system prompt** at session start so the provider prompt cache keeps hitting. Text you push in `ctx.session.hook('context')` runs on every request and sits before all messages.
+
+If that text changes during a session (a git branch name, a timestamp), **every request misses the cache**. Put session-level text in an instruction entry instead. Later changes are appended as a small delta, not a new prefix.
+
+```ts
+await client.session.instructions.entry.put({ sessionID, key: 'my-integration', value: systemPrompt })
+```
+
+## Migrate the SDK to @opencode/client
+
+### The @opencode-ai/sdk/v2 trap
+
+The **most common mistake**: OpenCode 1 shipped `@opencode-ai/sdk/v2`. That export is a transitional client over V1 routes. Changing your import to it does **not** migrate you to OpenCode V2.
+
+| Role           | OpenCode V1                          | OpenCode V2        |
+| -------------- | ------------------------------------ | ------------------ |
+| Network client | `@opencode-ai/sdk` (including `/v2`) | `@opencode/client` |
+| Embedded host  | `@opencode-ai/sdk`                   | `@opencode/sdk`    |
+| Plugin API     | `@opencode-ai/plugin`                | `@opencode/plugin` |
+| CLI package    | `opencode-ai`                        | `@opencode/cli`    |
+
+### Connect to the shared service
+
+V2 runs **one background service** shared by the TUI, desktop app, web app and your integration. Discover it instead of spawning a private server. That way your sessions show up in the user's TUI too.
+
+```ts
+import { OpenCode } from '@opencode/client'
+import { Service } from '@opencode/client/service'
+
+const endpoint =
+  (await Service.discover({ file })) ??
+  (await Service.ensure({ file, command: ['opencode', 'serve', '--service', '--hostname', '127.0.0.1'] }))
+
+const client = OpenCode.make({ baseUrl: endpoint.url, headers: Service.headers(endpoint) })
+const info = await client.server.info()
+```
+
+<Aside>
+<Note>
+**Never pin a version** when you start the service. Installing a different OpenCode replaces the running server and kills the user's open TUI sessions.
+</Note>
+</Aside>
+
+### Call shapes
+
+Calls take **flat inputs** and return the value directly, or reject. Remove every `.data`, `.error`, nested `path`/`query`/`body` and `throwOnError`.
+
+| OpenCode V1                                 | OpenCode V2                                                      |
+| ------------------------------------------- | ---------------------------------------------------------------- |
+| `session.create({ directory, permission })` | `session.create({ location: { directory }, permissions })`       |
+| `session.promptAsync({ parts })`            | `session.prompt({ sessionID, text, files, delivery })`           |
+| `promptAsync({ noReply: true })`            | `session.prompt({ sessionID, text, resume: false })`             |
+| `promptAsync({ system })`                   | `session.instructions.entry.put({ sessionID, key, value })`      |
+| `session.abort(...)`                        | `session.interrupt({ sessionID, resume? })`                      |
+| `session.update({ permission })`            | `session.update({ sessionID, permissions })`                     |
+| question APIs and events                    | `session.form.*` and `form.*` events                             |
+| `message.part.*` snapshots                  | `session.text.*`, `session.reasoning.*`, `session.tool.*` events |
+
+```ts
+const session = await client.session.create({
+  location: { directory },
+  permissions: [{ action: 'edit', resource: `${directory}/**`, effect: 'allow' }],
+})
+
+await client.session.prompt({
+  sessionID: session.id,
+  text: 'Fix the failing test',
+  delivery: 'steer',
+})
+```
+
+`session.prompt` returns the **accepted inbox item**, not the reply. The answer arrives on the event stream.
+
+## Events, inbox and execution
+
+V1 sent mutable part snapshots. V2 sends **facts**: live deltas, then a durable terminal event with the full value.
+
+```diagram
+  session.prompt({ delivery: 'steer' | 'queue' })
+        │
+        ├──> session.inbox.enqueued
+        ├──> session.execution.started          start typing, start timer
+        ├──> session.inbox.delivered            prompt is now visible history
+        │
+        ├──> session.text.delta ... session.text.ended          full text on ended
+        ├──> session.tool.input.* ... session.tool.success | failed
+        │
+        └──> session.execution.succeeded | failed | interrupted
+```
+
+The **inbox** replaces abort-and-replay:
+
+- `delivery: 'steer'` lands at the next safe step boundary of the running turn.
+- `delivery: 'queue'` waits until the current execution finishes.
+- `resume: false` adds the message without waking the agent.
+
+Use `session.execution.succeeded` as the "turn done" signal. `session.idle` is deprecated and also fires after an interrupt.
+
+## Gotchas we hit porting Kimaki
+
+These are **not in the official guide**. We found each one while porting Kimaki.
+
+1. **The event stream does not reconnect.** `client.event.subscribe()` is a lazy async iterable. On reconnect you must read state again (active sessions, inbox, pending forms, permissions). Missed deltas are gone; restore the final values.
+2. **Lists can be newest-first.** Check the order of `message.list` and `session.list` before you pick "the latest user message".
+3. **Scope every `session.list`** to a directory or project, or you mirror sessions from other projects.
+4. **`session.form.list` returns only pending forms.** Questions are forms with `metadata.kind = "question"`.
+5. **`permission.reply` takes `decision`** (`once`, `always`, `reject`), not `reply`.
+6. **Agent and model are session-wide.** If `switchAgent` or `switchModel` fails, stop. Do not send the prompt with the old model.
+7. **Plugins run for every session.** A plugin loaded for your integration also runs in the user's own TUI sessions. Tag your sessions with metadata and return early on the others.
+8. **Route subagents by `parentID`.** The tool is `subagent`, its input is `agent`, and the child is linked through `session.created.data.parentID`.
+
+<Aside>
+<Tip>
+We keep **reducer fixtures** of real V2 event streams in the Kimaki repo. Replaying recorded events is the fastest way to debug an integration.
+</Tip>
+</Aside>
+
+## Migration checklist
+
+- [ ] V1 removed, V2 installed with `curl -fsSL https://opencode.ai/v2/install | bash`
+- [ ] Models, credentials, agents, permissions and MCP servers checked in one project
+- [ ] `external_directory` rule added if you want V1 behavior
+- [ ] Every plugin rewritten with `Plugin.define` and a stable `id`
+- [ ] Imports moved from `@opencode-ai/sdk` (and `/v2`) to `@opencode/client`
+- [ ] Integration discovers the shared service instead of starting its own
+- [ ] Completion uses `session.execution.*`, not `session.idle`
+- [ ] Reconnect reads state again
+- [ ] Session-level prompt text in instruction entries, not the `context` hook
+
+## FAQ
+
+### Can I run OpenCode V1 and V2 side by side?
+
+**No**, not by default. Both use the `opencode` command and the same config locations. Do not point V1 at a config you converted to the native V2 shape.
+
+### Do I have to convert opencode.json?
+
+**No.** V2 reads the V1 shape and normalizes it in memory. You can mix V1 and V2 fields at the top level. Keep each agent, provider, command and model entry in one format.
+
+### Is @opencode-ai/sdk/v2 the OpenCode V2 SDK?
+
+**No.** It is a legacy client from OpenCode 1. The V2 SDK is `@opencode/client` for network access and `@opencode/sdk` for embedding.
+
+### Where do I find the V2 source and API reference?
+
+The source is the [v2 branch of anomalyco/opencode](https://github.com/anomalyco/opencode/tree/v2). Client docs are in the [OpenCode client guide](https://opencode.ai/v2/docs/build/client).
+
+## Use OpenCode V2 from Discord
+
+Kimaki runs on **native OpenCode V2**. It connects to the same shared service as your TUI, so a session started on your phone in Discord is the same session on your laptop. [Get started with Kimaki](../index.mdx).
