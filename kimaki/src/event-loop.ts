@@ -67,7 +67,6 @@ export function createEventLoop({
   effects,
   recorder,
   analytics,
-  messageTool,
   onRunEnded,
   onTranscriptDue,
 }: {
@@ -77,8 +76,6 @@ export function createEventLoop({
   effects: EffectsRunner
   recorder: EventRecorder
   analytics: Analytics
-  // `kimaki --message-tool`: plain text of root sessions stays hidden (Prefs.messageTool).
-  messageTool: boolean
   // Every finished or failed run of a thread's root session (voice call notifications).
   onRunEnded: (run: RunEnded) => void
   // A root session stopped running (also after an interrupt): its transcript file is stale.
@@ -125,7 +122,7 @@ export function createEventLoop({
     if (!view) return
     const verbosity = state.verbosity[view.channelId] ?? verbosityFromV1(null)
     const contextLimits = modelLimits.get(view.directory)?.limits ?? {}
-    const result = reduce({ view, event, prefs: { verbosity, contextLimits, messageTool } })
+    const result = reduce({ view, event, prefs: { verbosity, contextLimits } })
     if (result.view !== view) store.setState((current) => ({ threads: { ...current.threads, [threadId]: result.view } }))
     effects.run(threadId, result.effects)
     if (event.type === 'session.moved' && event.data.sessionID === view.sessionId) void loadModelLimits(event.data.location.directory)

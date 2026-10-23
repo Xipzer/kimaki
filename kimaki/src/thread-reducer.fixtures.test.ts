@@ -31,7 +31,7 @@ test('tools: names from tool.input.started, failed tool lines, read-only tools h
 test('tools at text verbosity: text, edits and errors only', () => {
   const { effects } = replay({
     events: loadFixture('tools.events.jsonl'),
-    prefs: { verbosity: 'text', contextLimits: {}, messageTool: false },
+    prefs: { verbosity: 'text', contextLimits: {} },
   })
   expect(effectLines(effects)).toMatchInlineSnapshot(`
     [
@@ -324,7 +324,7 @@ test('permission: two requests, the rejected one fails its tool call', () => {
 test('shell-background: background shell line even without side effects, finished line when its job ends', () => {
   const events = loadFixture('shell-background.events.jsonl')
   const view = emptyView({ sessionId: 'ses_ee56d6caeffech0rMI5NTnkky1', channelId: 'channel', directory: '/project', isNew: false })
-  const { effects, view: end } = replay({ events, view, prefs: { verbosity: 'tools', contextLimits: {}, messageTool: false } })
+  const { effects, view: end } = replay({ events, view, prefs: { verbosity: 'tools', contextLimits: {} } })
   expect(effectLines(effects)).toMatchInlineSnapshot(`
     [
       "» **user:** start a task in background that runs sleep 100",

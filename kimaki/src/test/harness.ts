@@ -499,7 +499,6 @@ export async function startTestBot({
   analytics,
   clock,
   schedulerIntervalMs,
-  messageTool,
 }: {
   dataDir: string
   twin: TestTwin
@@ -520,7 +519,6 @@ export async function startTestBot({
   // Scheduling tests pass manualClock() and null, then call bot.scheduler.runDueTasks().
   clock?: Clock
   schedulerIntervalMs?: number | null
-  messageTool?: boolean
 }): Promise<BotHandle> {
   // What credential resolution saves in production; `kimaki project add` reads it.
   const credentials: Credentials = twin.discord.botToken.includes(':')
@@ -549,7 +547,6 @@ export async function startTestBot({
     analytics: analytics ?? disabledAnalytics,
     ...(clock && { clock }),
     ...(schedulerIntervalMs !== undefined && { schedulerIntervalMs }),
-    ...(messageTool && { messageTool }),
     ...(realtimeBaseUrls && { realtimeBaseUrls }),
     transcriptionBaseUrls: {
       ...(geminiBaseUrl && { gemini: geminiBaseUrl }),

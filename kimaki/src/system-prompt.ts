@@ -659,44 +659,6 @@ export function turnContext(metadata: Readonly<Record<string, unknown>> | undefi
   return `${files}<discord-user name="${escapeAttribute(username)}" user-id="${userId}" message-id="${messageId}" thread-id="${threadId}" thread-name="${escapeAttribute(threadName)}" />`
 }
 
-// `kimaki --message-tool`: root sessions get this tool. Discord shows only its text;
-// plain text parts stay visible in the OpenCode TUI and other clients.
-// Wording adapted from Grok Bot's SendMessage tool.
-export const MESSAGE_TOOL = 'send_message'
-
-export const MESSAGE_TOOL_DESCRIPTION = dedent`
-  Send a concise reply to the user in the Discord thread. Discord shows only the text of send_message calls, not your plain text. Keep writing your normal plain text replies: they stay visible in the OpenCode terminal UI. Then repeat the part the Discord user needs as a short send_message, also for short replies like "Done" or "Yes, it does".
-
-  If you end a turn where the user waits on you without calling send_message, Discord shows silence.
-
-  Be very concise. Send meaningful beats only: a real result, a decision, a blocker, a change of plan. Do not narrate routine steps, retries or minor snags. Prefer fewer, higher-signal messages over a play-by-play, but never vanish into a long silent run.
-
-  An opening acknowledgement does not deliver the result. If you ran something for the user, send the actual result before you end the turn.
-
-  \`text\` is Discord markdown, shown like a normal message: headings, lists, code blocks, tables and <callout> blocks work. Send files with \`kimaki upload-to-discord\`, never through this tool. After your final send_message, end the turn.
-`
-
-export const MESSAGE_TOOL_INPUT = {
-  type: 'object',
-  properties: { text: { type: 'string', description: 'Markdown shown to the user in Discord. Keep it short.' } },
-  required: ['text'],
-  additionalProperties: false,
-}
-
-// Same text for the whole session (the prompt cache keeps hitting). It overrides
-// the "Discord output" rules of the instruction entry, which assume Discord shows text parts.
-export const MESSAGE_MODE_INSTRUCTIONS = dedent`
-  ## Discord shows only send_message
-
-  This overrides every rule above about what Discord shows: Discord does NOT show your plain text. Only the \`text\` of \`send_message\` tool calls reaches the Discord thread. The same session can also be open in the OpenCode terminal UI, which shows your plain text normally.
-
-  - Write your plain text replies as usual, in full. They are for the terminal UI.
-  - Then repeat a concise version as send_message, in Discord markdown: every reply, question and final answer, even one word of small talk.
-  - Where these instructions say "write the text first" before \`kimaki buttons\`, \`kimaki upload-request\` or \`kimaki sleep\`, call send_message with that text first.
-  - Never end a turn with a reply only in plain text.
-  - Never mention send_message, tool names or this rule to the user.
-`
-
 export type VoiceCallUser = { id: string; username: string }
 export type VoiceCallProject = { channelId: string; channelName: string; directory: string }
 // skill.list entry of OpenCode's global location; path is the absolute SKILL.md.

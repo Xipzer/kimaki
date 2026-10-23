@@ -71,8 +71,6 @@ export type StartBotOptions = {
   disabledSkills?: readonly string[]
   // Static instruction parts left out of new sessions (system-prompt.ts).
   disabledPrompt?: readonly PromptSection[]
-  // `kimaki --message-tool`: agents also reply through send_message; Discord hides their plain text.
-  messageTool?: boolean
 }
 
 export type BotHandle = Bot & {
@@ -151,7 +149,7 @@ export async function startBot(options: StartBotOptions): Promise<Error | BotHan
       if (result instanceof Error) logger.warn(`transcript of ${sessionId} not synced`, result)
     })
   }
-  const eventLoop = createEventLoop({ store, db, discord, effects, recorder, analytics: options.analytics, messageTool: options.messageTool ?? false, onRunEnded: voiceCalls.runEnded, onTranscriptDue })
+  const eventLoop = createEventLoop({ store, db, discord, effects, recorder, analytics: options.analytics, onRunEnded: voiceCalls.runEnded, onTranscriptDue })
   const loaded = await eventLoop.load()
   if (loaded instanceof Error) return loaded
   // Before the service is used, so a service started by ensure() loads it at once.
@@ -191,7 +189,6 @@ export async function startBot(options: StartBotOptions): Promise<Error | BotHan
     allowAllUsers: options.allowAllUsers ?? false,
     disabledSkills: options.disabledSkills ?? [],
     disabledPrompt: options.disabledPrompt ?? [],
-    messageTool: options.messageTool ?? false,
     features: { withSleepLock: createSleepLock(), waitForPlugin: createPluginWait({ opencode }), agentUi, voiceCalls },
   }
   const scheduler = createScheduler({
