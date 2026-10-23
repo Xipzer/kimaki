@@ -110,9 +110,13 @@ export async function resolveSession({
 type Message = Awaited<ReturnType<OpenCodeClient['message']['list']>>['data'][number]
 type Session = Awaited<ReturnType<OpenCodeClient['session']['get']>>
 
+// Long enough for most edits, commands and subagent prompts; huge writes stay short.
+const TOOL_INPUT_LIMIT = 5000
+
 function renderMessage(message: Message, options: { thinking?: boolean; verbose?: boolean }): string {
   const time = new Date(message.time.created).toISOString()
-  if (message.type === 'user') return `## user ${time}\n\n${message.text}`
+  if (message.type === 'user' || message.type === 'synthetic' || message.type === 'system') return `## ${message.type} ${time}\n\n${message.text}`
+  if (message.type === 'compaction' && message.status !== 'failed') return `## compaction ${time}\n\n${message.summary}`
   if (message.type !== 'assistant') return `## ${message.type} ${time}\n\n${JSON.stringify(message)}`
   const header = `## assistant ${time} (${message.agent}, ${message.model.providerID}/${message.model.id})`
   const parts = message.content.map((part) => {
@@ -120,7 +124,7 @@ function renderMessage(message: Message, options: { thinking?: boolean; verbose?
     if (part.type === 'reasoning') return options.thinking ? part.text : ''
     if (part.type === 'tool') {
       const state = part.state
-      const input = options.verbose ? JSON.stringify(state.input ?? {}) : JSON.stringify(state.input ?? {}).slice(0, 500)
+      const input = options.verbose ? JSON.stringify(state.input ?? {}) : JSON.stringify(state.input ?? {}).slice(0, TOOL_INPUT_LIMIT)
       const error = state.status === 'error' ? `\nerror: ${JSON.stringify(state).slice(0, 500)}` : ''
       const output = options.verbose && state.status === 'completed' ? `\n${JSON.stringify(state.content)}` : ''
       return `tool ${part.name} [${state.status}] ${input}${error}${output}`
@@ -158,7 +162,7 @@ function renderSession({ session, messages, thinking, verbose }: { session: Pick
 }
 
 // Transcripts: <dataDir>/transcripts/<sessionId>.md, the `session read` markdown
-// (no thinking, no tool outputs) so agents can search every session with rg.
+// with thinking but no tool outputs, so agents can search every session with rg.
 // The file mtime is the session's time.updated: a file at least that new is current.
 export function transcriptsDir({ dataDir }: { dataDir: string }): string {
   return path.join(dataDir, 'transcripts')
@@ -172,7 +176,7 @@ export async function writeTranscript({ client, dataDir, session }: { client: Op
   const temp = `${file}.${process.pid}.${crypto.randomUUID()}.tmp`
   const written = await (async () => {
     await fs.promises.mkdir(dir, { recursive: true, mode: 0o700 })
-    await fs.promises.writeFile(temp, `${renderSession({ session, messages })}\n`, { mode: 0o600 })
+    await fs.promises.writeFile(temp, `${renderSession({ session, messages, thinking: true })}\n`, { mode: 0o600 })
     await fs.promises.utimes(temp, session.time.updated / 1000, session.time.updated / 1000)
     await fs.promises.rename(temp, file)
   })().catch((cause) => new ConfigError({ reason: `Cannot write ${file}`, cause }))
