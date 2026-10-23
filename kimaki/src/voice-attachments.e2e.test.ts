@@ -39,9 +39,9 @@ const matchers: DeterministicMatcher[] = [
   {
     id: 'image',
     priority: 500,
-    // The plugin adds the numbered <attachments> and <discord-user> to the model request only.
+    // The plugin adds the numbered <attachments>, the concise reminder and <discord-user> to the model request only.
     when: {
-      latestUserTextRegex: 'image-marker[\\s\\S]*<attachments>[\\s\\S]*1\\. dot\\.png \\(inline\\): [^\\n]*\\n2\\. notes\\.txt: [^\\n]*\\n3\\. archive\\.zip: [^\\n]*\\n</attachments>\\n<discord-user ',
+      latestUserTextRegex: 'image-marker[\\s\\S]*<attachments>[\\s\\S]*1\\. dot\\.png \\(inline\\): [^\\n]*\\n2\\. notes\\.txt: [^\\n]*\\n3\\. archive\\.zip: [^\\n]*\\n</attachments>\\n<system-reminder>[^\\n]*</system-reminder>\\n<discord-user ',
       rawPromptIncludes: 'image/png',
     },
     then: { parts: textParts('I see an image') },
