@@ -1,5 +1,50 @@
 # Changelog
 
+## 1.4.0
+
+1. **New `--disable-prompt <section>` flag** removes static parts of the Kimaki system prompt from new sessions. Repeat the flag or pass a comma separated list:
+
+   ```bash
+   kimaki --disable-prompt critique-diffs --disable-prompt discord-callouts
+   kimaki --disable-prompt markdown-formatting,ascii-diagrams,search-result-urls
+   ```
+
+   Sections: `discord-permissions`, `kimaki-debugging`, `file-upload-requests`, `action-buttons`, `session-sleep`, `session-abort`, `cross-project-commands`, `waiting-sessions`, `critique-diffs`, `markdown-formatting`, `discord-callouts`, `search-result-urls`, `ascii-diagrams`. `kimaki --help` lists them. Use it to drop rules you replace with your own AGENTS.md, for example a different diff tool than critique. Existing sessions keep their prompt.
+
+   The tunnel hint moves out of the system prompt into the `kimaki-tunnel` skill description, so `--disable-skills kimaki-tunnel` now removes all tunnel instructions.
+
+2. **Removed the `kimaki --message-tool` mode** added in 1.3.0. Agents no longer get a `send_message` tool, and Discord shows the agent's normal text replies again. Remove `--message-tool` from your start command.
+
+3. **`kimaki tunnel` works with Vite without `server.allowedHosts`.** Requests now go through a small loopback proxy that sets `Host: localhost:<port>`, like traforo did. Vite HMR WebSockets go through the proxy too. The public host is still available to the app:
+
+   ```
+   Host:              localhost:5173
+   X-Forwarded-Host:  my-app.<id>.opentunnel.xyz
+   X-Forwarded-Proto: https
+   ```
+
+   You can remove `allowedHosts: ['.opentunnel.xyz']` from your Vite config.
+
+4. **`kimaki tunnel` accepts traforo-style tunnel IDs and fails fast on conflicts.**
+   - `-t` names and tuistory session IDs map to a valid subdomain. `-t My_App` gives `https://my-app.<id>.opentunnel.xyz`, so a tuistory session like `Holocron_Dev` keeps `holocron-dev` across restarts.
+   - `-t <id>` fails at once when another process already serves that ID, instead of waiting 60 seconds.
+   - `--kill` works on Windows (`netstat`).
+   - Agents are told to validate with the `Local:` URL, which is much faster than the tunnel URL.
+
+5. **Searchable transcripts hold more of each session** (`<data-dir>/transcripts/<session id>.md`): thinking text, tool inputs up to 5000 chars, and readable compaction summaries, synthetic and system messages. Tool outputs stay out. Rewrite old transcripts once:
+
+   ```bash
+   kimaki session sync --all --rebuild
+   ```
+
+6. **Fewer prompt cache misses.** Compaction and OpenCode `warming` requests now get the same prompt changes as normal turns. You can enable session warming in `opencode.json` to keep the Anthropic cache alive between messages:
+
+   ```json
+   { "warming": { "duration": "30 minutes" } }
+   ```
+
+7. **Blockquotes with empty lines stay one quote in Discord**, instead of showing literal `>` characters between quote blocks.
+
 ## 1.3.0
 
 1. **New `kimaki --message-tool` mode.** Discord shows only a concise reply that the agent sends with a `send_message` tool. Off by default.
