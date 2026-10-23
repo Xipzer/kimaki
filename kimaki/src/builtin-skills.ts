@@ -69,7 +69,7 @@ export const PROMPT_SECTIONS = [
   'markdown-formatting',
   'discord-callouts',
   'search-result-urls',
-  'ascii-diagrams',
+  'diagrams',
 ] as const
 
 export type PromptSection = (typeof PROMPT_SECTIONS)[number]

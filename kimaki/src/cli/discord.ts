@@ -1,6 +1,8 @@
 // Discord-facing commands: agent UI (buttons, upload requests) through the
 // running bot, plus thread/user lookups and uploads with the saved bot token.
 
+import fs from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 import { ChannelType } from 'discord-api-types/v10'
 import { wrapJsonSchema, type Goke } from 'goke'
@@ -113,4 +115,24 @@ export function registerDiscordCommands(cli: Goke) {
       // Waits for Discord: big files and a busy thread take longer than the 30s default.
       await action({ route: 'upload', dataDir: options.dataDir, input, signal: AbortSignal.timeout(5 * 60_000) })
     })
+
+  cli.command('diagram <input>', 'Render a Mermaid diagram (file path, or - for stdin) to a dark themed PNG. Upload it with upload-to-discord')
+    .option('-o, --output <path>', 'PNG file to write (default: input path with .png, or a temp file for stdin)')
+    .action(async (input, options) => {
+      const source = input === '-' ? await readStdin() : await fs.promises.readFile(input, 'utf8').catch((error: Error) => error)
+      if (source instanceof Error) fail(source)
+      const { renderDiagram } = await import('../diagram.ts')
+      const png = renderDiagram(source)
+      if (png instanceof Error) fail(png)
+      const output = path.resolve(options.output ?? (input === '-' ? path.join(os.tmpdir(), `kimaki-diagram-${Date.now()}.png`) : input.replace(/(\.\w+)?$/, '.png')))
+      const written = await fs.promises.writeFile(output, png).catch((error: Error) => error)
+      if (written instanceof Error) fail(written)
+      process.stdout.write(`${output}\n`)
+    })
+}
+
+async function readStdin(): Promise<string> {
+  const chunks: Buffer[] = []
+  for await (const chunk of process.stdin) chunks.push(Buffer.from(chunk))
+  return Buffer.concat(chunks).toString('utf8')
 }

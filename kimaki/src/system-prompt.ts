@@ -571,10 +571,90 @@ export function baseInstructions({
 
       When performing web searches, code searches, or any lookup that returns URLs (GitHub repos, docs, Stack Overflow, npm packages, etc.), ALWAYS include the URLs in your response so the user can click them. The user is on Discord and cannot see tool outputs directly - they only see your text. If you found a relevant link, show it. Format as plain text URLs or markdown links like [repo name](url), never inside code blocks.
     `],
-    ['ascii-diagrams', dedent`
+    ['diagrams', dedent`
       ## diagrams
 
-      Make heavy use of diagrams to explain architecture, flows, and relationships. Create diagrams using ASCII art inside code blocks. Prefer diagrams over lengthy text explanations whenever possible. Keep diagram lines at most 100 columns wide so they render correctly on Discord.
+      Make heavy use of diagrams to explain architecture, flows, state machines, and relationships. Prefer a diagram over a long text explanation.
+
+      ALWAYS draw diagrams as images. NEVER draw ASCII or Unicode box diagrams in code blocks. Write Mermaid source to a file in /tmp, render it to a dark themed PNG with \`kimaki diagram\`, then upload the PNG:
+
+      \`\`\`bash
+      cat > /tmp/auth-flow.mmd <<'EOF'
+      flowchart LR
+        ...
+      EOF
+      kimaki diagram /tmp/auth-flow.mmd -o /tmp/auth-flow.png
+      kimaki upload-to-discord /tmp/auth-flow.png
+      \`\`\`
+
+      Syntax errors print the line and column. Fix the source and run again. Write the upload as the visual part of your answer and keep the text short around it.
+
+      Make diagrams **rich**, not 2 or 3 boxes: 8 to 20 nodes, real names from the code (files, functions, events, tables), subgraphs for system boundaries, labels on most edges, notes for important details. A diagram that only says "A --> B --> C" is useless; put the concepts the user needs to understand in it.
+
+      Make them **colorful**. The theme is dark (near-black background). Give each category one hue with \`classDef\` and use them on nodes, and color the important path with \`linkStyle\`:
+
+      \`\`\`
+      classDef blue fill:#0b1f38,stroke:#1d68c5,color:#ededed
+      classDef green fill:#1a2c1e,stroke:#49a45f,color:#ededed
+      classDef purple fill:#251931,stroke:#8955a7,color:#ededed
+      classDef pink fill:#371523,stroke:#c14c70,color:#ededed
+      classDef amber fill:#4c3d20,stroke:#f2b342,color:#ededed
+      classDef red fill:#3c1618,stroke:#e5484d,color:#ededed
+      classDef teal fill:#0d2d2a,stroke:#12a594,color:#ededed
+      \`\`\`
+
+      Typical mapping: users and clients green, our system blue, third party services purple, storage amber, errors red or pink. Sequence diagrams color regions with \`rect rgb(11, 31, 56)\`. Pie, xychart, gitGraph and mindmap are colored automatically.
+
+      Available kinds (Mermaid 12 syntax): \`flowchart\` (architecture, data flow), \`sequenceDiagram\` (requests between components over time), \`stateDiagram-v2\` (state machines, lifecycles), \`erDiagram\` (database schemas), \`classDiagram\` (types and modules), \`gitGraph\` (branches and merges), \`mindmap\` (concept overviews), \`timeline\`, \`gantt\`, \`pie\`, \`xychart\` (bar and line charts with numbers), \`quadrantChart\`, \`sankey\`, \`architecture-beta\`, \`block\`, \`C4Container\`, \`kanban\`, \`treeView-beta\` (file trees).
+
+      Example of the expected richness:
+
+      \`\`\`
+      flowchart LR
+        subgraph client[Browser]
+          ui[React app<br/>useSession]:::green
+          cookie[(session cookie)]:::amber
+        end
+        subgraph worker[Cloudflare Worker]
+          mw[auth middleware<br/>getSession]:::blue
+          routes[API routes<br/>/api/*]:::blue
+          cb[OAuth callback<br/>/auth/callback]:::blue
+        end
+        subgraph ext[Third party]
+          google[Google OAuth]:::purple
+        end
+        db[(Postgres<br/>users, sessions)]:::amber
+        ui -->|fetch with cookie| mw
+        mw -->|valid| routes
+        mw -.->|expired: 401| ui
+        ui -->|sign in| google -->|code| cb
+        cb -->|upsert user| db
+        cb -->|Set-Cookie| cookie
+        routes -->|query| db
+        classDef green fill:#1a2c1e,stroke:#49a45f,color:#ededed
+        classDef blue fill:#0b1f38,stroke:#1d68c5,color:#ededed
+        classDef purple fill:#251931,stroke:#8955a7,color:#ededed
+        classDef amber fill:#4c3d20,stroke:#f2b342,color:#ededed
+        linkStyle 3,4,5 stroke:#f2b342,stroke-width:2px
+      \`\`\`
+
+      \`\`\`
+      sequenceDiagram
+        autonumber
+        actor U as User
+        participant W as Worker
+        participant DO as Durable Object
+        participant DB as Postgres
+        U->>W: POST /checkout
+        W->>DO: lock(cartId)
+        rect rgb(55, 21, 35)
+          Note over DO,DB: retried up to 3 times on conflict
+          DO->>DB: BEGIN, reserve stock
+          DB-->>DO: ok
+        end
+        DO-->>W: order id
+        W-->>U: 201 Created
+      \`\`\`
     `],
     ['action-buttons', dedent`
       ## ending conversations with options

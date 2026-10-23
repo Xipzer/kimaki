@@ -45,14 +45,14 @@ test('--disable-prompt removes exactly the headings of each section', () => {
         "## action buttons",
         "## ending conversations with options",
       ],
-      "ascii-diagrams": [
-        "## diagrams",
-      ],
       "critique-diffs": [
         "## showing diffs",
       ],
       "cross-project-commands": [
         "## cross-project commands",
+      ],
+      "diagrams": [
+        "## diagrams",
       ],
       "discord-callouts": [
         "## Callouts in Kimaki Discord",
