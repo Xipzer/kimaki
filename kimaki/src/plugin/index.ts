@@ -1,5 +1,6 @@
 import type { JsonValue } from '@opencode/client'
 import { Plugin, Skill } from '@opencode/plugin'
+import type { SessionContext } from '@opencode/plugin/promise/session'
 import { Schema } from 'effect'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
@@ -74,27 +75,18 @@ export default Plugin.define({
       if (last?.type === 'synthetic' && last.text === text) return
       await ctx.session.synthetic({ sessionID: event.sessionID, text, delivery: event.delivery, resume: false }).catch(() => undefined)
     })
-    // send_message only for root sessions of a bot started with --message-tool.
-    // Every request kind that carries the tool list gets the same tools and system
-    // text, so the prompt cache keeps hitting and no other session ever sees the tool.
-    async function applyMessageMode(event: { sessionID: string; tools: Record<string, unknown>; system: Array<{ type: 'text'; text: string }> }) {
-      const info = await marker(event.sessionID)
-      const messageMode = info?.root === true && info.fields.get('messageTool') === true
-      if (!messageMode) delete event.tools[MESSAGE_TOOL]
-      else event.system.push({ type: 'text', text: MESSAGE_MODE_INSTRUCTIONS })
-      return info
-    }
-    await ctx.session.hook('compaction', async (event) => {
-      await applyMessageMode(event)
-    })
-    await ctx.session.hook('generate', async (event) => {
-      await applyMessageMode(event)
-    })
-    await ctx.session.hook('context', async (event) => {
+    // Runs for every request kind: turns (context), compaction and generate (OpenCode
+    // `warming` keep-alive requests). All kinds must get the same system text, tools
+    // and messages, or the provider prompt cache misses.
+    const shapeRequest = async (event: SessionContext) => {
       // The only prompt change for every session, TUI included. The ID never
       // changes in a session, so the cached prompt prefix stays stable.
       event.system.push({ type: 'text', text: `OpenCode session ID: ${event.sessionID}` })
-      const info = await applyMessageMode(event)
+      const info = await marker(event.sessionID)
+      // send_message only for root sessions of a bot started with --message-tool.
+      const messageMode = info?.root === true && info.fields.get('messageTool') === true
+      if (!messageMode) delete event.tools[MESSAGE_TOOL]
+      else event.system.push({ type: 'text', text: MESSAGE_MODE_INSTRUCTIONS })
       if (!info) return
       // The <discord-user> context of each prompt, built from its metadata, so the
       // stored text stays clean for the TUI and other clients. Same metadata, same
@@ -121,7 +113,10 @@ export default Plugin.define({
           ...properties,
         } }
       }
-    })
+    }
+    await ctx.session.hook('context', shapeRequest)
+    await ctx.session.hook('compaction', shapeRequest)
+    await ctx.session.hook('generate', shapeRequest)
     await ctx.tool.hook('execute.before', async (event) => {
       if (event.tool !== 'shell' || !event.input || typeof event.input !== 'object' || Array.isArray(event.input)) return
       const info = await marker(event.sessionID)
