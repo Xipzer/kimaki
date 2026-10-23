@@ -11,6 +11,7 @@ import { ChannelType, type Client, type TextChannel, type ThreadChannel } from '
 
 import type { AgentUi } from './agent-ui.ts'
 import type { Analytics } from './analytics.ts'
+import type { PromptSection } from './builtin-skills.ts'
 import type { KimakiDb } from './db.ts'
 import type { EffectsRunner } from './effects.ts'
 import { ConfigError, DbError, DiscordError, OpenCodeError, OpenCodeUnavailableError } from './errors.ts'
@@ -69,6 +70,8 @@ export type Bot = {
   allowAllUsers: boolean
   // Built-in skill ids (builtin-skills.ts) denied through the permissions of new sessions.
   disabledSkills: readonly string[]
+  // `kimaki --disable-prompt`: static instruction parts left out of new sessions.
+  disabledPrompt: readonly PromptSection[]
   // `kimaki --message-tool`: root sessions also reply through send_message; Discord hides their plain text.
   messageTool: boolean
   features: BotFeatures

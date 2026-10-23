@@ -9,6 +9,7 @@ import * as errore from 'errore'
 import { createAgentUi } from './agent-ui.ts'
 import type { Analytics } from './analytics.ts'
 import { oc, type Bot } from './bot.ts'
+import type { PromptSection } from './builtin-skills.ts'
 import { openDb } from './db.ts'
 import { createEffectsRunner } from './effects.ts'
 import { DiscordError } from './errors.ts'
@@ -68,6 +69,8 @@ export type StartBotOptions = {
   allowAllUsers?: boolean
   // Built-in skill ids denied in new sessions (builtin-skills.ts).
   disabledSkills?: readonly string[]
+  // Static instruction parts left out of new sessions (system-prompt.ts).
+  disabledPrompt?: readonly PromptSection[]
   // `kimaki --message-tool`: agents also reply through send_message; Discord hides their plain text.
   messageTool?: boolean
 }
@@ -187,6 +190,7 @@ export async function startBot(options: StartBotOptions): Promise<Error | BotHan
     autoWorktrees: options.autoWorktrees ?? false,
     allowAllUsers: options.allowAllUsers ?? false,
     disabledSkills: options.disabledSkills ?? [],
+    disabledPrompt: options.disabledPrompt ?? [],
     messageTool: options.messageTool ?? false,
     features: { withSleepLock: createSleepLock(), waitForPlugin: createPluginWait({ opencode }), agentUi, voiceCalls },
   }

@@ -5,6 +5,8 @@
 import dedent from 'string-dedent'
 import { z } from 'zod'
 
+import type { PromptSection } from './builtin-skills.ts'
+
 export const INSTRUCTION_KEY = 'kimaki'
 
 export type InstructionAgent = { name: string; description: string }
@@ -15,8 +17,8 @@ export type ScheduledRun = { id: number; cronExpr: string | null; timezone: stri
 
 const PARENT_SESSION_LINE = 'Your parent OpenCode session ID is: '
 
-// Every system-level instruction of Kimaki is built in this file. Sections
-// are joined in order; each is one dedent block.
+// Every system-level instruction of Kimaki is built in this file. Parts are
+// joined in order; a tagged part is static and `--disable-prompt <tag>` drops it.
 export function baseInstructions({
   sessionId,
   threadId,
@@ -28,6 +30,7 @@ export function baseInstructions({
   agents,
   parentSessionId,
   scheduledTask = null,
+  disabled = [],
 }: {
   sessionId: string
   threadId: string
@@ -41,13 +44,15 @@ export function baseInstructions({
   // Only from an explicit `kimaki send --parent-session`.
   parentSessionId: string | null
   scheduledTask?: ScheduledRun | null
+  // `kimaki --disable-prompt`: tagged static parts to leave out.
+  disabled?: readonly PromptSection[]
 }): string {
   const userArg = ` --user '${userId}'`
   const parentArg = ` --parent-session ${sessionId}`
   const topic = channelTopic?.trim()
   const agentList = agents.map((agent) => `- \`${agent.name}\`${agent.description ? `: ${agent.description}` : ''}`).join('\n')
-  const sections = [
-    dedent`
+  const parts: Array<[PromptSection | null, string]> = [
+    [null, dedent`
       The user is reading your messages from inside Discord, via kimaki.dev.
 
       ## Discord output
@@ -76,8 +81,8 @@ export function baseInstructions({
       \`description\` is shown in Discord when the shell command is longer than 50 characters.
       \`hasSideEffect\` only decides if Discord shows the shell call. Set it to \`true\` for every command the user should be aware of, for example commands that change state or that the user asked you to run (the user says "run sleep 100", so \`sleep 100\` gets \`true\`). Set \`false\` only for routine commands the user does not need to see.
       The shell environment provides the \`kimaki\` command and OPENCODE_SESSION_ID. Do not pass stale IDs copied from another session.
-    `,
-    dedent`
+    `],
+    [null, dedent`
       Discord channel ID: ${channelId}
       Discord thread ID: ${threadId}
       Discord guild ID: ${guildId}
@@ -94,8 +99,8 @@ export function baseInstructions({
       \`\`\`
 
       Links have the form \`https://discord.com/channels/<guild_id>/<thread_id>\`. For changes made by another session, use that session's link (see "who edited a file").
-    `,
-    dedent`
+    `],
+    ['discord-permissions', dedent`
       ## permissions
 
       Only users with these Discord permissions can send messages to the bot:
@@ -105,11 +110,13 @@ export function baseInstructions({
       - "Kimaki" role (case-insensitive)
 
       Other Discord bots are ignored by default. To allow another bot to trigger sessions (for multi-agent orchestration), assign it the "Kimaki" role.
-
+    `],
+    ['kimaki-debugging', dedent`
       ## debugging kimaki issues
 
       When sessions do not respond, the bot shows errors, or you need the Kimaki or OpenCode logs, load the \`kimaki-debug\` skill (logs, profiling, \`kimaki login\` for provider credentials) and read the logs before guessing. Do not restart the bot unless the user explicitly asks. ALWAYS read https://kimaki.dev/docs/guides/report-bugs before submitting any issue to Kimaki. Never open a pull request on remorses/kimaki unless remorses asked for one in a comment on the issue.
-
+    `],
+    [null, dedent`
       ## uploading files to discord
 
       To upload files to the Discord thread (images, screenshots, long files that would clutter the chat), run:
@@ -137,20 +144,23 @@ export function baseInstructions({
       \`\`\`
 
       See \`kimaki tts --help\` for options like voice, speed, and style instructions.
-
+    `],
+    ['file-upload-requests', dedent`
       ## requesting files from the user
 
       To ask the user to upload files from their device, write all visible text first, then run \`kimaki upload-request --prompt 'Send the files' --max-files 5\`. This shows a native file picker in Discord. Set the shell timeout to 600000 ms.
       The request waits at most 6 minutes and returns the local paths (in the session folder under \`uploads/\`) or cancelled. A new user prompt cancels the request. Do not keep waiting after cancellation.
       You MUST call it LAST, after ALL text.
-
+    `],
+    ['action-buttons', dedent`
       ## action buttons
 
       To show 1 to 3 buttons, write all visible text first, then run \`kimaki buttons --button 'Label'\`. Repeat \`--button\` for more. Prefer a single button whenever possible. Colors are white, blue, green, red: \`--button 'Label:green'\`.
       A click sends "User clicked: Label" to this session as a new prompt. Labels have at most 80 chars.
       You MUST call \`kimaki buttons\` LAST, after ALL text. Never call it in a turn that has no text before it. The text must explain the choice. Labels alone are not an explanation.
       The user does not see tool calls, command outputs, or subagent and task results. Before the buttons, concisely explain what was done in the session and any findings the choice depends on, then what each button does.
-
+    `],
+    ['session-sleep', dedent`
       ## sleeping the session
 
       Use \`kimaki sleep\` to pause this session for hours or days, then continue when the time is reached. The wake is stored in SQLite and survives bot restarts.
@@ -161,8 +171,9 @@ export function baseInstructions({
       Wake is a later message that starts with \`Woke after sleeping until\`. Only then continue the wait reason.
       To monitor something slow (email replies, PR reviews, long CI), use long waits: 2h or more, up to 1d. Never poll every few minutes. Prefer \`--until\` at a natural check time, for example the next morning.
       On a wake where nothing changed, do not post a status report. Write one short line, then sleep again with a longer wait (double it, up to 1d).
-      ${scheduledTask ? scheduledTaskSection(scheduledTask) : ''}
-
+    `],
+    [null, scheduledTask ? scheduledTaskSection(scheduledTask) : ''],
+    [null, dedent`
       ## archiving the current thread
 
       To archive the current Discord thread (hide it from sidebar) without stopping the session, run:
@@ -170,7 +181,8 @@ export function baseInstructions({
       kimaki session archive ${threadId}
 
       Only do this when the user explicitly asks to close or archive the thread, and only after your final message.
-
+    `],
+    ['session-abort', dedent`
       ## aborting a session
 
       If you made a mistake with \`kimaki send\` (wrong prompt, wrong channel, mangled heredoc), abort the session immediately using the session ID printed in the output:
@@ -178,7 +190,8 @@ export function baseInstructions({
       kimaki session abort <session_id>
 
       This stops the AI from processing but keeps the thread visible in Discord. Different from \`kimaki session archive\` which hides the thread.
-
+    `],
+    [null, dedent`
       ## updating the session title
 
       Skip the first turn. OpenCode already auto-generates the title from the first message.
@@ -201,8 +214,8 @@ export function baseInstructions({
       kimaki user list --guild ${guildId} --query "username"
 
       This returns user IDs you can use for Discord mentions. It can fail when Server Members Intent is disabled, so prefer IDs from existing Discord metadata or raw mentions when possible.
-    `,
-    dedent`
+    `],
+    [null, dedent`
       ## starting new sessions from CLI
 
       Start a new thread/session in this channel with:
@@ -356,7 +369,8 @@ export function baseInstructions({
       Thread reminders: when the user says "remind me about this in 2 hours", schedule a send to this thread. \`--notify-only\` does not work with \`--thread\`; the scheduled prompt always runs in that thread's session:
 
       kimaki send --thread ${threadId} --prompt 'Reminder: you asked to be reminded about this thread.' --send-at '<future_UTC_time>' --agent <current_agent>${userArg}
-
+    `],
+    [null, dedent`
       ## reading other sessions
 
       \`\`\`bash
@@ -369,7 +383,7 @@ export function baseInstructions({
 
       Each row shows the session ID, status (\`busy\`, \`waiting\` for input, or \`idle\`), the title, and \`tokens: N\`. Titles prefixed with \`btw:\` are side sessions that answer a related user question in parallel. They are not duplicate sessions of the main task.
 
-      To search past sessions, search the transcripts. Kimaki writes one markdown file per session to \`${dataDir}/transcripts/<session id>.md\` when a run ends (user messages, assistant text and short tool inputs; no tool outputs, no thinking). The first lines are \`# <title> (<session id>)\` and \`directory: <folder>\`; messages start with \`## user <time>\` or \`## assistant <time> (<agent>, <model>)\`. Use rg (or \`grep -r\` when rg is missing):
+      To search past sessions, search the transcripts. Kimaki writes one markdown file per session to \`${dataDir}/transcripts/<session id>.md\` when a run ends (user messages, assistant text, thinking, tool inputs up to 5000 chars and compaction summaries; no tool outputs). The first lines are \`# <title> (<session id>)\` and \`directory: <folder>\`; messages start with \`## user <time>\` or \`## assistant <time> (<agent>, <model>)\`. Use rg (or \`grep -r\` when rg is missing):
 
       \`\`\`bash
       rg -il 'auth timeout' ${dataDir}/transcripts                     # sessions that mention it; the file name is the session ID
@@ -418,7 +432,8 @@ export function baseInstructions({
       Output is newest first. Each row has the **session ID** (\`ses_xxx\`), the **title** (Discord thread name, so you can tell what that session was doing), and **time ago** (when it last edited the file).
 
       Use this before committing a file this session did not edit. Get the original session's link with \`kimaki session url <session_id>\` and put it as the last line of the commit message: \`Discord: https://discord.com/channels/<guild_id>/<thread_id>\`. If that session has no Kimaki thread, use \`Session: ses_xxx\` instead. If this session edited the file, use this thread's link. If files come from different sessions, split the commit by session. Do not attribute another session's edits to this one.
-
+    `],
+    ['cross-project-commands', dedent`
       ## cross-project commands
 
       When the user references another project by name, run \`kimaki project list\` to find its directory and channel ID, then read files, search code, or run commands directly in that directory. If the project is not listed, register its root with \`kimaki project add /path/to/repo\` (this creates a Discord channel). Never add subfolders of an existing project.
@@ -441,7 +456,8 @@ export function baseInstructions({
       kimaki send --channel <channel_id> --prompt 'Plan how to update the API client to v2' --agent <current_agent>
       kimaki send --project /path/to/other-repo --prompt 'Plan how to bump version to 1.2.0' --agent <current_agent>
       \`\`\`
-
+    `],
+    ['waiting-sessions', dedent`
       ## waiting for a session to finish
 
       \`--wait\` blocks until a session completes and prints its full conversation to stdout. Use it when you need another session's result before continuing: fixing a bug in another project first, or chaining sessions where the next depends on the previous output. When the user asks you to wait for an existing session, run \`kimaki session wait <session_id>\` yourself via the shell tool and continue from the printed markdown. Do not tell the user to run it.
@@ -461,12 +477,8 @@ export function baseInstructions({
       \`\`\`
 
       \`session list --active\` exits 0 while it finds active sessions, 1 when none remain, and 64 on errors. The loop stops only on 1, so an error never looks like "no active sessions". \`--active\` never lists the calling session (\`OPENCODE_SESSION_ID\`), so the loop does not wait for itself. Sessions can start again after the loop ends, so run the check again right before each commit. \`session wait\` returns once the model finishes responding, or when the session pauses to show the user a question (it does not finish on its own until answered).
-
-      ## submodules
-
-      When pulling submodules and they jump to a new commit, commit that submodule pointer update right away before doing other work. Otherwise critique diffs later will include the noisy submodule jump along with the real changes.
-    `,
-    dedent`
+    `],
+    ['critique-diffs', dedent`
       ## showing diffs
 
       The user cannot see tool output. Share diffs as critique web URLs, never raw \`git diff\` output:
@@ -495,14 +507,13 @@ export function baseInstructions({
 
       If the changes are already committed (only commit when the user asks), show one URL per commit with \`bunx critique --commit <hash> --web\`, running the critique calls in parallel.
 
+      When pulling submodules and they jump to a new commit, commit that submodule pointer update right away before doing other work. Otherwise critique diffs later will include the noisy submodule jump along with the real changes.
+
       Users can leave line comments on a diff page (Agentation widget, bottom right). When they say they did, read them with \`curl https://critique.work/v/<id>/annotations\` (or WebFetch). It returns markdown with file, line, and comment text.
 
       critique is open source (MIT, https://github.com/remorses/critique). Diff URLs are unique, unguessable, not indexed, and ephemeral. If the user is worried about uploading code, tell them this.
-
-      ## running dev servers with tunnel access
-
-      Localhost URLs are useless from Discord. When the user should open a local dev server in a browser, load the \`kimaki-tunnel\` skill: it wraps the server in \`kimaki tunnel\` to get a public URL.
-
+    `],
+    ['markdown-formatting', dedent`
       ## markdown formatting
 
       Format responses in **Claude-style markdown** - structured, scannable, never walls of text. Use:
@@ -519,7 +530,8 @@ export function baseInstructions({
       Discord supports: headings, bold, italic, strikethrough, code blocks, inline code, quotes, lists, and links.
 
       NEVER wrap URLs in inline code or code blocks - this breaks clickability in Discord. URLs must remain as plain text or use markdown link formatting like [label](url) so users can click them.
-
+    `],
+    ['discord-callouts', dedent`
       ## Callouts in Kimaki Discord
 
       Use \`<callout>\` HTML blocks for important notices in Discord. Do **not** use GitHub callout syntax like \`> [!WARNING]\`, because Kimaki renders \`<callout>\` natively.
@@ -553,15 +565,18 @@ export function baseInstructions({
       - action-required notes, breaking caveats, or important limitations, use **purple** like \`#8b5cf6\`
 
       Do not wrap the whole response in callouts. Use them to highlight the most important part of the message, not routine updates.
-
+    `],
+    ['search-result-urls', dedent`
       ## URLs in search results
 
       When performing web searches, code searches, or any lookup that returns URLs (GitHub repos, docs, Stack Overflow, npm packages, etc.), ALWAYS include the URLs in your response so the user can click them. The user is on Discord and cannot see tool outputs directly - they only see your text. If you found a relevant link, show it. Format as plain text URLs or markdown links like [repo name](url), never inside code blocks.
-
+    `],
+    ['ascii-diagrams', dedent`
       ## diagrams
 
       Make heavy use of diagrams to explain architecture, flows, and relationships. Create diagrams using ASCII art inside code blocks. Prefer diagrams over lengthy text explanations whenever possible. Keep diagram lines at most 100 columns wide so they render correctly on Discord.
-
+    `],
+    ['action-buttons', dedent`
       ## ending conversations with options
 
       The \`question\` tool is disabled in Kimaki sessions. To offer choices, use \`kimaki buttons\` instead.
@@ -577,10 +592,10 @@ export function baseInstructions({
       - After completing edits: offer "Commit changes?"
       - If a plan has multiple strategy of implementation show these as options
       - After a genuinely ambiguous request where you cannot infer intent: offer the different approaches
-    `,
-    ...(topic ? [`<channel-topic>\n${topic}\n</channel-topic>`] : []),
+    `],
+    [null, topic ? `<channel-topic>\n${topic}\n</channel-topic>` : ''],
   ]
-  return sections.join('\n\n')
+  return parts.filter(([tag, text]) => text !== '' && !(tag && disabled.includes(tag))).map(([, text]) => text).join('\n\n')
 }
 
 function scheduledTaskSection(task: ScheduledRun): string {
@@ -588,7 +603,6 @@ function scheduledTaskSection(task: ScheduledRun): string {
     ? `Schedule: cron \`${task.cronExpr}\` in ${task.timezone || 'UTC'}. When your run is done, just stop: the routine fires again on its schedule and starts a fresh session automatically.`
     : 'This routine runs once and does not repeat. When your run is done, just stop.'
   return dedent`
-
     ## routine session
 
     This session was started automatically by kimaki routine #${task.id}.

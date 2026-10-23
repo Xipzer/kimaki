@@ -8,10 +8,10 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
 import dedent from 'string-dedent'
-import type { Goke } from 'goke'
+import { wrapJsonSchema, type Goke } from 'goke'
 
 import { distCliEntry, writeAutostartScript } from '../autostart.ts'
-import { parseDisabledSkills } from '../builtin-skills.ts'
+import { parseDisabledPromptSections, parseDisabledSkills, PROMPT_SECTIONS } from '../builtin-skills.ts'
 import { callBot, DEFAULT_LOCK_PORT, RESTART_EXIT_CODE, startLockServer } from '../lock-server.ts'
 import { parseDuration } from '../duration.ts'
 import { createLogger, setLogFile } from '../logger.ts'
@@ -92,6 +92,7 @@ export function registerStartCommand(cli: Goke) {
     .option('--message-tool', 'Discord shows only a concise reply the agent sends with a send_message tool; plain text stays visible in the OpenCode TUI')
     .option('--voice <name>', 'Voice of voice calls, saved for later starts (e.g. cove, juniper, sol). "default" resets it')
     .option('--disable-skills <list>', 'Built-in Kimaki skills to turn off: "all" or a comma separated list (kimaki-debug,kimaki-tunnel)')
+    .option('--disable-prompt <section>', wrapJsonSchema<string[]>({ type: 'array', items: { type: 'string' }, description: `System prompt section to remove from new sessions (repeatable): ${PROMPT_SECTIONS.join(', ')}` }))
     .option('--no-analytics', 'Disable anonymous usage analytics (same as KIMAKI_STRADA_ENABLED=0)')
     .option('--if-not-running', 'Start only if no bot runs; never stop the running one (used by autostart)')
     .action(async (options) => {
@@ -130,6 +131,8 @@ export function registerStartCommand(cli: Goke) {
       const urls = gatewayUrlsFromEnv()
       const disabledSkills = parseDisabledSkills(options.disableSkills)
       if (disabledSkills instanceof Error) fail(disabledSkills)
+      const disabledPrompt = parseDisabledPromptSections(options.disablePrompt)
+      if (disabledPrompt instanceof Error) fail(disabledPrompt)
       const machine = options.machineName ?? defaultMachineName()
       // Validated before the lock, so a typo never stops the running bot. null: reset to the default.
       const voice = (() => {
@@ -220,6 +223,7 @@ export function registerStartCommand(cli: Goke) {
         autoWorktrees: Boolean(options.worktrees),
         allowAllUsers: Boolean(options.allowAllUsers),
         disabledSkills,
+        disabledPrompt,
         messageTool: Boolean(options.messageTool),
       })
       if (bot instanceof Error) failStartup(bot)
@@ -250,6 +254,7 @@ export function registerStartCommand(cli: Goke) {
           ...(options.worktrees ? ['--worktrees'] : []),
           ...(options.allowAllUsers ? ['--allow-all-users'] : []),
           ...(options.disableSkills ? ['--disable-skills', options.disableSkills] : []),
+          ...disabledPrompt.flatMap((section) => ['--disable-prompt', section]),
           ...(options.messageTool ? ['--message-tool'] : []),
           ...(options.noAnalytics ? ['--no-analytics'] : []),
           ...(options.machineName ? ['--machine-name', options.machineName] : []),

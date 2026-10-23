@@ -1,6 +1,6 @@
 ---
 name: kimaki-tunnel
-description: Share a local dev server with the user through a public URL. Use when the user should open a localhost app in a browser, test a webhook or OAuth callback against a local server, or preview a dev server from Discord. Runs `kimaki tunnel` in a named background tuistory session. ALWAYS load before starting a dev server the user must open. Only for Kimaki Discord sessions.
+description: Share a local dev server with the user through a public URL. Localhost URLs are useless from Discord. Use when the user should open a localhost app in a browser, test a webhook or OAuth callback against a local server, or preview a dev server from Discord. Runs `kimaki tunnel` in a named background tuistory session. ALWAYS load before starting a dev server the user must open. Only for Kimaki Discord sessions.
 ---
 
 # Dev servers with tunnel access

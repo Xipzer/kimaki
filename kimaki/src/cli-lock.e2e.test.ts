@@ -379,6 +379,7 @@ test('CLI help documents the supported P7 commands', async () => {
       --message-tool                Discord shows only a concise reply the agent sends with a send_message tool; plain text stays visible in the OpenCode TUI
       --voice <name>                Voice of voice calls, saved for later starts (e.g. cove, juniper, sol). "default" resets it
       --disable-skills <list>       Built-in Kimaki skills to turn off: "all" or a comma separated list (kimaki-debug,kimaki-tunnel)
+      --disable-prompt <section>    System prompt section to remove from new sessions (repeatable): discord-permissions, kimaki-debugging, file-upload-requests, action-buttons, session-sleep, session-abort, cross-project-commands, waiting-sessions, critique-diffs, markdown-formatting, discord-callouts, search-result-urls, ascii-diagrams
       --no-analytics                Disable anonymous usage analytics (same as KIMAKI_STRADA_ENABLED=0)
       --if-not-running              Start only if no bot runs; never stop the running one (used by autostart)
       -h, --help                    Display this message

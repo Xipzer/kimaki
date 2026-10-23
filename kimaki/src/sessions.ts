@@ -204,6 +204,7 @@ async function putInstructions(
     agents,
     parentSessionId,
     scheduledTask,
+    disabled: bot.disabledPrompt,
   })
   const put = await oc(bot, 'instructions.entry.put', (client) =>
     client.session.instructions.entry.put({ sessionID: sessionId, key: INSTRUCTION_KEY, value }),

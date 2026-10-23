@@ -53,6 +53,39 @@ export function parseDisabledSkills(value: string | undefined): ConfigError | Bu
   return items as BuiltinSkillId[]
 }
 
+// Static parts of the session instructions (system-prompt.ts) that
+// `kimaki --disable-prompt <section>` removes. Here, not in system-prompt.ts,
+// so the CLI help can list them without loading zod.
+export const PROMPT_SECTIONS = [
+  'discord-permissions',
+  'kimaki-debugging',
+  'file-upload-requests',
+  'action-buttons',
+  'session-sleep',
+  'session-abort',
+  'cross-project-commands',
+  'waiting-sessions',
+  'critique-diffs',
+  'markdown-formatting',
+  'discord-callouts',
+  'search-result-urls',
+  'ascii-diagrams',
+] as const
+
+export type PromptSection = (typeof PROMPT_SECTIONS)[number]
+
+function isPromptSection(item: string): item is PromptSection {
+  return PROMPT_SECTIONS.some((section) => section === item)
+}
+
+// Repeatable flag; each value can also be a comma separated list.
+export function parseDisabledPromptSections(values: readonly string[] | undefined): ConfigError | PromptSection[] {
+  const items = (values ?? []).flatMap((value) => value.split(',')).map((item) => item.trim()).filter(Boolean)
+  const unknown = items.filter((item) => !isPromptSection(item))
+  if (unknown.length > 0) return new ConfigError({ reason: `Unknown prompt section ${unknown.join(', ')}. Choose from: ${PROMPT_SECTIONS.join(', ')}` })
+  return items.filter(isPromptSection)
+}
+
 // OpenCode hides a skill from the model and the skill tool when its permission is denied.
 export function disabledSkillRules(disabled: readonly string[]) {
   return disabled.map((id) => ({ action: 'skill', resource: id, effect: 'deny' }) as const)
