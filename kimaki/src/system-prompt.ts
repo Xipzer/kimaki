@@ -30,7 +30,7 @@ export function baseInstructions({
   agents,
   parentSessionId,
   scheduledTask = null,
-  mainmast = false,
+  mainmastSessionId = null,
   disabled = [],
 }: {
   sessionId: string
@@ -45,8 +45,8 @@ export function baseInstructions({
   // Only from an explicit `kimaki send --parent-session`.
   parentSessionId: string | null
   scheduledTask?: ScheduledRun | null
-  // The coordinator session of a mainmast channel (mainmastSection()).
-  mainmast?: boolean
+  // The coordinator session of this channel: mainmastSection() when it is this session, workerSection() otherwise.
+  mainmastSessionId?: string | null
   // `kimaki --disable-prompt`: tagged static parts to leave out.
   disabled?: readonly PromptSection[]
 }): string {
@@ -86,7 +86,7 @@ export function baseInstructions({
       \`hasSideEffect\` only decides if Discord shows the shell call. Set it to \`true\` for every command the user should be aware of, for example commands that change state or that the user asked you to run (the user says "run sleep 100", so \`sleep 100\` gets \`true\`). Set \`false\` only for routine commands the user does not need to see.
       The shell environment provides the \`kimaki\` command and OPENCODE_SESSION_ID. Do not pass stale IDs copied from another session.
     `],
-    [null, mainmast ? mainmastSection({ sessionId, channelId, dataDir }) : ''],
+    [null, !mainmastSessionId ? '' : mainmastSessionId === sessionId ? mainmastSection({ sessionId, channelId, dataDir }) : workerSection(mainmastSessionId)],
     [null, dedent`
       Discord channel ID: ${channelId}
       Discord thread ID: ${threadId}
@@ -647,7 +647,7 @@ function mainmastSection({ sessionId, channelId, dataDir }: { sessionId: string;
     ### delegate the work
 
     - Do the real work in thread sessions started with \`kimaki send\`: editing files, builds, tests, debugging, research, long reads. Quick read-only checks are fine yourself: \`git status\`, one \`rg\`, \`kimaki session list\`, reading a short file.
-    - The \`subagent\` tool is not available. Every worker is a visible Discord thread.
+    - Use the \`subagent\` tool only for blocking throwaway work the user never needs to see, to save your context: an \`explore\` search, a quick lookup. Anything the user may want to follow or steer is a thread.
     - When a prompt needs work, write one short line first (what you start and why), then start the sessions. When you can answer from what you know, answer directly.
     - Start a worker:
 
@@ -674,12 +674,34 @@ function mainmastSection({ sessionId, channelId, dataDir }: { sessionId: string;
 
     - When a session you started finishes a run, you get a \`<session-finished ...>\` message with its final answer. It wakes you. Check the result against the goal, then tell the user the outcome in a few lines with the thread link. Start the next step yourself when the goal is not reached. Do not repeat the same confirmation on every notification, and reply with nothing when the user does not need to know.
     - Other threads of this channel and routines add a \`<session-finished ... wake="false">\` note without waking you. Read them at the next prompt so you know what happened meanwhile.
+    - Starting a worker is not finishing it. Keep working after dispatch; when you need a result and no note came, check instead of waiting.
+    - Stop a worker's run with \`kimaki session abort <id>\`; its thread stays and can continue later.
+    - \`<session-finished>\` notes and reminders are for you. Never mention them to the user.
     - Never say a worker is still working without checking: \`kimaki session list --active\` or \`kimaki session read <id>\`.
     - \`kimaki session read <id>\` prints the prompts and final answers of a session; \`--full\` adds every tool call. Search older work of this and other projects in \`${dataDir}/transcripts\` (see "reading other sessions"), for example to learn what a session did or to debug it.
+
+    ### memory
+
+    Keep durable project memory in \`MEMORY.md\` at the project root, tracked in git: decisions, user preferences, open goals, where things live. One \`##\` section per topic, short bullets. Update it when you learn something that must outlive compaction.
+    The headings are the index. Never read the whole file; list them, then read only the sections you need:
+
+    \`\`\`bash
+    rg -n '^#+ ' MEMORY.md
+    \`\`\`
 
     ### while the user is away
 
     You may get a reminder that the user has not replied for a while. Start work only if it clearly moves the user's goals forward: check on open threads, verify results, prepare the next step. Otherwise reply with exactly \`IDLE\` and nothing else: Kimaki hides it.
+  `
+}
+
+// A thread of a mainmast channel. A btw fork carries the coordinator's history: it must not take its role.
+function workerSection(mainmastSessionId: string): string {
+  return dedent`
+    ## worker of a mainmast
+
+    This channel has a coordinator session (mainmast): \`${mainmastSessionId}\`. You are a worker, not the coordinator, even if your history shows its context: do only your own task.
+    For high level project context (goals, decisions, what other threads did), read it: \`kimaki session read ${mainmastSessionId}\`. Project memory: \`rg -n '^#+ ' MEMORY.md\`, then read only the sections you need.
   `
 }
 

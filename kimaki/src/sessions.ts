@@ -206,8 +206,8 @@ async function putInstructions(
     agents,
     parentSessionId,
     scheduledTask,
-    // A conversation that is its project channel is a mainmast.
-    mainmast: conversation.id === channel.id,
+    // A conversation that is its project channel is the mainmast; other threads there are its workers.
+    mainmastSessionId: conversation.id === channel.id ? sessionId : (bot.store.getState().roots[channel.id] ?? null),
     disabled: bot.disabledPrompt,
   })
   const put = await oc(bot, 'instructions.entry.put', (client) =>
@@ -501,14 +501,6 @@ export async function startSession(
   return { threadId: thread.id, sessionId: session.id }
 }
 
-// A mainmast delegates through visible `kimaki send` threads, never hidden subagents.
-const NO_SUBAGENT_TOOL = { action: 'subagent', resource: '*', effect: 'deny' } as const
-
-// A thread forked from a mainmast is a worker again: it may use subagents.
-function workerRules(rules: PermissionRules): PermissionRules {
-  return rules.filter((rule) => !(rule.action === NO_SUBAGENT_TOOL.action && rule.resource === NO_SUBAGENT_TOOL.resource && rule.effect === NO_SUBAGENT_TOOL.effect))
-}
-
 // The first message of a mainmast channel: one long session that lives in the
 // channel itself, bound like a thread with the channel ID as its conversation.
 export async function startMainmast(
@@ -545,7 +537,7 @@ export async function startMainmast(
       location: { directory },
       ...(chosen.model && { model: chosen.model }),
       ...(chosen.agent && { agent: chosen.agent }),
-      permissions: [NO_QUESTION_TOOL, NO_SUBAGENT_TOOL, ...disabledSkillRules(bot.disabledSkills)],
+      permissions: [NO_QUESTION_TOOL, ...disabledSkillRules(bot.disabledSkills)],
       metadata: { kimaki: { threadId: channel.id, channelId: channel.id, source: 'discord', mainmast: timers, ...cliContext(bot) } },
     }),
   )
@@ -635,7 +627,7 @@ async function adoptSession(
     const marker = scheduledTask ? { ...rest, taskId: scheduledTask.id, task: scheduledTask } : rest
     const kimaki = { ...marker, source: scheduledTask ? 'task' : 'discord', ...cliContext(bot), threadId: thread.id, channelId: channel.id }
     // A session with its own question rule (a fork, or --permission) keeps it.
-    const rules = workerRules(session.permissions ?? [])
+    const rules = session.permissions ?? []
     const permissions = rules.some((rule) => rule.action === 'question') ? rules : [NO_QUESTION_TOOL, ...disabledSkillRules(bot.disabledSkills), ...rules]
     const marked = await oc(bot, 'session.update', (client) =>
       client.session.update({ sessionID: sessionId, metadata: { ...session.metadata, kimaki }, permissions }),
@@ -872,9 +864,7 @@ export async function forkBtw(
 
   const kimaki = { threadId: thread.id, channelId: project.channelId, source: 'discord', ...cliContext(bot) }
   const fromMainmast = !source.isThread()
-  const marked = await oc(bot, 'session.update', (client) =>
-    client.session.update({ sessionID: forked.id, metadata: { kimaki }, ...(fromMainmast && { permissions: workerRules(forked.permissions ?? []) }) }),
-  )
+  const marked = await oc(bot, 'session.update', (client) => client.session.update({ sessionID: forked.id, metadata: { kimaki } }))
   if (marked instanceof Error) return marked
   // A fork of a thread keeps its copied instructions (prompt cache); a fork of a mainmast gets worker ones.
   if (fromMainmast) {

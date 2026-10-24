@@ -30,10 +30,11 @@ Mainmast is on by default. Start Kimaki with `--no-mainmast` to go back to one n
               <session-finished> note ──▶ wakes the mainmast ──▶ reply in the channel
 ```
 
-- The mainmast **delegates**: edits, builds, tests and research run in visible threads, never in hidden subagents. Its own context stays small, so the session can last for weeks.
+- The mainmast **delegates**: edits, builds, tests and research run in visible threads you can talk to. Hidden subagents are only for quick throwaway lookups. Its own context stays small, so the session can last for weeks.
 - When a thread it started finishes, the mainmast **wakes up** with the final answer and tells you the outcome with a link.
 - Other threads of the channel and routines leave a **silent note**. The mainmast reads it at your next message, so it always knows what happened.
 - Write in a worker thread to steer that worker directly, like any Kimaki thread.
+- The mainmast keeps project memory in `MEMORY.md` (tracked in git, one section per topic). Workers read it and the mainmast session for context.
 
 ## Commands
 

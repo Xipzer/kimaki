@@ -172,7 +172,7 @@ test('another thread of the channel leaves a silent note for the next prompt', a
   `)
 })
 
-test('a btw fork of the mainmast is a worker: no coordinator timers, subagents allowed', async () => {
+test('a btw fork of the mainmast is a worker: no coordinator timers', async () => {
   const { discord, channelId } = twin
   const before = (await discord.channel(channelId).getThreads()).length
   await discord.channel(channelId).user(TEST_USER_ID).sendMessage({ content: 'Why that choice btw-marker. btw' })
@@ -183,7 +183,7 @@ test('a btw fork of the mainmast is a worker: no coordinator timers, subagents a
   await waitForFooter({ discord, threadId: thread.id })
   const client = await server.client()
   const fork = await client.session.get({ sessionID: bot.store.getState().roots[thread.id]! })
-  expect({ mainmast: Reflect.get(Object(fork.metadata?.['kimaki']), 'mainmast'), subagentDenied: fork.permissions?.some((rule) => rule.action === 'subagent') ?? false }).toEqual({ mainmast: undefined, subagentDenied: false })
+  expect(Reflect.get(Object(fork.metadata?.['kimaki']), 'mainmast')).toBeUndefined()
 })
 
 test('the mainmast survives a bot restart; /new-mainmast starts a fresh one', async () => {

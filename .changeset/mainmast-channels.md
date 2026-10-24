@@ -14,7 +14,8 @@ Add **mainmast** channels, the new default. A project channel is now a chat with
 ```
 
 - Threads started with `kimaki send --parent-session <mainmast>` wake the mainmast with their final answer when a run ends. Other threads of the channel and routines leave a silent note for the next prompt.
-- The mainmast cannot use the `subagent` tool: every worker is a visible thread you can talk to.
+- Every worker is a visible thread you can talk to. The mainmast uses the `subagent` tool only for quick throwaway lookups.
+- Workers read the mainmast session for project context. The mainmast keeps memory in a tracked `MEMORY.md`, read through its headings.
 - Halfway through the OpenCode `warming` window (30 minutes without warming) an idle mainmast is asked for useful work. With warming on, it is compacted when the window ends, while the cache is still warm.
 - `/new-mainmast` starts a fresh mainmast in the channel.
 - Onboarding answers in the `#kimaki` channel instead of a thread.

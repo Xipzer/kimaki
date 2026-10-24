@@ -3,11 +3,12 @@
 - User, 2026-10-24: "use a channel to write text prompts. the agent replies there directly without threads."
 - User, 2026-10-24: "this will become the new default. users can disable if they want." and "all channels. user can opt out completely via cli flag."
 - User, 2026-10-24: "lets use default opencode warm. do the auto summary only for kimaki sessions. only in mainmast mode. lets do it only for mainmast session itself for now."
-- User, 2026-10-24: "lets disable the subagent tool then for mainmast" and "only visible threads".
+- User, 2026-10-24: "lets disable the subagent tool then for mainmast" and "only visible threads". Later reversed: "lets allow subagent tool ... only use it for blocking tasks like explore. or sessions to be discarded".
+- User, 2026-10-24: workers read the mainmast session for high level project context; the mainmast keeps memory in a tracked `MEMORY.md` with sections, read through a `rg` of its headings.
 - User, 2026-10-24: "for waking copy what opencode itself does."
 - User, 2026-10-24: "automatically tell mainmast agent: user didnt reply ... at 1/2 of the warm time ... if not reply with nothing."
 - Every project channel holds one long session (`roots[channelId]`, `thread_sessions` row keyed by the channel ID). `kimaki --no-mainmast` restores one thread per message.
-- Workers are `kimaki send` threads, not `subagent` children: they reuse all thread code, work in other projects and worktrees, and users can talk to them. The mainmast session denies `subagent:*`.
+- Workers are `kimaki send` threads, not `subagent` children: they reuse all thread code, work in other projects and worktrees, and users can talk to them. The `subagent` tool stays allowed, only for blocking throwaway work the user never sees (explore, lookups).
 - A finished thread run sends the mainmast a synthetic `<session-finished>` item like OpenCode's subagent completion. `resume: true` only when the mainmast started it (`--parent-session`); threads of the channel and routines get `resume: false`.
 - Warming is OpenCode's own `warming` config. Kimaki never writes it (writing changed every TUI session and reloaded OpenCode); it reads it at mainmast creation for the timers.
 - (agent) A nudge with nothing to do answers `IDLE`, which the reducer hides: "reply with nothing" was not reliable.
