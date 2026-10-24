@@ -15,7 +15,8 @@
 - (agent) `/new-mainmast` unbinds the channel; the old session stays resumable.
 - (agent) The plugin nudges the mainmast at half the warming window after the last user prompt, and compacts it when the window ends if the last request used at least 20% of the context.
 - (agent) `kimaki session read` defaults to prompts and final answers; `--full` shows tool calls.
+- User, 2026-10-24: "i don't think this is worth it. we should just make a plugin inject mainmast instructions so opencode will handle this automatically." Replaced the bot rewriting the instructions entry once per bot run. The coordinator and worker role texts come from the `kimaki` plugin, derived from markers (coordinator: `threadId === channelId`; worker: `parentSessionId` or fork chain reaches a coordinator). OpenCode has no plugin instruction source, so the text is a synthetic message stored before a user prompt when the latest one is missing or stale (like OpenCode's plan plugin); a wake with no prompt gets it on its last user message for that request only.
 - Why: the coordinator keeps the whole picture in a small context; every piece of work is a visible thread.
 - Lost: hidden subagent parallelism in the mainmast; threads per channel message by default.
 - Open: per-session warming (opencode#58163); notes from sessions on other machines (TODO in `mainmast.ts`); compacting worker sessions.
-- Lives in: `kimaki/src/mainmast.ts`, `kimaki/src/plugin/mainmast.ts`, `kimaki/src/sessions.ts` (`startMainmast`), `kimaki/src/ingress.ts`, `kimaki/src/mainmast.ts` (`mainmastTimers`), `kimaki/src/system-prompt.ts` (`mainmastSection`).
+- Lives in: `kimaki/src/mainmast.ts`, `kimaki/src/plugin/mainmast.ts`, `kimaki/src/sessions.ts` (`startMainmast`), `kimaki/src/ingress.ts`, `kimaki/src/mainmast.ts` (`mainmastTimers`), `kimaki/src/plugin/mainmast.ts` (`mainmastSection`, `registerMainmastRoles`).

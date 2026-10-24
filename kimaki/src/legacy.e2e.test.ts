@@ -13,7 +13,6 @@ import { afterAll, beforeAll, expect, test } from 'vitest'
 import type { BotHandle } from './main.ts'
 import { LEGACY_DB_FILE } from './migrations.ts'
 import { createApi } from './project.ts'
-import { INSTRUCTION_KEY } from './system-prompt.ts'
 import {
   startOpencodeTestServer,
   startTestBot,
@@ -30,8 +29,6 @@ let server: OpencodeTestServer
 let twin: TestTwin
 let bot: BotHandle
 let dataDir: string
-// The V1 thread and session the first test adopts.
-let adoptedThread: { threadId: string; sessionId: string } | undefined
 
 beforeAll(async () => {
   dataDir = tempDataDir()
@@ -105,32 +102,4 @@ test('bot starts on a V1 database and answers in an old thread with the old sess
   })
   const entries = await client.session.instructions.entry.list({ sessionID: session.id })
   expect(entries.length).toBe(1)
-  adoptedThread = { threadId: thread.id, sessionId: session.id }
-}, 30_000)
-
-test('after a restart the next input rewrites instructions written by older prompt code', async () => {
-  const { discord } = twin
-  const { threadId, sessionId } = adoptedThread!
-  const client = await server.client()
-  await client.session.instructions.entry.put({ sessionID: sessionId, key: INSTRUCTION_KEY, value: 'instructions of an older Kimaki' })
-  await bot.stop()
-  bot = await startTestBot({ dataDir, twin, server, saveTwinCredentials: false })
-
-  await discord.thread(threadId).user(TEST_USER_ID).sendMessage({ content: 'first message after the restart' })
-  await waitForFooter({ discord, threadId, count: 2 })
-  expect(await discord.thread(threadId).text()).toMatchInlineSnapshot(`
-    "--- from: user (tommy)
-    hello again after the upgrade
-    --- from: assistant (TestBot)
-    ok
-    -# *project ⋅ main ⋅ Ns ⋅ deterministic-v2*
-    --- from: user (tommy)
-    first message after the restart
-    --- from: assistant (TestBot)
-    ok
-    -# *project ⋅ main ⋅ Ns ⋅ deterministic-v2*"
-  `)
-  const entries = await client.session.instructions.entry.list({ sessionID: sessionId })
-  expect(entries.map((entry) => entry.key)).toEqual([INSTRUCTION_KEY])
-  expect(String(entries[0]!.value)).toContain(`kimaki upload-to-discord --session ${sessionId}`)
 }, 30_000)

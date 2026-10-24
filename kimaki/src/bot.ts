@@ -74,7 +74,7 @@ export type Bot = {
   allowAllUsers: boolean
   // Built-in skill ids (builtin-skills.ts) denied through the permissions of new sessions.
   disabledSkills: readonly string[]
-  // `kimaki --disable-prompt`: static instruction parts left out of the instructions entry.
+  // `kimaki --disable-prompt`: static instruction parts left out of new sessions.
   disabledPrompt: readonly PromptSection[]
   // Project channel messages go to one long coordinator session in the channel
   // (mainmast); off with `kimaki --no-mainmast`.

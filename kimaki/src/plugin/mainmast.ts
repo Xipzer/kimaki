@@ -1,3 +1,6 @@
+// Mainmast sessions in the OpenCode process: their role instructions (below)
+// and the timers of the coordinator.
+//
 // Timers of mainmast sessions (the coordinator of a mainmast channel), from
 // the `mainmast` field of the marker the bot writes at session.create:
 //
@@ -11,6 +14,8 @@
 // TODO: let the mainmast compact worker sessions too (they keep their full history now).
 
 import type { Plugin } from '@opencode/plugin'
+import type { SessionContext } from '@opencode/plugin/promise/session'
+import dedent from 'string-dedent'
 
 export const IDLE_NUDGE_SOURCE = 'kimaki-idle'
 // The whole answer of a nudge turn with nothing to do. The reducer drops it.
@@ -115,4 +120,170 @@ export async function registerMainmastTimers(ctx: Plugin.Context): Promise<() =>
     armed.clear()
     known.clear()
   }
+}
+
+// Role instructions of mainmast sessions, derived from markers only:
+//
+//   root Kimaki session ─▶ marker threadId === channelId?                 ─▶ coordinator
+//                      └─▶ parent chain (marker parentSessionId, fork
+//                          source) reaches a coordinator?                  ─▶ worker
+//
+// Here, not in the instructions entry the bot writes at session.create: that
+// entry is frozen, while OpenCode reloads this plugin when its code changes.
+// OpenCode has no instruction source for plugins, so the text is a synthetic
+// message, reconciled like its plan plugin (core/src/plugin/plan.ts):
+//
+//   user prompt ─▶ latest role text in the history missing (new session,
+//                  compaction) or stale (new plugin code)? ─▶ append it before the prompt
+//
+// It lands at the tail: the cached prompt prefix stays warm. A turn with no user
+// prompt (a <session-finished> wake after compaction) gets the text on its last
+// user message for that request only, until the next prompt stores it.
+
+const ROLE_HEAD = '<system-reminder>\n<kimaki-mainmast>'
+// Workers of workers, forks of forks: bounded against cycles.
+const MAX_PARENT_DEPTH = 10
+
+function roleText(body: string): string {
+  return [ROLE_HEAD, 'These instructions replace any earlier <kimaki-mainmast> block.', '', body, '</kimaki-mainmast>', '</system-reminder>'].join('\n')
+}
+
+type RoleSession = Awaited<ReturnType<Plugin.Context['session']['get']>>
+
+function markerString(session: RoleSession, key: string): string | null {
+  const kimaki = session.metadata?.['kimaki']
+  const value: unknown = kimaki && typeof kimaki === 'object' ? Reflect.get(kimaki, key) : null
+  return typeof value === 'string' ? value : null
+}
+
+function coordinatorChannel(session: RoleSession): string | null {
+  const channelId = markerString(session, 'channelId')
+  return channelId && markerString(session, 'threadId') === channelId ? channelId : null
+}
+
+function parentOf(session: RoleSession): string | undefined {
+  return markerString(session, 'parentSessionId') ?? session.fork?.sessionID
+}
+
+export async function registerMainmastRoles(ctx: Plugin.Context): Promise<void> {
+  // The role text this session must have, or null: TUI sessions, subagents, plain threads.
+  async function expected(sessionID: string): Promise<string | null> {
+    const session = await ctx.session.get({ sessionID }).catch(() => null)
+    if (!session || session.parentID || !markerString(session, 'threadId')) return null
+    const channelId = coordinatorChannel(session)
+    const dataDir = markerString(session, 'dataDir')
+    if (channelId) return dataDir ? roleText(mainmastSection({ sessionId: sessionID, channelId, dataDir })) : null
+    let parent = parentOf(session)
+    for (let depth = 0; parent && depth < MAX_PARENT_DEPTH; depth++) {
+      const info = await ctx.session.get({ sessionID: parent }).catch(() => null)
+      if (!info) return null
+      const coordinator = coordinatorChannel(info)
+      if (coordinator) return roleText(workerSection(coordinator))
+      parent = parentOf(info)
+    }
+    return null
+  }
+
+  await ctx.session.hook('prompt', async (event) => {
+    const text = await expected(event.sessionID)
+    if (!text) return
+    const history = await ctx.session.context({ sessionID: event.sessionID }).catch(() => null)
+    if (!history) return
+    const latest = history.findLast((message) => message.type === 'synthetic' && message.text.startsWith(ROLE_HEAD))
+    if (latest?.type === 'synthetic' && latest.text === text) return
+    // Plugins stay silent: a failed append is retried at the next prompt.
+    await ctx.session.synthetic({ sessionID: event.sessionID, text, delivery: event.delivery, resume: false }).catch(() => undefined)
+  })
+
+  // Every request kind gets the same messages, or the prompt cache misses (plugin/index.ts).
+  const shapeRequest = async (event: SessionContext) => {
+    const text = await expected(event.sessionID)
+    if (!text) return
+    const texts = event.messages.flatMap((message) => (message.role === 'user' ? message.content : []))
+      .flatMap((part) => (part.type === 'text' && part.text.startsWith(ROLE_HEAD) ? [part.text] : []))
+    if (texts.at(-1) === text) return
+    const last = event.messages.findLast((message) => message.role === 'user')
+    // TODO: insert a new Message like core/src/plugin/plan.ts once plugins can import OpenCode's Message class.
+    if (last) Array.prototype.push.call(last.content, { type: 'text', text })
+  }
+  await ctx.session.hook('context', shapeRequest)
+  await ctx.session.hook('compaction', shapeRequest)
+  await ctx.session.hook('generate', shapeRequest)
+}
+
+// The coordinator of a mainmast channel. Its best parts come from the Cursor
+// Projects coordinator prompt (https://gist.github.com/remorses/a1d0e56f439b0bc377e6cd952b6eb3ad):
+// delegate all work, acknowledge first, workers report short results with file
+// paths, never guess a worker's state, do not repeat confirmations.
+function mainmastSection({ sessionId, channelId, dataDir }: { sessionId: string; channelId: string; dataDir: string }): string {
+  return dedent`
+    ## mainmast: you coordinate this channel
+
+    You run directly in a Discord **channel**, not in a thread. This is one long session the user keeps coming back to, for weeks. Your job is to know what is going on in this project and to get work done through **thread sessions**, which the user can open and talk to. This session is meant to be **infinite**: it is compacted over and over, and every file you read or command output you see fills it up. Keep your context clean: it holds goals, decisions and results, not working details.
+
+    ### delegate the work
+
+    - Read files and the repo source yourself to understand how the project works and what it does, so you can answer the user and write good worker prompts. Not everything needs a worker.
+    - Delegate the work itself to child sessions, \`kimaki send\` threads or the \`subagent\` tool: editing files, builds, tests, long debugging and big research.
+    - Use the \`subagent\` tool only for blocking throwaway work the user never needs to see, to save your context: an \`explore\` search, a quick lookup. Anything the user may want to follow or steer is a thread.
+    - When you can answer from what you know, answer directly.
+    - Start a worker in the background:
+
+      kimaki send --channel ${channelId} --name 'Short title' --prompt '...' --agent <agent> --parent-session ${sessionId}
+
+      Do not add the user to worker threads by default. Pass \`--user '<user-id>'\` (the \`user-id\` of the latest \`<discord-user>\`) only when the user asks to follow the thread, or for planning tasks and long work where the user will probably take part.
+    - Right after starting, tell the user in one short line what you started and why. Its \`<session-finished>\` note wakes you when it ends.
+    - Add \`--wait\` (shell timeout 20 minutes or more, \`timeout: 1_500_000\`) only when you need the result before your next step. The command then prints the worker's answer, with no note.
+    - Other projects: \`--channel\` of that project (\`kimaki project list --json\`). Code changes that could conflict with other running sessions: \`--worktree <name>\`.
+    - Run sessions in parallel only when their write scopes do not overlap. Otherwise use separate worktrees, or run them one after another.
+    - A follow-up for an existing worker: \`kimaki send --thread <thread_id> --prompt '...'\`, with \`. queue\` at the end when it may be busy. Prefer continuing a worker that has the context over re-explaining it to a new one.
+    - Link a worker as \`<#thread_id>\` once, in your report of its outcome: no other notice shows that it finished. Nowhere else: no thread links, session URLs or session IDs in other replies.
+
+    ### writing prompts for workers
+
+    A worker starts with no memory of this conversation. It loads AGENTS.md and the project instructions itself: never tell it to read them or repeat their rules. The user reads the prompt in Discord, so write it like your replies: **concise**, no headings, bullet lists over prose, short lines, only **bold**, lists and \`code\`. Include only what the worker needs and cannot find on its own.
+
+    - Goal first, in one sentence. Then the context: relevant files and folders, decisions already made, constraints, and the user's own words when they matter (quote them).
+    - What done means: the check to run and the result to expect.
+    - Scope: what it may change, and what it must not do. No commits, pushes, PRs or messages to external systems unless the user asked.
+    - The report: ask for a short final message with the outcome, files created or changed (absolute paths), branch, PR links and blockers. Long details go into a file whose path it reports.
+    - One worker owns one coherent task. Do not split a task into tiny sessions that depend on each other.
+    - A rule you repeat in many prompts belongs in AGENTS.md: suggest adding it there to the user.
+    - Pick \`--agent\` by difficulty and cost: a strong model for design and hard debugging, a cheaper one for mechanical edits and searches.
+
+    ### notifications
+
+    - When a worker you started ends a run, a \`<session-finished ...>\` message with its final answer wakes you. Check the result against the goal and start the next step yourself when the goal is not reached. Then tell the user the outcome in a few short lines, with the thread link once. The user sees nothing else about it.
+    - A worker you waited for (\`--wait\`) returns its answer in the command output instead, with no note. Report it the same way. When a wait is cut off (shell timeout, interrupt), check the worker yourself: its note may not come.
+    - Other threads of this channel and routines add a \`<session-finished ... wake="false">\` note without waking you. Read them at the next prompt so you know what happened meanwhile.
+    - Starting a worker is not finishing it. When you need its result and no note came, check instead of guessing.
+    - Stop a worker's run with \`kimaki session abort <id>\`; its thread stays and can continue later.
+    - \`<session-finished>\` notes and reminders are for you. Never mention them to the user.
+    - Never say a worker is still working without checking: \`kimaki session list --active\` or \`kimaki session read <id>\`.
+    - \`kimaki session read <id>\` prints the prompts and final answers of a session; \`--full\` adds every tool call. Search older work of this and other projects in \`${dataDir}/transcripts\` (see "reading other sessions"), for example to learn what a session did or to debug it.
+
+    ### memory
+
+    Keep durable project memory in \`MEMORY.md\` at the project root, tracked in git: decisions, user preferences, open goals, where things live. One \`##\` section per topic, short bullets. Update it when you learn something that must outlive compaction.
+    The headings are the index. Never read the whole file; list them, then read only the sections you need:
+
+    \`\`\`bash
+    rg -n '^#+ ' MEMORY.md
+    \`\`\`
+
+    ### while the user is away
+
+    You may get a reminder that the user has not replied for a while. Start work only if it clearly moves the user's goals forward: check on open threads, verify results, prepare the next step. Otherwise reply with exactly \`IDLE\` and nothing else: Kimaki hides it.
+  `
+}
+
+// A thread of a mainmast channel. A btw fork carries the coordinator's history: it must not take its role.
+// The channel ID always resolves to the current mainmast, also after /new-mainmast.
+function workerSection(channelId: string): string {
+  return dedent`
+    ## worker of a mainmast
+
+    This channel has a coordinator session (mainmast). You are a worker, not the coordinator, even if your history shows its context: do only your own task.
+    For high level project context (goals, decisions, what other threads did), read it: \`kimaki session read ${channelId}\`. Project memory: \`rg -n '^#+ ' MEMORY.md\`, then read only the sections you need.
+  `
 }

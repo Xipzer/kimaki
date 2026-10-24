@@ -8,16 +8,17 @@ Add **mainmast** channels, the new default. A project channel is now a chat with
 ```
 #my-app
   you: fix the flaky login test
-  Starting a worker for the login test.
-  -# ┣ shell Fix flaky login test
-  Fixed: the test now awaits the session cookie.
+  Started a worker for the flaky login test.
+  Fixed in #fix-flaky-login-test: the test now awaits the session cookie.
 ```
 
-- By default the mainmast starts a worker with `kimaki send --wait` and reports the result when it ends, so the channel stays quiet. You can still open and steer the worker thread meanwhile. Worker threads do not join your sidebar unless you ask to follow one, or the work is planning or long work you will probably take part in.
-- Workers started without `--wait` (parallel work) wake the mainmast with their final answer when a run ends. A run whose prompt came from `kimaki send --wait` sends no note while its sender still runs, so the result is never reported twice. Other threads of the channel and routines leave a silent note for the next prompt.
-- The mainmast delegates every task that is more than trivial, so its context stays clean across many compactions. It writes short markdown prompts for workers and does not repeat a finished worker's answer or link its thread, which you already see in Discord. Every worker is a visible thread you can talk to. The mainmast uses the `subagent` tool only for quick throwaway lookups.
+- The mainmast starts workers in the background and says in one line what it started. When a worker run ends, its final answer wakes the mainmast, which reports the outcome with one link to the thread. Kimaki posts no other finish notice.
+- Worker threads do not join your sidebar unless you ask to follow one, or the work is planning or long work you will probably take part in. You can still open and steer any worker thread.
+- With `kimaki send --wait` the sender gets the answer in the command output instead: a run whose prompt came from `--wait` sends no note while its sender still runs, so the result is never reported twice. Other threads of the channel and routines leave a silent note for the next prompt.
+- The mainmast reads files and the repo source itself to understand the project, and delegates edits, builds, tests, long debugging and big research, so its context stays clean across many compactions. It writes short worker prompts as bullet lists without headings, in the style of its replies. Every worker is a visible thread you can talk to. The mainmast uses the `subagent` tool only for quick throwaway lookups.
 - Workers read the mainmast session for project context. The mainmast keeps memory in a tracked `MEMORY.md`, read through its headings.
 - Halfway through the OpenCode `warming` window (30 minutes without warming) an idle mainmast is asked for useful work. With warming on, it is compacted when the window ends, while the cache is still warm.
+- The mainmast and worker instructions come from the Kimaki OpenCode plugin. After a Kimaki upgrade, an existing mainmast or worker gets the new instructions at its next message, added after the history, so the prompt cache stays warm.
 - `/new-mainmast` starts a fresh mainmast in the channel.
 - Onboarding answers in the `#kimaki` channel instead of a thread.
 - `kimaki session read <id>` now prints only prompts and final answers. Use `--full` for every tool call. `kimaki session wait` and `kimaki send --wait` print the same short output.

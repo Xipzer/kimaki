@@ -90,6 +90,7 @@ test('an idle mainmast is nudged once, stays silent, then gets compacted', async
   expect(messages.data.map((message) => message.type)).toMatchInlineSnapshot(`
     [
       "synthetic",
+      "synthetic",
       "user",
       "assistant",
       "idle",

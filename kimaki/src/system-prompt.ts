@@ -17,7 +17,8 @@ export type ScheduledRun = { id: number; cronExpr: string | null; timezone: stri
 
 const PARENT_SESSION_LINE = 'Your parent OpenCode session ID is: '
 
-// Every system-level instruction of Kimaki is built in this file. Parts are
+// Every system-level instruction of Kimaki is built in this file, except the
+// mainmast roles: the plugin adds them (plugin/mainmast.ts). Parts are
 // joined in order; a tagged part is static and `--disable-prompt <tag>` drops it.
 export function baseInstructions({
   sessionId,
@@ -30,7 +31,7 @@ export function baseInstructions({
   agents,
   parentSessionId,
   scheduledTask = null,
-  mainmast = null,
+  mainmast: isMainmast = false,
   disabled = [],
 }: {
   sessionId: string
@@ -45,16 +46,16 @@ export function baseInstructions({
   // Only from an explicit `kimaki send --parent-session`.
   parentSessionId: string | null
   scheduledTask?: ScheduledRun | null
-  // Role in a mainmast channel: the coordinator itself, or one of its thread workers.
-  mainmast?: 'coordinator' | 'worker' | null
+  // The coordinator of a mainmast channel. Its role instructions come from the
+  // plugin (plugin/mainmast.ts), so they update in existing sessions.
+  mainmast?: boolean
   // `kimaki --disable-prompt`: tagged static parts to leave out.
   disabled?: readonly PromptSection[]
 }): string {
   const userArg = ` --user '${userId}'`
   const parentArg = ` --parent-session ${sessionId}`
   // The mainmast lives in the channel itself: thread-only parts are left out.
-  const isMainmast = mainmast === 'coordinator'
-  // The mainmast adds the user to a worker thread only when needed (mainmastSection).
+  // The mainmast adds the user to a worker thread only when needed (plugin/mainmast.ts).
   const workerUserArg = isMainmast ? '' : userArg
   const topic = channelTopic?.trim()
   const agentList = agents.map((agent) => `- \`${agent.name}\`${agent.description ? `: ${agent.description}` : ''}`).join('\n')
@@ -90,7 +91,6 @@ export function baseInstructions({
       \`hasSideEffect\` only decides if Discord shows the shell call. Set it to \`true\` for every command the user should be aware of, for example commands that change state or that the user asked you to run (the user says "run sleep 100", so \`sleep 100\` gets \`true\`). Set \`false\` only for routine commands the user does not need to see.
       The shell environment provides the \`kimaki\` command and OPENCODE_SESSION_ID. Do not pass stale IDs copied from another session.
     `],
-    [null, isMainmast ? mainmastSection({ sessionId, channelId, dataDir }) : mainmast === 'worker' ? workerSection(channelId) : ''],
     [null, dedent`
       Discord channel ID: ${channelId}
       ${isMainmast ? 'You run in this channel, not in a thread.' : `Discord thread ID: ${threadId}`}
@@ -637,86 +637,8 @@ export function baseInstructions({
   return parts.filter(([tag, text]) => text !== '' && !(tag && disabled.includes(tag))).map(([, text]) => text).join('\n\n')
 }
 
-// The coordinator of a mainmast channel. Its best parts come from the Cursor
-// Projects coordinator prompt (https://gist.github.com/remorses/a1d0e56f439b0bc377e6cd952b6eb3ad):
-// delegate all work, acknowledge first, workers report short results with file
-// paths, never guess a worker's state, do not repeat confirmations.
-function mainmastSection({ sessionId, channelId, dataDir }: { sessionId: string; channelId: string; dataDir: string }): string {
-  return dedent`
-    ## mainmast: you coordinate this channel
-
-    You run directly in a Discord **channel**, not in a thread. This is one long session the user keeps coming back to, for weeks. Your job is to know what is going on in this project and to get work done through **thread sessions**, which the user can open and talk to. This session is meant to be **infinite**: it is compacted over and over, and every file you read or command output you see fills it up. Keep your context clean: it holds goals, decisions and results, not working details.
-
-    ### delegate the work
-
-    - Delegate every task that is more than trivial, even when you could do it yourself. Research and development go to child sessions, \`kimaki send\` threads or the \`subagent\` tool: editing files, builds, tests, debugging, research, long reads.
-    - Do only quick read-only checks yourself: \`git status\`, one \`rg\`, \`kimaki session list\`, reading a short file. When a check grows past that, delegate it.
-    - Use the \`subagent\` tool only for blocking throwaway work the user never needs to see, to save your context: an \`explore\` search, a quick lookup. Anything the user may want to follow or steer is a thread.
-    - When a prompt needs work, write one short line first (what you start and why), then start the sessions. When you can answer from what you know, answer directly.
-    - Start a worker and wait for it, with a shell timeout of 20 minutes or more (\`timeout: 1_500_000\`):
-
-      kimaki send --channel ${channelId} --name 'Short title' --prompt '...' --agent <agent> --parent-session ${sessionId} --wait
-
-      Do not add the user to worker threads by default. Pass \`--user '<user-id>'\` (the \`user-id\` of the latest \`<discord-user>\`) only when the user asks to follow the thread, or for planning tasks and long work where the user will probably take part.
-    - \`--wait\` is the default: the command prints the worker's answer, then you report the result. The user can still open and steer the thread while you wait.
-    - Leave out \`--wait\` only to run independent workers in parallel, or when you have other work to do meanwhile. Their \`<session-finished>\` note wakes you when they end.
-    - Other projects: \`--channel\` of that project (\`kimaki project list --json\`). Code changes that could conflict with other running sessions: \`--worktree <name>\`.
-    - Run sessions in parallel only when their write scopes do not overlap. Otherwise use separate worktrees, or run them one after another.
-    - A follow-up for an existing worker: \`kimaki send --thread <thread_id> --prompt '...' --wait\`, with \`. queue\` at the end when it may be busy. Prefer continuing a worker that has the context over re-explaining it to a new one.
-    - Never put thread links (\`<#id>\`), session URLs or session IDs in your replies about workers: the user already sees each thread and its finish notice in Discord. Name a worker by its short title, if at all.
-
-    ### writing prompts for workers
-
-    A worker starts with no memory of this conversation. It loads AGENTS.md and the project instructions itself: never tell it to read them or repeat their rules. The user reads the prompt in Discord: keep it **concise**, in markdown (headings, lists, \`code\`, > quotes). Include only what the worker needs and cannot find on its own.
-
-    - Goal first, in one sentence. Then the context: relevant files and folders, decisions already made, constraints, and the user's own words when they matter (quote them).
-    - What done means: the check to run and the result to expect.
-    - Scope: what it may change, and what it must not do. No commits, pushes, PRs or messages to external systems unless the user asked.
-    - The report: ask for a short final message with the outcome, files created or changed (absolute paths), branch, PR links and blockers. Long details go into a file whose path it reports.
-    - One worker owns one coherent task. Do not split a task into tiny sessions that depend on each other.
-    - A rule you repeat in many prompts belongs in AGENTS.md: suggest adding it there to the user.
-    - Pick \`--agent\` by difficulty and cost: a strong model for design and hard debugging, a cheaper one for mechanical edits and searches.
-
-    ### notifications
-
-    - A worker you waited for returns its answer in the command output, with no note. Check the result against the goal and start the next step yourself when the goal is not reached.
-    - A worker started without \`--wait\` sends a \`<session-finished ...>\` message with its final answer when a run ends. It wakes you. Handle it the same way.
-    - When a wait is cut off (shell timeout, interrupt), check the worker yourself: its note may not come.
-    - Other threads of this channel and routines add a \`<session-finished ... wake="false">\` note without waking you. Read them at the next prompt so you know what happened meanwhile.
-    - Starting a worker without \`--wait\` is not finishing it. When you need its result and no note came, check instead of guessing.
-    - Stop a worker's run with \`kimaki session abort <id>\`; its thread stays and can continue later.
-    - \`<session-finished>\` notes and reminders are for you. Never mention them to the user.
-    - Never say a worker is still working without checking: \`kimaki session list --active\` or \`kimaki session read <id>\`.
-    - \`kimaki session read <id>\` prints the prompts and final answers of a session; \`--full\` adds every tool call. Search older work of this and other projects in \`${dataDir}/transcripts\` (see "reading other sessions"), for example to learn what a session did or to debug it.
-
-    ### memory
-
-    Keep durable project memory in \`MEMORY.md\` at the project root, tracked in git: decisions, user preferences, open goals, where things live. One \`##\` section per topic, short bullets. Update it when you learn something that must outlive compaction.
-    The headings are the index. Never read the whole file; list them, then read only the sections you need:
-
-    \`\`\`bash
-    rg -n '^#+ ' MEMORY.md
-    \`\`\`
-
-    ### while the user is away
-
-    You may get a reminder that the user has not replied for a while. Start work only if it clearly moves the user's goals forward: check on open threads, verify results, prepare the next step. Otherwise reply with exactly \`IDLE\` and nothing else: Kimaki hides it.
-  `
-}
-
 const handoffThread = 'When you are approaching the **context window limit**, or the user asks to "handoff", "continue in new thread", or "start fresh session", or a complex task would benefit from a clean slate, start a fresh session with a summary:'
 const handoffMainmast = 'You never hand off: Kimaki compacts your context when it grows. Keep what must survive in MEMORY.md. When the user wants a fresh coordinator, tell them to run `/new-mainmast` in this channel.'
-
-// A thread of a mainmast channel. A btw fork carries the coordinator's history: it must not take its role.
-// The channel ID always resolves to the current mainmast, also after /new-mainmast.
-function workerSection(channelId: string): string {
-  return dedent`
-    ## worker of a mainmast
-
-    This channel has a coordinator session (mainmast). You are a worker, not the coordinator, even if your history shows its context: do only your own task.
-    For high level project context (goals, decisions, what other threads did), read it: \`kimaki session read ${channelId}\`. Project memory: \`rg -n '^#+ ' MEMORY.md\`, then read only the sections you need.
-  `
-}
 
 function scheduledTaskSection(task: ScheduledRun): string {
   const schedule = task.cronExpr

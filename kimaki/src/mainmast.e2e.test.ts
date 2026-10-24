@@ -34,6 +34,9 @@ beforeAll(async () => {
   twin = await startTwin()
   server = await startOpencodeTestServer({
       matchers: [
+        // The role text reaches the model once per request, also when the plugin checks the request.
+        { id: 'role-twice', priority: 500, when: { latestUserTextIncludes: 'once-marker', rawPromptRegex: '## mainmast: you coordinate[\\s\\S]*## mainmast: you coordinate' }, then: { parts: textParts('Role text twice.') } },
+        { id: 'role-missing', priority: 400, when: { latestUserTextIncludes: 'once-marker', rawPromptRegex: '^(?![\\s\\S]*## mainmast: you coordinate)' }, then: { parts: textParts('Role text missing.') } },
         { id: 'hello', priority: 100, when: { latestUserTextIncludes: 'hello-marker' }, then: { parts: textParts('Hello from the mainmast.') } },
         // The mainmast delegates: one shell call to `kimaki send`, then a short line.
         ...scriptedTurn({
@@ -72,12 +75,22 @@ beforeAll(async () => {
         { id: 'recap-seen', priority: 200, when: { latestUserTextIncludes: 'recap-marker', rawPromptIncludes: 'Side check done.' }, then: { parts: textParts('A side thread finished meanwhile.') } },
         { id: 'recap-unseen', priority: 150, when: { latestUserTextIncludes: 'recap-marker' }, then: { parts: textParts('Nothing new.') } },
         { id: 'woken', priority: 300, when: { latestUserTextIncludes: '<session-finished' }, then: { parts: textParts('The worker finished the job.') } },
+        // A wake with a stale role text in the history: the plugin adds the current one to this request.
+        { id: 'stale-wake-current', priority: 400, when: { latestUserTextRegex: 'stale-wake-marker[\\s\\S]*## mainmast: you coordinate this channel' }, then: { parts: textParts('Current role text present.') } },
+        { id: 'stale-wake-old', priority: 350, when: { latestUserTextIncludes: 'stale-wake-marker' }, then: { parts: textParts('Current role text missing.') } },
       ],
   })
   await seedProjectChannel({ dataDir, channelId: twin.channelId, guildId: twin.discord.guildId, directory: server.projectDirectory })
   await warmUp({ server })
   bot = await startTestBot({ dataDir, twin, server, mainmast: true, mainmastTimers: { nudgeMs: 3_600_000, compactMs: null } })
 }, 60_000)
+
+// Role texts the kimaki plugin stored in a session (plugin/mainmast.ts), oldest first.
+async function roleTexts(sessionID: string): Promise<string[]> {
+  const client = await server.client()
+  const messages = await client.message.list({ sessionID, order: 'desc', limit: 100 })
+  return [...messages.data].reverse().flatMap((message) => (message.type === 'synthetic' && message.text.includes('<kimaki-mainmast>') ? [message.text] : []))
+}
 
 afterAll(async () => {
   await bot?.stop()
@@ -90,7 +103,7 @@ test('channel messages go to one session that replies in the channel', async () 
   const { discord, channelId } = twin
   await discord.channel(channelId).user(TEST_USER_ID).sendMessage({ content: 'Say hi hello-marker' })
   await waitForFooter({ discord, threadId: channelId })
-  await discord.channel(channelId).user(TEST_USER_ID).sendMessage({ content: 'Again hello-marker' })
+  await discord.channel(channelId).user(TEST_USER_ID).sendMessage({ content: 'Again hello-marker once-marker' })
   await waitForFooter({ discord, threadId: channelId, count: 2 })
 
   expect(await discord.channel(channelId).text()).toMatchInlineSnapshot(`
@@ -101,12 +114,20 @@ test('channel messages go to one session that replies in the channel', async () 
     Hello from the mainmast.
     -# *project ⋅ main ⋅ Ns ⋅ N% ⋅ deterministic-v2*
     --- from: user (tommy)
-    Again hello-marker
+    Again hello-marker once-marker
     --- from: assistant (TestBot)
     Hello from the mainmast.
     -# *project ⋅ main ⋅ Ns ⋅ N% ⋅ deterministic-v2*"
   `)
   expect(await discord.channel(channelId).getThreads()).toHaveLength(0)
+  // The coordinator role comes from the plugin, once: not from the frozen instructions entry.
+  const root = bot.store.getState().roots[channelId]!
+  const roles = await roleTexts(root)
+  expect(roles).toHaveLength(1)
+  expect(roles[0]).toContain('## mainmast: you coordinate this channel')
+  expect(roles[0]).toContain(`--parent-session ${root}`)
+  const entries = await (await server.client()).session.instructions.entry.list({ sessionID: root })
+  expect(JSON.stringify(entries)).not.toContain('## mainmast')
 })
 
 test('a worker started with --parent-session gets a thread and wakes the mainmast when done', async () => {
@@ -130,7 +151,7 @@ test('a worker started with --parent-session gets a thread and wakes the mainmas
     Hello from the mainmast.
     -# *project ⋅ main ⋅ Ns ⋅ N% ⋅ deterministic-v2*
     --- from: user (tommy)
-    Again hello-marker
+    Again hello-marker once-marker
     --- from: assistant (TestBot)
     Hello from the mainmast.
     -# *project ⋅ main ⋅ Ns ⋅ N% ⋅ deterministic-v2*
@@ -141,8 +162,6 @@ test('a worker started with --parent-session gets a thread and wakes the mainmas
 
     Started a worker for it.
     -# *project ⋅ main ⋅ Ns ⋅ N% ⋅ deterministic-v2*
-    -# Worker task finished: <#worker-thread>
-
     The worker finished the job.
     -# *project ⋅ main ⋅ Ns ⋅ N% ⋅ deterministic-v2*"
   `)
@@ -154,6 +173,10 @@ test('a worker started with --parent-session gets a thread and wakes the mainmas
     -# *project ⋅ main ⋅ Ns ⋅ N% ⋅ deterministic-v2*"
   `)
   expect(thread.name).toBe('Worker task')
+  const workerRoles = await roleTexts(bot.store.getState().roots[thread.id]!)
+  expect(workerRoles).toHaveLength(1)
+  expect(workerRoles[0]).toContain(`## worker of a mainmast`)
+  expect(workerRoles[0]).toContain(`kimaki session read ${channelId}`)
 })
 
 test('a worker started with --wait answers through the wait, with no note', async () => {
@@ -232,6 +255,37 @@ test('a btw fork of the mainmast is a worker: no coordinator timers', async () =
   const client = await server.client()
   const fork = await client.session.get({ sessionID: bot.store.getState().roots[thread.id]! })
   expect(Reflect.get(Object(fork.metadata?.['kimaki']), 'mainmast')).toBeUndefined()
+  // The fork copied the coordinator role; its own worker role comes after it.
+  const roles = await roleTexts(fork.id)
+  expect(roles.map((text) => (text.includes('## worker of a mainmast') ? 'worker' : 'coordinator'))).toEqual(['coordinator', 'worker'])
+})
+
+test('a stale coordinator role text is replaced: on a wake for that request, then stored at the next prompt', async () => {
+  const { discord, channelId } = twin
+  const root = bot.store.getState().roots[channelId]!
+  const client = await server.client()
+  const current = (await roleTexts(root)).at(-1)!
+  const footers = (await discord.channel(channelId).getMessages()).filter((message) => message.content.startsWith('-# *project')).length
+  // Like a role text of older plugin code, as the latest one in the history, waking the session.
+  await client.session.synthetic({ sessionID: root, text: '<system-reminder>\n<kimaki-mainmast>\nold role text stale-wake-marker\n</kimaki-mainmast>\n</system-reminder>' })
+  await waitForFooter({ discord, threadId: channelId, count: footers + 1 })
+  await discord.channel(channelId).user(TEST_USER_ID).sendMessage({ content: 'Again hello-marker' })
+  await waitForFooter({ discord, threadId: channelId, count: footers + 2 })
+
+  const text = await discord.channel(channelId).text()
+  expect(text.slice(text.lastIndexOf('Session forked!')).replace(/<#\d+>/, '<#btw-thread>')).toMatchInlineSnapshot(`
+    "Session forked! Continue in <#btw-thread>
+    Current role text present.
+    -# *project ⋅ main ⋅ Ns ⋅ N% ⋅ deterministic-v2*
+    --- from: user (tommy)
+    Again hello-marker
+    --- from: assistant (TestBot)
+    Hello from the mainmast.
+    -# *project ⋅ main ⋅ Ns ⋅ N% ⋅ deterministic-v2*"
+  `)
+  const roles = await roleTexts(root)
+  expect(roles.at(-1)).toBe(current)
+  expect(roles.at(-2)).toContain('stale-wake-marker')
 })
 
 test('the mainmast survives a bot restart; /new-mainmast starts a fresh one', async () => {

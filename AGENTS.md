@@ -50,13 +50,13 @@ OpenCode events ──▶ opencode-server.ts ──▶ event-loop.ts ──▶ t
 - `main.ts`: wiring. lock port, then SQLite migration, then OpenCode and Discord login in parallel.
 - `bot.ts`: the `Bot` context passed to every module. `store.ts`: the one zustand store.
 - `ingress.ts`: Discord messages, attachments, voice. In a **mainmast** channel (default; `--no-mainmast` turns it off) the channel itself is the conversation of one long coordinator session: `roots[channelId]`, bound in `thread_sessions` with the channel ID, a `Conversation` is a thread or that channel (`bot.ts`). `startMainmast` in `sessions.ts` creates it.
-- `mainmast.ts`: when a thread run ends, a `<session-finished>` synthetic note goes to the mainmast (wakes it when the mainmast started that thread with `--parent-session`, silent otherwise). `plugin/mainmast.ts`: idle nudge and compaction at the end of the OpenCode warming window, only for the mainmast session. Decisions: `plans/decisions/mainmast.md`. `slash-commands.ts` + `commands/*`: slash commands and components.
+- `mainmast.ts`: when a thread run ends, a `<session-finished>` synthetic note goes to the mainmast (wakes it when the mainmast started that thread with `--parent-session`, silent otherwise). `plugin/mainmast.ts`: coordinator and worker role instructions, idle nudge and compaction at the end of the OpenCode warming window (only for the mainmast session). Decisions: `plans/decisions/mainmast.md`. `slash-commands.ts` + `commands/*`: slash commands and components.
 - `opencode-server.ts`: finds the OpenCode service, owns the event subscription, installs the plugin shim.
 - `event-loop.ts`: routes events to threads, hydrates after a (re)connect. `thread-reducer.ts`: pure fold of events into a thread view plus effects.
 - `effects.ts`: the only Discord writer for session output. `format-parts.ts`, `markdown/`: formatting.
 - `lock-server.ts`, `lock-routes.ts`: single-instance lock and the local HTTP API used by CLI subcommands.
 - `cli.ts`, `cli/*.ts`: goke CLI. `plugin/`: code that runs inside the OpenCode process.
-- `system-prompt.ts` holds the session instruction entry (the whole agent-facing CLI reference). Only two parts are opt-out skills: `kimaki-debug` and `kimaki-tunnel` (`skills/<id>/SKILL.md`, `builtin-skills.ts`), registered by the `kimaki` plugin through `ctx.skill.transform` and hidden from Discord slash commands. `kimaki --disable-skills all|id,id` denies them per session with `skill:<id>` permission rules (`disabledSkillRules`). Static prompt parts carry a tag (`PROMPT_SECTIONS` in `builtin-skills.ts`); `kimaki --disable-prompt <tag>` leaves them out (new sessions, and existing ones at their first input after a bot start: `ensureSessionMarker` rebuilds the entry once per bot run). Only tag parts with no session-specific values.
+- `system-prompt.ts` holds the session instruction entry (the whole agent-facing CLI reference). Only two parts are opt-out skills: `kimaki-debug` and `kimaki-tunnel` (`skills/<id>/SKILL.md`, `builtin-skills.ts`), registered by the `kimaki` plugin through `ctx.skill.transform` and hidden from Discord slash commands. `kimaki --disable-skills all|id,id` denies them per session with `skill:<id>` permission rules (`disabledSkillRules`). Static prompt parts carry a tag (`PROMPT_SECTIONS` in `builtin-skills.ts`); `kimaki --disable-prompt <tag>` leaves them out of new sessions. Only tag parts with no session-specific values.
 - `autostart.ts`: the bot writes `<dataDir>/autostart.command`; the plugin opens it in the default terminal when OpenCode starts and no bot answers on the lock port.
 - `gateway-proxy/`: multi-tenant Discord Gateway + REST proxy. one shared bot for all users.
 - `website/`: https://kimaki.dev, OAuth callback and onboarding status routes.
@@ -108,6 +108,8 @@ later change  ──▶ session.instructions.updated ──▶ appended to histo
 ```
 
 source: `packages/core/src/session/instruction-state.ts` and `message-updater.ts` in opencode v2. so put session-level text in **instruction entries**, never in the plugin `context` hook. Kimaki's system prompt (`system-prompt.ts`) is one instruction entry, written with `session.instructions.entry.put` in `sessions.ts`. `event.system.push(...)` in `session.hook('context')` runs on every request and sits before all messages: any change to that text (for example the git branch line) invalidates the whole cached prompt. only push text there that stays the same during a session.
+
+**instructions that must update in existing sessions go through the plugin.** the bot-written instruction entry is frozen at session create: a new Kimaki version never reaches old sessions through it. OpenCode reloads the plugin when its code changes, so plugin-owned text updates on its own. OpenCode has no instruction source for plugins: the plugin stores the text as a synthetic message before a user prompt when the latest one is missing or stale (`registerMainmastRoles` in `plugin/mainmast.ts`, the pattern of OpenCode's `core/src/plugin/plan.ts`). it lands at the tail, so the prompt cache stays warm.
 
 kimaki posts `-# prompt cache miss: ...` in the thread when the cached prefix of a root step shrinks (`thread-reducer.ts`, `session.step.ended`). causes: changed prefix, model switch, or provider cache TTL expiry (about 5 minutes idle on Anthropic).
 
@@ -304,7 +306,7 @@ markdown tables and callouts render as a Components V2 `Container` (`markdown/co
 
 use this to write tests that find messages matching specific patterns. formatting lives in `format-parts.ts`.
 
-- in a mainmast channel the coordinator replies in the channel itself (banner, text, tool lines, footer) and posts `-# <title> finished: <#thread>` when a thread it started ends. an idle-nudge turn that answers `IDLE` posts nothing, not even a footer.
+- in a mainmast channel the coordinator replies in the channel itself (banner, text, tool lines, footer). Kimaki posts no notice when a worker thread ends: the woken coordinator reports the outcome with the `<#thread>` link. an idle-nudge turn that answers `IDLE` posts nothing, not even a footer.
 - with `--no-mainmast`, Kimaki creates a thread on the first user message and replies in it. sessions the bot created start with a banner: `-# *using anthropic/claude-sonnet-4 ⋅ build*` (`formatBanner`).
 - assistant text is plain Discord markdown, full width, **never quoted**. reasoning is never shown.
 - tool lines are subtext: `-# ┣ shell _ls_`, file edits and writes use `◼︎`: `-# ◼︎ edit *file.ts* (+3-1)` (`formatToolLine`). subagent lines carry the agent: `-# ┣ general ⋅ glob _*.md_`. when the kind changes between text and tool, the next block starts with a blank line.
