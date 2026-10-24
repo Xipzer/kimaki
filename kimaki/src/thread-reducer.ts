@@ -592,14 +592,7 @@ function showShellFinished({
   ...context
 }: Context & { metadata: Readonly<Record<string, unknown>>; label: string | null }) {
   const { shellID, jobID, state, exit } = metadata
-  // A session the mainmast started finished (mainmast.ts): its thread link wakes the coordinator.
-  if (metadata['source'] === 'kimaki-session') {
-    const { threadID, title, wake } = metadata
-    if (wake !== true || typeof threadID !== 'string') return
-    const name = typeof title === 'string' ? title : 'session'
-    toolLine(context, asSubtext(state === 'error' ? `${name} failed: <#${threadID}>` : `${name} finished: <#${threadID}>`))
-    return
-  }
+  // A <session-finished> note (mainmast.ts) shows nothing: the coordinator reports the outcome.
   if (metadata['source'] !== 'shell' || typeof shellID !== 'string' || typeof jobID !== 'string') return
   const description = context.draft.shells[shellID] ?? null
   delete context.draft.shells[shellID]
