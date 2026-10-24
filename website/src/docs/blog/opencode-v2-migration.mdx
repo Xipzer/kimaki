@@ -2,18 +2,21 @@
 $schema: https://holocron.so/frontmatter.json
 title: "OpenCode V2 migration guide: config, plugins and SDK"
 sidebarTitle: OpenCode V2 migration
-description: "How to migrate from OpenCode V1 to V2: install, config changes, plugin API, the new @opencode/client SDK, events and the gotchas we hit porting Kimaki."
+description: "How to migrate from OpenCode V1 to V2: install, config changes, plugin API, the new @opencode/client SDK, inbox, events, reconnects and the invariants we used to port Kimaki."
 mode: center
 icon: lucide:arrow-right-left
 prompt: |
   Write an SEO blog post that ranks for "opencode v2", "opencode v2 migration",
   "opencode v2 vs v1", "opencode v2 plugins", "opencode sdk v2" and
-  "@opencode-ai/sdk v2". Base it on the official guides
+  "@opencode-ai/sdk v2". Target coding agents that run the migration, so be
+  exhaustive and procedural. Base it on the official guides
   @https://opencode.ai/v2/docs/migrate-v1/ and
-  @https://opencode.ai/v2/docs/build/plugins/migrate-v1, plus the lessons from
-  porting Kimaki in @/docs/opencode-v2-in-place-migration.md,
+  @https://opencode.ai/v2/docs/build/plugins/migrate-v1, plus all content from
+  @/docs/opencode-v2-in-place-migration.md, @/docs/opencode-v2-plugin-migration.md,
   @/docs/kimaki-v2-rebuild-spec.md, @/kimaki/src/opencode-server.ts,
-  @/kimaki/src/prompt.ts and @/kimaki/src/plugin/index.ts.
+  @/kimaki/src/prompt.ts, @/kimaki/src/event-loop.ts and @/kimaki/src/plugin/index.ts.
+  Expanded with V1 vs V2 snippets, real event payloads, reconnect code, testing
+  and every bug found in the Kimaki migration transcripts and fix commits.
 ---
 
 <Above>
@@ -25,7 +28,9 @@ prompt: |
 
 **OpenCode V2** is a rewrite of the server, the plugin API and the SDK. Your config, agents, skills and `AGENTS.md` files keep working. Your **plugins and server integrations do not**.
 
-We ported [Kimaki](../index.mdx), a Discord bot that drives OpenCode sessions, from V1 to V2. This guide is what we wish we had on day one: the official migration steps in one page, plus the traps we found in real code.
+We ported [Kimaki](../index.mdx), a Discord bot that drives OpenCode sessions, from V1 to V2. This guide is the official migration steps in one page, plus every trap and invariant we found in real code. The source is open: [github.com/remorses/kimaki](https://github.com/remorses/kimaki).
+
+It is written so a **coding agent** can follow it end to end. Point your agent at this URL and ask it to migrate your plugin or integration.
 
 ```diagram
   OpenCode V1                             OpenCode V2
@@ -35,8 +40,31 @@ We ported [Kimaki](../index.mdx), a Discord bot that drives OpenCode sessions, f
   tui.json                          ───>  ~/.config/opencode/cli.json (automatic)
   plugin: fn returning hooks        ───>  Plugin.define({ id, setup })   REWRITE
   @opencode-ai/sdk (and its /v2)    ───>  @opencode/client               REWRITE
+  message.part.* snapshots          ───>  session.text/tool/* facts      REWRITE
+  abort + replay prompt             ───>  native inbox (steer, queue)    REWRITE
   one server per client             ───>  one shared background service
 ```
+
+## Procedure for agents
+
+Run these steps **in order**. Each step links to the section with the details.
+
+1. **Inventory.** List every import of `@opencode-ai/sdk`, `@opencode-ai/sdk/v2` and `@opencode-ai/plugin`. List every plugin hook and every V1 event type you handle (`message.updated`, `message.part.*`, `question.*`, `session.idle`, `session.error`).
+2. **Install V2** and check config, models and credentials. See [install](#install-opencode-v2).
+3. **Rewrite plugins** with `Plugin.define`. See [plugins](#migrate-opencode-plugins-to-v2), the [hook by hook guide](#hook-by-hook-v1-vs-v2) and the [plugin parity audit](#plugin-parity-audit).
+4. **Move the client** to `@opencode/client` and connect to the shared service. See [SDK](#migrate-the-sdk-to-opencodeclient) and the [complete example](#a-complete-v2-integration-example).
+5. **Rewrite the event handling** around native facts: inbox, execution, deltas and terminal events. See [protocol model](#the-v2-protocol-model) and [real payloads](#event-reference-with-real-payloads).
+6. **Own the event stream**: reconnect, hydrate, route subagents. See [event stream](#event-stream-subscribe-reconnect-hydrate).
+7. **Enforce the invariants**: one submission path, native events only, subagent routing, durable completion, ordered and scoped reads, reconnect recovery. See [invariants](#migration-invariants).
+8. **Port commands** behavior by behavior, not method by method. See [commands](#command-migration-checks).
+9. **Test** against a real OpenCode V2 server. See [testing](#test-against-a-real-opencode-v2-server) and the [test matrix](#completion-test-matrix). No mocks, no V1 fixtures.
+10. **Check the bug list** before you call it done. See [bugs we hit](#bugs-we-hit-during-the-migration).
+
+<Aside>
+<Warning>
+**Passing TypeScript is not a finished migration.** A build that compiles while old behavior is disabled, or routed through dead compatibility code, is still broken. The migration is done only when every [invariant](#migration-invariants) holds.
+</Warning>
+</Aside>
 
 ## OpenCode V2 vs V1: what breaks
 
@@ -50,11 +78,45 @@ The official [migrate from V1 guide](https://opencode.ai/v2/docs/migrate-v1/) li
 | Config, agents, skills | `opencode.json`, `.opencode/`     | same files and paths                        | none               |
 | Process model          | each client starts a server       | one shared service for TUI, desktop and web | check integrations |
 
+The server API row hides most of the work. V2 does not only rename calls. It changes **how a turn is represented**: prompts go into an inbox, runs are executions, and output arrives as deltas plus terminal facts.
+
 <Aside>
 <Warning>
 **V1 and V2 both install as `opencode`.** They do not run side by side. The V2 installer replaces the V1 binary, so keep a copy of your V1 setup while you test.
 </Warning>
 </Aside>
+
+### V1 to V2 cheat sheet
+
+The **renames** you will hit first, in one table. Details follow in each section.
+
+| Topic                 | V1                                          | V2                                                          |
+| --------------------- | ------------------------------------------- | ----------------------------------------------------------- |
+| Client factory        | `createOpencodeClient({ baseUrl, directory })` | `OpenCode.make({ baseUrl, headers })`                    |
+| Results               | `{ data, error }`                           | value, or a rejected promise                                |
+| Event field           | `event.properties`                          | `event.data`                                                |
+| Event stream          | `client.global.event()`                     | `client.event.subscribe({ signal })`                        |
+| Prompt                | `session.promptAsync({ parts })`            | `session.prompt({ sessionID, text, files })`                |
+| Stop                  | `session.abort`                             | `session.interrupt({ sessionID, resume })`                  |
+| System prompt         | `promptAsync({ system })`                   | `session.instructions.entry.put`                            |
+| Questions             | `question.*`                                | `form.*` events, `session.form.*` calls                     |
+| Turn done             | `session.idle`                              | `session.execution.succeeded`                               |
+| Errors                | `session.error`                             | `session.execution.failed`, `step.failed`, `tool.failed`    |
+| Shell tool            | `bash`                                      | `shell`                                                     |
+| Subagent tool         | `task` with `subagent_type`, `task_id`      | `subagent` with `agent`, `sessionID`                        |
+| File tool input       | `filePath`                                  | `path` (`read`, `edit`, `write`)                            |
+| Model ref             | `{ providerID, modelID }`                   | `{ providerID, id, variant? }`                              |
+| Permission rule       | `{ permission, pattern, action }`           | `{ action, resource, effect }`                              |
+| Server password env   | `OPENCODE_SERVER_PASSWORD`                  | `OPENCODE_PASSWORD` (ignored in service mode)               |
+| Health route          | `GET /api/health`                           | `GET /api/info`                                             |
+
+OpenCode also tells the model about the tool renames in a system message of every V2 session:
+
+```txt
+`bash` is now `shell`; `task` is now `subagent`.
+The `subagent` tool takes `agent` instead of `subagent_type` and `sessionID` instead of `task_id`.
+`read`, `edit`, `write` take `path` instead of `filePath`.
+```
 
 ## Install OpenCode V2
 
@@ -72,6 +134,64 @@ The suggested order from the official guide:
 3. Port plugins. V1 plugin code does not run in V2.
 4. Port integrations that call the server API.
 5. Optionally convert config to the native V2 shape.
+
+### Version checks in integrations
+
+If your tool starts or requires OpenCode, check the version before you use it. An `opencode` on `PATH` can still be V1, which prints help instead of starting a V2 service.
+
+- Check `opencode --version` and require a **minimum V2 version** (Kimaki requires `2.0.19`).
+- If you find V1, **stop with install instructions**. Never replace the user's binary silently.
+- Search more than `PATH`: an `OPENCODE_PATH` override, `~/.opencode/bin/opencode`, and the `opencode2` alias some installs add.
+- Spawn the native binary directly, not a shell wrapper, so process signals reach the server.
+- Accept dev builds that report `0.0.0-dev-<n>`.
+
+A small **binary finder** that does all of this:
+
+```ts
+import { execFile } from 'node:child_process'
+import os from 'node:os'
+import path from 'node:path'
+import { promisify } from 'node:util'
+
+const exec = promisify(execFile)
+const MIN_VERSION = [2, 0, 19]
+
+function atLeast(version: string) {
+  if (version.startsWith('0.0.0-dev')) return true
+  const parts = version.split('-')[0].split('.').map(Number)
+  for (let i = 0; i < 3; i++) {
+    if (parts[i] !== MIN_VERSION[i]) return parts[i] > MIN_VERSION[i]
+  }
+  return true
+}
+
+export async function findOpencode() {
+  const candidates = [
+    process.env.OPENCODE_PATH,
+    'opencode',
+    path.join(os.homedir(), '.opencode/bin/opencode'),
+    'opencode2',
+  ].filter((value): value is string => Boolean(value))
+  for (const binary of candidates) {
+    const result = await exec(binary, ['--version'], { timeout: 5_000 }).catch(() => null)
+    const version = result?.stdout.trim()
+    if (version && atLeast(version)) return { binary, version }
+  }
+  return new Error('OpenCode V2 not found. Run: curl -fsSL https://opencode.ai/v2/install | bash')
+}
+```
+
+The V2 CLI also covers many admin tasks, so check `opencode --help` before you build your own wrappers. `opencode api <operationId>` calls any endpoint by its OpenAPI ID:
+
+```bash
+opencode api session.switchModel --param sessionID=$OPENCODE_SESSION_ID -d '{"model":{"providerID":"anthropic","id":"claude-opus-4-6"}}'
+opencode api session.compact --param sessionID=$OPENCODE_SESSION_ID
+opencode service status
+opencode plugin list
+opencode reload
+```
+
+**No env var sets the server URL** for the CLI. It talks to the background service, or to `--server <url>` with `OPENCODE_PASSWORD`. A private server you spawned yourself is invisible to plain `opencode` commands.
 
 ## Migrate the configuration (optional)
 
@@ -103,6 +223,19 @@ V1 groups effects by tool. V2 uses one **ordered `permissions` array**. Actions 
 }
 ```
 
+If your integration writes permissions in code, convert the aliases there too. A rule for `bash` or `task` does nothing in V2. See the [permission guide](https://opencode.ai/v2/docs/permissions).
+
+```ts
+// V1 rule in code
+{ permission: 'external_directory', pattern: '/repo/*', action: 'deny' }
+
+// V2 rule in code
+{ action: 'external_directory', resource: '/repo/*', effect: 'deny' }
+{ action: 'shell', resource: '*', effect: 'allow' }
+```
+
+The **last matching rule wins**. A wildcard deny removes the tool from the model's tool list, and forks and subagents inherit it. Skill rules (`skill:<id>`) accept only `allow` and `deny`, not `ask`.
+
 <Aside>
 <Warning>
 **`external_directory` is allowed by default in V2.** V1 asked before reading paths outside the project. Add `{ "action": "external_directory", "resource": "*", "effect": "ask" }` to keep the old behavior.
@@ -126,6 +259,42 @@ Most changes are **singular to plural** renames, plus model variants joined with
 | `compaction.preserve_recent_tokens`   | `compaction.keep.tokens`                                           |
 
 Two things are **gone, not renamed**. V2 keeps `lsp` config but runs no language servers. It also reads only `AGENTS.md`, not `CLAUDE.md`. Todos are off by default; enable them with `experimental.todo: true`.
+
+### Custom providers
+
+A V1 provider used `npm`. A V2 provider uses a **`package`** with the `aisdk:` prefix, which loads any AI SDK v3 provider module (a `create*` export) by URL or name:
+
+```jsonc
+// V1
+{ "provider": { "my": { "npm": "@ai-sdk/openai-compatible", "options": { "baseURL": "http://localhost:8080/v1" } } } }
+
+// V2
+{
+  "providers": {
+    "my": {
+      "name": "My provider",
+      "package": "aisdk:@ai-sdk/openai-compatible",
+      "settings": { "baseURL": "http://localhost:8080/v1" },
+      "models": { "my-model": { "name": "My model" } }
+    }
+  },
+  "model": "my/my-model"
+}
+```
+
+A local file works too: `"package": "aisdk:file:///path/to/provider.ts"`. Kimaki loads its deterministic test provider this way.
+
+Agents from a V1 `agent` block in `opencode.json` did **not always load the same way** in our tests, while file agents in `.opencode/agent/*.md` did. If an agent is missing after the upgrade, move it to a file.
+
+### Config written by integrations
+
+V1 integrations often generated an `opencode.json` and started a private server with it. In V2 you **share the user's service**, so you cannot own its config.
+
+- Load plugins as **directories**. V2 accepts directories in `plugins`, not single `.ts` files.
+- Project `opencode.json` files load after global config, so project permissions and providers can override your defaults.
+- Prefer per-session settings (`permissions` on `session.create`, instruction entries) over global config edits.
+- Writing a file into the plugins folder reloads plugins for every location and cancels pending forms. Write only when the content changed.
+- Pass plugin settings through **session metadata** or `ctx.options`, not env vars set when spawning OpenCode. A shared service has none of your env.
 
 ## Migrate OpenCode plugins to V2
 
@@ -151,6 +320,47 @@ export default Plugin.define({
 })
 ```
 
+### Plugin module shape
+
+V1 called **every named export** as a plugin initializer. V2 reads only the `default` export and checks it has an `id` plus a `setup` (Promise API) or `effect` (Effect API) function.
+
+```ts
+// V1: each export is one plugin
+import type { Plugin } from '@opencode-ai/plugin'
+
+export const contextPlugin: Plugin = async ({ directory, serverUrl }) => {
+  return {
+    'chat.message': async (input, output) => { /* ... */ },
+    event: async ({ event }) => { /* ... */ },
+  }
+}
+export { ipcToolsPlugin } from './ipc-tools-plugin.js'
+
+// V2: one default export, hooks registered imperatively
+import { Plugin } from '@opencode/plugin'
+
+export default Plugin.define({
+  id: 'my-plugin',
+  async setup(ctx) {
+    await ctx.session.hook('prompt', async (event) => { /* ... */ })
+    await ctx.tool.hook('execute.after', async (event) => { /* ... */ })
+    return () => {
+      // optional cleanup, runs on reload and location shutdown
+    }
+  },
+})
+```
+
+A missing or wrong default export fails with: `Plugin must export a default definition with an id and an effect or setup function.`
+
+**Every `hook()` and `transform()` returns a `Promise<Registration>`** with a `dispose()` method. Await them in `setup` so registration finishes before activation. Disposal on unload is automatic.
+
+`Plugin` is now a **value**, not just a type. `import type { Plugin }` from V1 code will not work for `Plugin.define`.
+
+**`effect` is a peer dependency.** OpenCode rewrites `effect` and `@opencode/plugin` imports to the host instances. Declare `"effect": "^4"` as a peer and dev dependency, never bundle it, and never import `effect/internal/*`.
+
+There is also an **Effect API** (`@opencode/plugin/effect`) where `effect: (ctx) => Effect` replaces `setup`. Use it where OpenCode's own API is Effect-native, for example OAuth attempts with scoped finalizers.
+
 ### Hook mapping
 
 Each hook now lives on **the domain that owns it**. The callback gets one mutable `event` instead of `input` and `output`.
@@ -163,17 +373,423 @@ Each hook now lives on **the domain that owns it**. The callback gets one mutabl
 | `shell.env`                                         | `ctx.shell.hook('create.before', ...)`                   |
 | `chat.message`                                      | `ctx.session.hook('prompt', ...)`                        |
 | `chat.params`, `experimental.chat.system.transform` | `ctx.session.hook('context', ...)`                       |
+| `experimental.chat.messages.transform`              | `ctx.session.hook('context', ...)`, edit `event.messages` |
 | `chat.headers`                                      | `ctx.session.hook('model.request', ...)`                 |
+| `auth` loader with a custom `fetch`                 | `ctx.session.hook('http.request' / 'http.response', ...)` |
 | `permission.ask`                                    | `ctx.permission.hook('evaluate', ...)`                   |
 | `auth`                                              | `ctx.integration.transform(...)`                         |
 | `experimental.session.compacting`                   | `ctx.session.hook('compaction', ...)`                    |
+| none                                                | `ctx.session.hook('retry', ...)`                         |
 | `dispose`                                           | cleanup function returned by `setup`                     |
 
 <Aside>
 <Tip>
-**`context` runs only before agent requests.** Register `compaction`, `generate` and `title` hooks too if a change must reach every model request. Kimaki registers all four.
+**`context` runs only before agent requests.** Register `compaction`, `generate` and `title` hooks too if a change must reach every model request. Kimaki registers the same handler for `context`, `compaction` and `generate`.
 </Tip>
 </Aside>
+
+### Hook by hook: V1 vs V2
+
+Real snippets from the Kimaki port. Each pair shows the V1 hook and its V2 replacement.
+
+#### tool.execute.before
+
+V1 passed `(input, output)` with `output.args`. V2 passes one **mutable event** `{ tool, sessionID, agent, messageID, id, input }`. The `input` is `unknown`, so narrow it.
+
+```ts
+// V1
+'tool.execute.before': async (input, output) => {
+  if (input.tool !== 'bash') return
+  output.args.command = `export FOO=1; ${output.args.command}`
+},
+
+// V2
+await ctx.tool.hook('execute.before', async (event) => {
+  if (event.tool !== 'shell') return
+  const input = event.input
+  if (!input || typeof input !== 'object' || Array.isArray(input)) return
+  if (!('command' in input) || typeof input.command !== 'string') return
+  input.command = `export FOO=1; ${input.command}`
+})
+```
+
+**Tool names changed**, so V1 checks for `bash` or `task` silently never match. Do not keep `shell || bash` fallbacks; V2 only sends `shell`.
+
+#### tool.execute.after
+
+V2 `execute.after` carries a **`status`** plus `result` or `error`. The input is read-only.
+
+```ts
+// V1
+'tool.execute.after': async (input, output) => {
+  await recordEdit({ sessionId: input.sessionID, tool: input.tool, args: input.args, output: output.output })
+},
+
+// V2
+await ctx.tool.hook('execute.after', async (event) => {
+  if (event.status !== 'completed') return
+  if (!['edit', 'write', 'patch'].includes(event.tool)) return
+  await recordEdit({ sessionId: event.sessionID, tool: event.tool, input: event.input })
+})
+```
+
+The event type is `{ tool, sessionID, agent, messageID, id, input }` plus either `{ status: 'completed', result }` or `{ status: 'error', error }`.
+
+**Results are not strings.** `Tool.Result` is `{ output?, content?, metadata? }`, where `content` is a string or an array of `{ type: 'text', text }` and `{ type: 'file', uri, mime, name? }`. Code that read V1 `output.output` breaks.
+
+To **replace** a tool result for every call, wrap `execute` in a tool transform instead:
+
+```ts
+await ctx.tool.transform((tools) => {
+  for (const current of tools.list()) {
+    tools.update(current.id, (tool) => {
+      const execute = tool.execute
+      tool.execute = async (input, context) => {
+        const result = await execute(input, context)
+        return redactSecrets(result)
+      }
+    })
+  }
+})
+```
+
+#### shell.env
+
+V1 `shell.env` got the `sessionID`. V2 `ctx.shell.hook('create.before')` gets `{ command, cwd, timeout, shell, env }` with **no session ID**.
+
+```ts
+// V1
+'shell.env': async (input, output) => {
+  output.env.MY_SESSION_ID = input.sessionID
+},
+
+// V2: env that is the same for every session
+await ctx.shell.hook('create.before', (event) => {
+  event.env.MY_TOOL_HOME = '/opt/my-tool'
+})
+
+// V2: per-session env, prefix the command in the session-aware tool hook
+await ctx.tool.hook('execute.before', async (event) => {
+  if (event.tool !== 'shell') return
+  const input = event.input as { command?: unknown }
+  if (typeof input.command !== 'string') return
+  const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`
+  input.command = `export MY_TOOL_CALL=${quote(`${event.messageID}:${event.id}`)}; ${input.command}`
+})
+```
+
+You need **no plugin for the session ID** itself: the V2 shell tool already exports `OPENCODE_SESSION_ID`.
+
+#### tool.definition
+
+V1 replaced a tool schema globally. In V2 you have two options. A **tool transform** changes the tool for the whole location. Editing `event.tools[name].input` in the `context` hook changes only what the model sees, per request.
+
+```ts
+// V1
+'tool.definition': async (input, output) => {
+  if (input.toolID !== 'bash') return
+  output.parameters = myBashSchema
+},
+
+// V2, per request: extend the JSON schema the model sees
+await ctx.session.hook('context', async (event) => {
+  if (!(await isMine(event.sessionID))) return
+  const tool = event.tools['shell']
+  const input = tool?.input
+  if (!tool || !input || typeof input !== 'object' || Array.isArray(input)) return
+  tool.input = {
+    ...input,
+    properties: {
+      ...(input.properties && typeof input.properties === 'object' ? input.properties : {}),
+      description: { type: 'string', description: 'Short 5-10 word summary of the command' },
+    },
+  }
+})
+```
+
+**Extra keys are safe.** OpenCode decodes the real tool input with a struct schema that ignores unknown keys. Extend the schema; do not replace it, or you lose native constraints like `timeout` being a non-negative integer.
+
+#### chat.message
+
+V1 pushed `synthetic: true` parts into the user message. **V2 prompts have no synthetic sub-parts.** Save a separate synthetic message before the prompt is admitted.
+
+```ts
+// V1
+'chat.message': async (input, output) => {
+  output.parts.push({
+    id: `prt_${crypto.randomUUID()}`,
+    sessionID: input.sessionID,
+    messageID: output.message.id,
+    type: 'text',
+    text: `[current git branch is ${branch}]`,
+    synthetic: true,
+  })
+},
+
+// V2
+await ctx.session.hook('prompt', async (event) => {
+  if (!(await isMine(event.sessionID))) return
+  const text = `[current git branch is ${await currentBranch(ctx.location.directory)}]`
+  const history = await ctx.session.context({ sessionID: event.sessionID }).catch(() => null)
+  const last = history?.findLast((m) => m.type === 'synthetic' && m.text.startsWith('[current git branch'))
+  if (last?.type === 'synthetic' && last.text === text) return
+  await ctx.session.synthetic({ sessionID: event.sessionID, text, delivery: event.delivery, resume: false })
+})
+```
+
+The `prompt` hook runs **before admission**, so the synthetic message lands first. Its event is mutable: `{ sessionID, messageID, prompt, metadata?, delivery }`. You can rewrite `event.prompt.text` or set `event.delivery`.
+
+**Never overwrite a delivery** the caller chose. Change it only for an explicit user request, like a queue suffix:
+
+```ts
+await ctx.session.hook('prompt', (event) => {
+  if (!event.prompt.text.endsWith('. queue')) return
+  event.prompt.text = event.prompt.text.slice(0, -'. queue'.length)
+  event.delivery = 'queue'
+})
+```
+
+Use `ctx.session.context({ sessionID })` to read the **model-facing history**. It replaces V1 `client.session.messages({ limit })` inside plugins.
+
+#### experimental.chat.system.transform and chat.params
+
+V1 gave `output.system: string[]`. V2 gives `event.system` as an array of `{ type: 'text', text }`, plus mutable `messages`, `tools`, `options` and read-only `model`, `agent`, `sessionID`.
+
+```ts
+// V1
+'experimental.chat.system.transform': async (input, output) => {
+  output.system.push('Always answer in English.')
+},
+'chat.params': async (input, output) => {
+  output.temperature = 0.2
+},
+
+// V2: one handler for every request kind
+import type { SessionContext } from '@opencode/plugin/promise/session'
+
+const shapeRequest = async (event: SessionContext) => {
+  event.system.push({ type: 'text', text: 'Always answer in English.' })
+  event.options.temperature = 0.2
+}
+await ctx.session.hook('context', shapeRequest)
+await ctx.session.hook('compaction', shapeRequest)
+await ctx.session.hook('generate', shapeRequest)
+```
+
+**Register all three kinds.** `generate` also covers OpenCode's warming keep-alive requests. If only `context` adds your text, compaction and warming requests have a different prefix and the provider prompt cache misses.
+
+The request kinds are `primary`, `compaction`, `title` and `generate`. The `title` hook is separate: set `event.result` to skip the title model call.
+
+#### experimental.chat.messages.transform
+
+**Gone.** Edit `event.messages` in the `context` hook. The entries are OpenCode `Message` instances, so mutate in place instead of building copies:
+
+```ts
+await ctx.session.hook('context', async (event) => {
+  for (const message of event.messages) {
+    if (message.role !== 'user') continue
+    const extra = renderTurnContext(message.metadata)
+    // TODO: build a new Message once plugins can import OpenCode's Message class.
+    if (extra) Array.prototype.push.call(message.content, { type: 'text', text: extra })
+  }
+})
+```
+
+V1 image optimizer plugins used this hook to shrink images. **V2 resizes images itself**, so you can usually delete them.
+
+#### chat.headers
+
+Per-request headers and base URL move to **`model.request`**. Scope model hooks with `{ providerID }`.
+
+```ts
+// V1
+'chat.headers': async (input, output) => {
+  if (input.model.providerID !== 'my-router') return
+  output.headers['x-session-affinity'] = input.sessionID
+},
+
+// V2
+await ctx.session.hook('model.request', async (event) => {
+  event.headers['x-session-affinity'] = event.sessionID
+  event.headers['x-agent'] = event.agent
+}, { providerID: 'my-router' })
+```
+
+The event is `{ sessionID, agent, model, kind, headers, baseURL? }`.
+
+#### auth loader with a custom fetch
+
+V1 rewrote provider HTTP by returning a custom `fetch` from `auth.loader`. V2 hands you the **outgoing `Request`** in `http.request` and the `Response` in `http.response`. Replace them to change them.
+
+```ts
+// V1
+auth: {
+  provider: 'anthropic',
+  async loader(getAuth, provider) {
+    return {
+      apiKey: '',
+      async fetch(input, init) {
+        const headers = new Headers(init?.headers)
+        headers.set('anthropic-beta', 'my-beta')
+        return fetch(input, { ...init, headers })
+      },
+    }
+  },
+},
+
+// V2
+await ctx.session.hook('http.request', async (event) => {
+  const request = event.request
+  if (!new URL(request.url).pathname.endsWith('/messages')) return
+  const body = rewriteBody(await request.clone().text())
+  const headers = new Headers(request.headers)
+  headers.set('anthropic-beta', 'my-beta')
+  headers.delete('content-length') // the body length changed
+  event.request = new Request(request, { body, headers })
+}, { providerID: 'anthropic' })
+```
+
+Three details matter:
+
+- **Clone before reading** the body: `request.clone().text()`.
+- **Delete `content-length`** when you change the body.
+- OpenCode already sends an OAuth access token as `authorization: Bearer`. No token injection needed.
+
+`http.response` is the **only place** to read headers of a failed response, for example rate limit reset times. The `retry` hook's error carries no headers.
+
+```ts
+const lastHeaders = new Map<string, Record<string, string>>()
+await ctx.session.hook('http.response', (event) => {
+  if (event.response.ok) return
+  lastHeaders.set(event.sessionID, Object.fromEntries(event.response.headers))
+})
+```
+
+OpenCode sets `user-agent: opencode/...` on every fetch, **including plugin fetches**. Some OAuth token endpoints reject it; set your own user agent there.
+
+#### auth methods
+
+V1 `auth.methods` with `authorize` returning `{ url, instructions, method, callback }` becomes an **integration method**. OpenCode stores and refreshes the credential.
+
+```ts
+// V1
+auth: {
+  provider: 'anthropic',
+  methods: [{ label: 'Claude Pro/Max', type: 'oauth', authorize: async () => ({
+    url, instructions: 'Paste the code', method: 'code',
+    callback: async (code) => ({ type: 'oauth', refresh, access, expires }),
+  }) }],
+},
+
+// V2 (Promise API)
+import { Plugin } from '@opencode/plugin'
+
+export default Plugin.define({
+  id: 'my-auth',
+  async setup(ctx) {
+    await ctx.integration.transform((editor) => {
+      editor.method.update({
+        integrationID: 'anthropic',
+        method: { id: 'my-oauth', type: 'oauth', label: 'My OAuth (browser)' },
+        authorize: async () => ({
+          mode: 'code',
+          url: buildAuthorizeUrl(),
+          instructions: 'Paste the code',
+          callback: async (code) => exchangeCode(code), // returns a Credential.OAuth
+        }),
+        refresh: async (credential) => refreshToken(credential),
+      })
+    })
+  },
+})
+```
+
+Rules from the port:
+
+- **One method, one mode.** An attempt is either `auto` (callback promise) or `code` (callback with the pasted code). Register two methods if you need both.
+- **Fail by rejecting.** There is no `{ type: 'failed' }` sentinel.
+- **Refresh is not single-flight.** Concurrent sessions can refresh twice; add your own lock if the provider rotates refresh tokens.
+- Method kinds are `oauth`, `command`, `key`, `external` and `env`.
+- To switch accounts from a plugin, use `ctx.credential.activate({ credentialID })`. Account changes are global per integration; model changes are per session.
+
+#### event
+
+V1 pushed events to an `event` callback with `event.properties`. V2 **pulls** with an async iterator, and payloads are in `event.data`.
+
+```ts
+// V1
+async event({ event }) {
+  if (event.type === 'session.idle') cleanup(event.properties.sessionID)
+},
+
+// V2
+const abort = new AbortController()
+void (async () => {
+  try {
+    for await (const event of ctx.event.subscribe({ signal: abort.signal })) {
+      if (event.type === 'session.execution.succeeded') cleanup(event.data.sessionID)
+    }
+  } catch {
+    // aborted on plugin unload
+  }
+})()
+return () => abort.abort()
+```
+
+Start the loop **detached** and abort it in cleanup, or it blocks activation. The bus is **process-wide**: every location's subscription sees every session, so filter by `sessionID`.
+
+**Prefer hooks over the bus** inside plugins. Kimaki's current plugin has no event subscription at all: its timers use the `prompt` and `context` hooks, since a model request means "not idle".
+
+#### experimental.session.compacting
+
+V2 `compaction` gets the full request context plus an optional **`result`**. Set it to skip the model call.
+
+```ts
+// V1
+'experimental.session.compacting': async (input, output) => {
+  output.context.push('Keep the list of open TODOs.')
+},
+
+// V2
+await ctx.session.hook('compaction', async (event) => {
+  event.system.push({ type: 'text', text: 'Keep the list of open TODOs.' })
+  // or: event.result = { summary: '## Objective\n...' }
+})
+```
+
+Plugins can also trigger compaction: `ctx.session.compact({ sessionID, delivery: 'queue' })`.
+
+#### permission.ask
+
+V1 set `output.status`. V2 `evaluate` can change **`effect`** and `message` for `{ sessionID, agent?, action, resources, metadata?, source? }`.
+
+```ts
+// V1
+'permission.ask': async (input, output) => {
+  if (input.type === 'bash' && isSafe(input)) output.status = 'allow'
+},
+
+// V2
+await ctx.permission.hook('evaluate', (event) => {
+  if (event.action === 'shell' && event.resources.every(isSafe)) event.effect = 'allow'
+})
+```
+
+Inside a custom tool, `ctx.permission.assert(input)` asks the user and waits. Rethrow a plain rejection; it ends the current step.
+
+#### retry (new)
+
+V2 adds a **`retry`** hook that decides whether and when to retry a failed model call. A fallback plugin can switch model or account and retry the same step, with no abort and no replay:
+
+```ts
+await ctx.session.hook('retry', async (event) => {
+  if (!isRateLimit(event.error)) return
+  await ctx.session.switchModel({ sessionID: event.sessionID, model: { providerID: 'openai', id: 'gpt-6' } })
+  event.decision = { retry: true, delay: 1_000 }
+})
+```
+
+The event is `{ sessionID, agent, model, error, attempt, decision }`. Compaction keeps its prepared request across retries, so a model switch here does not apply to it.
 
 ### Custom tools
 
@@ -204,155 +820,2171 @@ export default Plugin.define({
 })
 ```
 
-### Plugins and the prompt cache
-
-OpenCode V2 **freezes the system prompt** at session start so the provider prompt cache keeps hitting. Text you push in `ctx.session.hook('context')` runs on every request and sits before all messages.
-
-If that text changes during a session (a git branch name, a timestamp), **every request misses the cache**. Put session-level text in an instruction entry instead. Later changes are appended as a small delta, not a new prefix.
+The V1 version, for comparison:
 
 ```ts
-await client.session.instructions.entry.put({ sessionID, key: 'my-integration', value: systemPrompt })
+// V1
+import { tool } from '@opencode-ai/plugin'
+
+return {
+  tool: {
+    greeting: tool({
+      description: 'Create a greeting',
+      args: { name: z.string() },
+      async execute({ name }) {
+        return `Hello ${name}!`
+      },
+    }),
+  },
+}
 ```
+
+`input` accepts an Effect `Schema`, any **Standard Schema** (zod) or raw JSON Schema. The V1 zod version clash between the plugin package and your app is gone.
+
+**`execute(input, context)`** gets `{ sessionID, agent, messageID, id, signal, progress }`. Pass `context.signal` to every wait, so an interrupt stops your tool. `progress(metadata)` **replaces** the tool metadata; it does not append.
+
+```ts
+async execute(input, context) {
+  await context.progress({ status: 'uploading' })
+  const files = await waitForUpload({ signal: context.signal })
+  return { content: `Uploaded ${files.length} files`, metadata: { files: files.length } }
+}
+```
+
+`options: { codemode: false }` keeps a tool callable directly instead of only through code mode.
+
+**Models send `null` for optional fields.** `Schema.optional(Schema.String)` rejected `until: null` in our port. Accept null and normalize:
+
+```ts
+input: Schema.Struct({
+  duration: Schema.optional(Schema.NullOr(Schema.String)),
+  until: Schema.optional(Schema.NullOr(Schema.String)),
+}),
+```
+
+**Validate tool input at the model boundary.** The model can send anything. Put limits in the JSON Schema (`minimum`, `maximum`, `maxLength`, `enum`) and check them again in `execute`. Kimaki, for example, limits upload `maxFiles` to an integer from 1 to 10, and action buttons to 1 to 3 buttons with labels of 1 to 80 characters and a fixed color set.
+
+**Consider deleting custom tools.** Kimaki turned its V1 tools (sleep, buttons, file upload) into CLI commands the agent runs with the shell tool. The plugin then needs no tools, no IPC and no polling.
+
+### The ctx API
+
+`ctx` is a **working server client**. V1 plugins built their own SDK client from `serverUrl`, because the plugin-provided V1 client silently did nothing for some REST calls. Delete that workaround.
+
+```ts
+// V1
+const client = createOpencodeClient({ baseUrl: serverUrl.toString(), directory, headers: authHeaders() })
+const result = await client.session.get({ path: { id: sessionID } })
+if (result.data?.directory) { /* ... */ }
+
+// V2
+const session = await ctx.session.get({ sessionID }) // value or rejection, no .data
+```
+
+The full `ctx` shape in `@opencode/plugin` 2.0.29:
+
+| Field                   | Main members                                                                                         | Notes                                                |
+| ----------------------- | ---------------------------------------------------------------------------------------------------- | ---------------------------------------------------- |
+| `app`                   | `name`, `version`, `channel`                                                                         | host app info                                        |
+| `location`              | `directory`                                                                                          | the loading location, not the session's              |
+| `options`               | plain object                                                                                         | from `{ package, options }` in config                |
+| `session`               | `create get remove switchAgent switchModel prompt generate command compact synthetic interrupt update move wait context`, `hook` | no `fork`, `instructions`, `form`: use `@opencode/client` |
+| `tool`                  | `transform`, `reload`, `list`, `hook`                                                                | hooks: `execute.before`, `execute.after`             |
+| `shell`                 | `hook('create.before')`                                                                              | no `sessionID`                                       |
+| `event`                 | `subscribe`                                                                                          | whole server bus                                     |
+| `permission`            | `list get reply`, `hook('evaluate')`, `assert`                                                       |                                                      |
+| `skill`                 | skill API, `transform`, `reload`                                                                     | per location, visible in every session               |
+| `integration`           | integration API, `transform`, `reload`, `connection.*`                                               | auth methods live here                               |
+| `credential`            | `activate`                                                                                           | switch the active account                            |
+| `agent`, `command`, `model`, `provider`, `mcp`, `reference`, `websearch`, `vcs`, `worktree` | API plus `transform` and `reload` |                                     |
+| `rpc`                   | `register(definition, handlers)`                                                                     | typed plugin RPC                                     |
+| `storage`               | `get set remove scan`                                                                                | durable JSON scoped to the plugin                    |
+| `generate`              | `text({ prompt, model })`                                                                            | one-shot model call                                  |
+| `plugin`                | `list`                                                                                               |                                                      |
+| `aisdk`                 | AI SDK domain                                                                                        | provider packages                                    |
+
+Hook payload types are importable from **`@opencode/plugin/promise/session`**: `SessionPrompt`, `SessionContext`, `SessionCompaction`, `SessionModelRequest`, `SessionHttpRequest`, `SessionRetry` and more. Use them to share one handler across hook kinds.
+
+`ctx.command.transform` registers a slash command implemented in code. `ctx.worktree.transform` registers a worktree provider, replacing V1 workspace adaptor plugins:
+
+```ts
+await ctx.command.transform((editor) => {
+  editor.add({
+    name: 'standup',
+    description: 'Summarize my commits since yesterday',
+    async execute({ sessionID, prompt, delivery }) {
+      await ctx.session.prompt({ sessionID, text: `Summarize commits since yesterday. ${prompt.text}`, delivery })
+    },
+  })
+})
+```
+
+### Plugin storage and RPC
+
+**`ctx.storage`** is a durable JSON key-value store scoped to your plugin and shared across locations. Values must be JSON.
+
+```ts
+await ctx.storage.set('block/openai', { until: Date.now() + 60_000 })
+let after: string | undefined
+do {
+  const page = await ctx.storage.scan({ prefix: 'block/', after, limit: 1000 })
+  for (const entry of page.entries) console.log(entry.key, entry.value)
+  after = page.next
+} while (after)
+```
+
+**Plugin RPC** lets clients call typed methods inside the plugin. Clients call `POST /api/rpc/<id>/<method>` with a body `{ input }`; the response is `{ output }`. RPC events reach the bus as `rpc.<id>.<event>` and are **live-only**.
+
+```ts
+import { Plugin, Rpc } from '@opencode/plugin'
+
+export const StatusRpc = Rpc.define({
+  id: 'status',
+  methods: { blocks: { input: { type: 'object' }, output: { type: 'object' } } },
+  events: { switched: { schema: { type: 'object' } } },
+})
+
+export default Plugin.define({
+  id: 'status',
+  async setup(ctx) {
+    const rpc = await ctx.rpc.register(StatusRpc, {
+      blocks: async () => ({ blocks: await readBlocks() }),
+    })
+    await rpc.events.emit('switched', { sessionID: 'ses_123', to: 'openai/gpt-6' })
+  },
+})
+```
+
+Three RPC traps: the event encoder **rejects `undefined` values** (omit the key), JSON Schema inputs type as `unknown` (narrow once), and RPC is one-way (client to plugin). Kimaki tried RPC for CLI to bot calls and dropped it for plain HTTP.
+
+### Plugin packaging rules
+
+- **Ship built JavaScript.** Make the plugin a normal `tsc` build input and load the built directory. Do not exclude it from the build, export a raw `.ts` entry, or rely on OpenCode to transpile your source.
+- **One default export.** The entry module has one `export default Plugin.define(...)`. Unlike V1, other named exports are harmless: the V2 loader reads only `default`. Kimaki's auth plugin exports helpers and an error class next to it. Still, keep helpers in separate files so the entry stays small.
+- **One plugin per `id`.** OpenCode keeps one plugin per ID and reports a second one as `Duplicate plugin ID`. If a user lists your plugin in `opencode.json` and you also install it, remove one.
+- **Point at `dist`, not `src`.** OpenCode watches plugin files and reloads on change. A `src` target loads half-edited code on every save; in our port it crashed the service.
+- **Load directories.** `plugins: ["./probe.ts"]` is ignored. In 2.0.19 a standalone file was silently skipped and tools failed with `Unknown tool`.
+- **Keep the folder clean.** Inside the directory OpenCode tries a `server` entry before `index`, plus `tui` and `rpc` entries. A stray `server.js` next to your `index.js` wins.
+- **Keep dependencies light.** The plugin runs in the user's OpenCode process for every location. Do not import your app's database, chat SDK or logger there.
+- **Stay silent.** No `console.*`, no stdout or stderr writes; they show up in the TUI. Fail silently and return.
+
+```jsonc
+// V1: key `plugin`, file URLs
+{ "plugin": ["file:///home/me/app/dist/my-plugin.js"] }
+
+// V2: key `plugins`, directories, optional options
+{ "plugins": ["./plugins/probe", { "package": "./plugins/discord", "options": { "channel": "general" } }] }
+```
+
+`ctx.options` holds the `options` object. Plugins dropped into **`<config dir>/plugins/<name>/`** are auto-discovered and watched, with no config edit. Kimaki writes a one-line shim there on start:
+
+```ts
+// <config dir>/plugins/kimaki/index.js, generated
+export { default } from 'file:///path/to/kimaki/dist/plugin/index.js'
+```
+
+<Aside>
+<Warning>
+**Write the shim only when its content changes.** Any write in a watched plugin folder reloads every location, and a reload cancels pending forms and permissions. Compare content first.
+</Warning>
+</Aside>
+
+**Activation is async.** After the write, the watcher loads the plugin a moment later. `plugin.awaitActivation` was removed in 2.0.19, so poll `plugin.list` with a deadline before creating sessions:
+
+```ts
+async function waitForPlugin({ client, directory, id }: { client: OpenCodeClient; directory: string; id: string }) {
+  const location = { directory }
+  const deadline = Date.now() + 10_000
+  while (Date.now() < deadline) {
+    // integration.list waits for activations OpenCode already started; plugin.list does not.
+    await client.integration.list({ location })
+    const plugins = await client.plugin.list({ location })
+    if (plugins.data.some((plugin) => plugin.id === id && plugin.state.status === 'active')) return
+    await new Promise((resolve) => setTimeout(resolve, 200))
+  }
+  return new Error(`plugin ${id} is not active in ${directory}`)
+}
+```
+
+`plugin.list` items have **`state: { status, error? }`**, not a string state. In tests, assert that no plugin is `failed`.
+
+### One process, many locations
+
+One V2 service serves **every project directory**. `setup()` can run once per location in the same process, while module code and `globalThis` are process-wide.
+
+```diagram
+  OpenCode service process
+  ├── module scope / globalThis           shared by all locations
+  ├── setup(ctx) for /repo/a ──> ctx.location.directory = /repo/a
+  ├── setup(ctx) for /repo/b ──> ctx.location.directory = /repo/b
+  └── event bus                           carries events from every location
+```
+
+Follow these rules or state leaks across projects:
+
+- Process-wide resources (caches, sockets, timers) use a **symbol on `globalThis`** as a singleton guard.
+- Key session state by `sessionID`, never by "the current session".
+- Read location config from `ctx.location.directory`.
+- Event subscribers must not assume the bus carries only one location. Filter by session.
+- The cleanup function returned by `setup` aborts your subscriptions. It must not stop other processes.
+
+A process singleton needs a **refcount and an in-flight promise**. The refcount lets the last location stop the resource; the shared promise stops two locations from starting it twice.
+
+```ts
+const KEY = Symbol.for('my-plugin.gateway')
+type Shared = { refs: number; stop: () => void; starting?: Promise<void> }
+const g = globalThis as typeof globalThis & { [KEY]?: Shared }
+
+export default Plugin.define({
+  id: 'my-plugin',
+  async setup(ctx) {
+    if (!g[KEY]) {
+      const shared: Shared = { refs: 0, stop: () => {} }
+      g[KEY] = shared
+      shared.starting = startGateway().then((stop) => { shared.stop = stop })
+    }
+    await g[KEY].starting
+    g[KEY].refs++
+    return () => {
+      const shared = g[KEY]
+      if (!shared || --shared.refs > 0) return
+      shared.stop()
+      g[KEY] = undefined
+    }
+  },
+})
+```
+
+Two bugs we hit here: a **process-wide listener** registered inside `setup` ran once per location (duplicate clicks), and a cleanup that reset **process-wide state** wiped the pending buttons of every project when one location unloaded.
+
+**`ctx.location` is the loading directory**, not the session's directory. A session moved to a worktree still fires hooks in whatever location handles it. Use `ctx.session.get({ sessionID })` for session facts.
+
+**Transforms cannot be per session.** Tool, skill and agent transforms apply to the whole location and replay on `reload()`; reload does not rerun `setup`. Put anything per session in a hook.
+
+A **location reload** (file watcher, `opencode reload`) runs cleanup and setup again, cancels pending forms and permissions, and lets running sessions continue at the next step. Return a cleanup that stops your timers, and `unref()` them so they never keep the server alive:
+
+```ts
+const timers = new Map<string, NodeJS.Timeout>()
+function schedule(sessionID: string, ms: number, run: () => Promise<void>) {
+  clearTimeout(timers.get(sessionID))
+  const timer = setTimeout(() => void run().catch(() => {}), ms)
+  timer.unref?.()
+  timers.set(sessionID, timer)
+}
+return () => {
+  for (const timer of timers.values()) clearTimeout(timer)
+  timers.clear()
+}
+```
+
+### Plugins run for every session
+
+A plugin loaded for your integration also runs in the **user's own TUI sessions**. Mark your sessions with `metadata` at `session.create`, then return early in every hook when the marker is missing. For subagents, walk the parent chain to find the marker.
+
+```ts
+await ctx.session.hook('context', async (event) => {
+  if (!(await isMine(event.sessionID))) return
+  // only change prompts of sessions your integration created
+})
+```
+
+Never change prompts, tools, shell commands or files for unmarked sessions.
+
+The marker is **durable, opaque and inherited** by child sessions and forks. Write it from your integration:
+
+```ts
+await client.session.create({
+  location: { directory },
+  metadata: { myapp: { threadId, channelId, dataDir, port } },
+})
+```
+
+Read it in the plugin, with a cache, since the value never changes for a session:
+
+```ts
+const MARKERS = Symbol.for('myapp.markers')
+const cache: Map<string, Promise<Record<string, unknown> | null>> =
+  (Reflect.get(globalThis, MARKERS) as Map<string, Promise<Record<string, unknown> | null>>) ?? new Map()
+Reflect.set(globalThis, MARKERS, cache)
+
+async function readMarker(ctx: Plugin.Context, sessionID: string): Promise<Record<string, unknown> | null> {
+  const session = await ctx.session.get({ sessionID }).catch(() => null)
+  const value: unknown = session?.metadata?.['myapp']
+  if (value && typeof value === 'object' && !Array.isArray(value)) return value as Record<string, unknown>
+  if (!session?.parentID) return null
+  return readMarker(ctx, session.parentID)
+}
+
+function isMine(ctx: Plugin.Context, sessionID: string) {
+  const cached = cache.get(sessionID)
+  if (cached) return cached
+  const marker = readMarker(ctx, sessionID)
+  cache.set(sessionID, marker)
+  return marker
+}
+```
+
+Two marker rules:
+
+- **`session.update({ metadata })` replaces the whole object.** Merge before you write: `metadata: { ...info.metadata, myapp: { ...old, port } }`.
+- **Adopt old sessions lazily.** Sessions imported from V1 or created in the TUI have no marker. Add it on the first input your integration sends, not by scanning thousands of sessions at startup.
+
+Make the **exceptions explicit**. Kimaki's only all-session behaviors are its built-in skills, a stable `OpenCode session ID` system line, and provider auth, which lives in a separate plugin.
+
+### Plugin parity audit
+
+Before you delete the V1 plugin, **list every hook it had** and give each one an explicit result. These are the rows from our Kimaki audit; your list will differ but the rule is the same.
+
+| Previous behavior        | Required result                                                   |
+| ------------------------ | ----------------------------------------------------------------- |
+| Provider routing plugin  | Load the native provider or plugin and test activation            |
+| Prompt injection guard   | Port the scanning hooks, or remove the user option with an error  |
+| File edit tracking       | Record native `edit`, `write`, `apply_patch` success facts        |
+| Image optimization       | Port before file admission, or document the removal              |
+| Prompt cache drift check | Port to native hooks, or document the removal                     |
+| Worktree adaptation      | Replace with native location and worktree behavior                |
+| Provider auth rotation   | Use native integration support, or document the removal          |
+| Terminal image output    | Keep only where the host still supports it                        |
+
+**No feature may stay as a silent no-op.** A config writer with no active reader is a migration bug. A registered command that always replies "not available" is too: port it, or remove it and document the break.
+
+The final Kimaki decisions, for reference:
+
+| V1 plugin                          | V2 decision                                                 |
+| ---------------------------------- | ----------------------------------------------------------- |
+| interrupt (3s abort and replay)    | deleted, native inbox steer                                 |
+| memory overview                    | deleted                                                     |
+| cache drift check                  | deleted, instruction entries keep the prefix stable         |
+| image optimizer                    | deleted, V2 resizes images                                  |
+| task ID sanitizer                  | deleted                                                     |
+| context awareness                  | ported, branch only, `prompt` hook plus synthetic message   |
+| bash schema                        | ported, `context` hook edits `event.tools.shell.input`      |
+| file edit log                      | ported, `execute.after`                                     |
+| IPC tools                          | deleted, replaced by CLI commands                           |
+| Anthropic auth                     | ported, separate plugin with integration and `http.request` |
+| OpenAI and xAI account rotation    | replaced by a fallback plugin with the `retry` hook         |
+| workspace adaptor                  | replaced by own git worktrees plus `session.move`           |
+| injection guard                    | removed                                                     |
 
 ## Migrate the SDK to @opencode/client
 
+The **client** is the second rewrite. V2 ships new package names, a new call shape and a new process model. Do not try to keep the V1 calls alive behind an adapter.
+
 ### The @opencode-ai/sdk/v2 trap
 
-The **most common mistake**: OpenCode 1 shipped `@opencode-ai/sdk/v2`. That export is a transitional client over V1 routes. Changing your import to it does **not** migrate you to OpenCode V2.
+**`@opencode-ai/sdk/v2` is not the V2 SDK.** It is a V1-era transitional client over a mix of legacy and V2 routes. Changing the import from `@opencode-ai/sdk` to `@opencode-ai/sdk/v2` migrates nothing. The upstream internal checklist calls it a legacy client, despite the export name.
 
-| Role           | OpenCode V1                          | OpenCode V2        |
-| -------------- | ------------------------------------ | ------------------ |
-| Network client | `@opencode-ai/sdk` (including `/v2`) | `@opencode/client` |
-| Embedded host  | `@opencode-ai/sdk`                   | `@opencode/sdk`    |
-| Plugin API     | `@opencode-ai/plugin`                | `@opencode/plugin` |
-| CLI package    | `opencode-ai`                        | `@opencode/cli`    |
+| Role           | OpenCode V1                                  | OpenCode V2        |
+| -------------- | -------------------------------------------- | ------------------ |
+| Network client | `@opencode-ai/sdk`, including its `/v2` export | `@opencode/client` |
+| Embedded host  | `@opencode-ai/sdk`                           | `@opencode/sdk`    |
+| Plugin API     | `@opencode-ai/plugin`                        | `@opencode/plugin` |
+| Native CLI     | `opencode-ai`                                | `@opencode/cli`    |
+
+Find every old import before you start. The migration is not done while this prints anything:
+
+```bash
+rg -n "@opencode-ai/(sdk|plugin)" --glob '!**/node_modules/**' --glob '!**/dist/**'
+rg -n "createOpencodeClient|promptAsync|session\.abort|client\.global\.event|event\.properties" src
+```
+
+Pin all `@opencode/*` packages **to the same exact version** (no `^`). The API changed between V2 releases with no release notes, see the [rename table](#upgrading-from-202-to-2019).
+
+```bash
+pnpm add @opencode/client@2.0.19 @opencode/plugin@2.0.19
+```
+
+<Aside>
+<Warning>
+**Read the generated types, not memory.** Method names moved between 2.0.x releases. The truth is `node_modules/@opencode/client/dist/promise/generated/types.d.ts` of the version you installed.
+</Warning>
+</Aside>
 
 ### Connect to the shared service
 
-V2 runs **one background service** shared by the TUI, desktop app, web app and your integration. Discover it instead of spawning a private server. That way your sessions show up in the user's TUI too.
+V1 integrations spawned and owned a private `opencode serve`. V2 runs **one background service per user**, shared by the TUI, the desktop app, the web app and your integration. Connect to it instead of starting your own.
+
+```diagram
+  V1                                        V2
+  ─────────────────────────────            ───────────────────────────────────────
+  your bot ──spawn──> opencode serve        TUI ──────┐
+  TUI      ──spawn──> opencode serve        desktop ──┼──> one OpenCode service ──> many locations
+  (one server per client)                   your bot ─┘    ~/.local/state/opencode/service.json
+```
+
+`Service.discover()` reads the registration file. `Service.ensure()` starts a service when none runs.
 
 ```ts
+// V1: own child process, own password
+import { createOpencodeClient } from '@opencode-ai/sdk'
+
+const child = spawn(opencodeBin, ['serve', '--port', String(port), '--hostname', '127.0.0.1', '--print-logs', '--log-level', 'WARN'], { env })
+const client = createOpencodeClient({ baseUrl: `http://127.0.0.1:${port}`, directory })
+```
+
+```ts
+// V2: the user's shared service
 import { OpenCode } from '@opencode/client'
 import { Service } from '@opencode/client/service'
 
-const endpoint =
-  (await Service.discover({ file })) ??
-  (await Service.ensure({ file, command: ['opencode', 'serve', '--service', '--hostname', '127.0.0.1'] }))
-
+const discovered = await Service.discover()
+const endpoint = discovered ?? (await Service.ensure({
+  command: [binary, 'serve', '--service', '--hostname', '127.0.0.1'],
+}))
 const client = OpenCode.make({ baseUrl: endpoint.url, headers: Service.headers(endpoint) })
-const info = await client.server.info()
+
+const info = await client.server.info({ signal: AbortSignal.timeout(5_000) })
+if (!atLeast(info.version)) throw new Error(`OpenCode ${info.version} is too old, upgrade to 2.0.19+`)
 ```
+
+Four rules for `ensure()`:
+
+- **Never pass a version.** `ensure()` replaces a running service of another version. That kills the user's live TUI sessions. Check `server.info()` and tell the user to upgrade instead.
+- **Pass `command` explicitly.** The default is `opencode` from `PATH`, which can be V1. V1 prints help for `serve --service`, exits, and `ensure` fails with a vague error. Use the [binary finder](#version-checks-in-integrations).
+- **`discover()` returns no version.** Always call `server.info()`.
+- **Always pass `--hostname 127.0.0.1`.** A V1 `server.hostname` or mDNS config can otherwise bind `0.0.0.0`.
+
+The costs of a shared service: you no longer pin the server version, your plugin loads in the user's TUI sessions (see [plugins run for every session](#plugins-run-for-every-session)), and the user can restart the service at any time. Your event stream must survive that.
+
+### Auth and readiness
+
+The server uses **Basic auth** with user `opencode`. `Service.headers(endpoint)` builds the header from the registration file. Without the helper:
+
+```ts
+const client = OpenCode.make({
+  baseUrl,
+  headers: {
+    Authorization: `Basic ${Buffer.from(`opencode:${password}`).toString('base64')}`,
+  },
+})
+```
+
+| Topic             | V1                                         | V2                                            |
+| ----------------- | ------------------------------------------ | --------------------------------------------- |
+| Password env      | `OPENCODE_SERVER_PASSWORD`, `_USERNAME`     | `OPENCODE_PASSWORD`, ignored in service mode  |
+| Service password  | your env var                               | only in `service.json` (mode 0600)            |
+| Health probe      | `GET /api/health`                          | `GET /api/info`, authenticated                |
+| Serve flags       | `--print-logs --log-level WARN`             | removed                                       |
+
+In service mode the **password lives only in the registration file**. A second process of your tool (a CLI subcommand) that only knows the port cannot authenticate. We hit this: discovery stored the port, the bot generated a random password, and every subcommand got `401`.
+
+A readiness probe must require a **2xx**. A `401` or `403` means "not ready", never "below 500, so fine".
+
+```ts
+async function ready(client: OpenCodeClient, signal: AbortSignal) {
+  return client.server.info({ signal }).then(() => true, () => false)
+}
+```
+
+<Aside>
+<Warning>
+**Never log the password.** Not in normal logs, chat messages, project files or command output. Debug dumps of `endpoint` objects leak it too.
+</Warning>
+</Aside>
+
+### Call shapes: V1 vs V2
+
+V2 calls take **flat inputs**, return the value, and **reject** on error. Remove every `.data`, `.error`, nested `path` / `query` / `body` and `throwOnError`.
+
+| V1 behavior                                     | V2 replacement                                              |
+| ----------------------------------------------- | ----------------------------------------------------------- |
+| `createOpencodeClient({ baseUrl, directory })`   | `OpenCode.make({ baseUrl, headers })`, location per call    |
+| `{ data, error }` result                        | value, or a rejected promise                                |
+| `session.create({ directory, permission })`     | `session.create({ location: { directory }, permissions })`  |
+| `session.promptAsync({ parts })`                | `session.prompt({ sessionID, text, files, delivery })`      |
+| `promptAsync({ noReply: true })`                | `session.prompt({ sessionID, text, resume: false })`        |
+| synthetic context without a reply              | `session.synthetic({ sessionID, text, resume: false })`     |
+| `promptAsync({ system })`                       | `session.instructions.entry.put({ sessionID, key, value })` |
+| per-prompt `agent`, `model`, `variant`          | `session.switchAgent` / `session.switchModel` first         |
+| `session.abort(...)`                            | `session.interrupt({ sessionID, resume? })`                 |
+| `session.update({ permission })`                | `session.update({ sessionID, permissions })`                |
+| `session.messages`                              | `message.list({ sessionID, order, cursor, limit })`         |
+| `session.status()` polling                      | `session.active()` plus execution events                    |
+| `session.summarize`                             | `session.compact`                                           |
+| `session.delete`                                | `session.remove`                                            |
+| `question.reply({ requestID, answers })`        | `session.form.reply({ sessionID, formID, answer })`         |
+| `permission.reply({ requestID, reply })`        | `permission.reply({ sessionID, requestID, decision })`      |
+| `client.global.event()`                         | `client.event.subscribe({ signal, onActivity })`            |
+| `session.share`                                 | none in V2                                                  |
+
+#### Create a session
+
+```ts
+// V1
+const result = await client.session.create({ directory, permission: rules })
+if (result.error || !result.data) throw new Error(String(result.error))
+const session = result.data
+```
+
+```ts
+// V2
+const session = await client.session.create({
+  title: 'Review the current changes',
+  location: { directory },
+  agent: 'build',
+  model: { providerID: 'anthropic', id: 'claude-opus-4-6' },
+  permissions: [{ action: 'edit', resource: `${directory}/**`, effect: 'allow' }],
+  metadata: { myapp: { threadId } },
+})
+```
+
+#### Prompt: promptAsync becomes prompt
+
+`session.prompt` returns the **accepted inbox item, not the reply**. The answer only arrives through events. The prompt has **no `agent`, `model`, `system` or `parts`** fields; that was the biggest hidden surprise of our port.
+
+```ts
+// V1
+await client.session.promptAsync({
+  sessionID,
+  directory,
+  parts: [
+    { type: 'text', text },
+    { type: 'text', text: context, synthetic: true },
+    ...imageParts,
+  ],
+  system,
+  agent,
+  model: { providerID, modelID },
+})
+```
+
+```ts
+// V2
+await client.session.prompt({
+  sessionID,
+  id: `msg_chat_${chatMessageId}`,             // optional, idempotent, must start with msg_
+  text,
+  files: [{ uri: 'file:///tmp/screenshot.png', name: 'screenshot.png' }],
+  skills: [{ id: 'playwriter' }],
+  delivery: 'steer',                            // or 'queue'
+  metadata: { chat: { userId, messageId } },    // shows up in inbox.enqueued payload
+})
+```
+
+#### Abort becomes interrupt
+
+```ts
+// V1
+await client.session.abort({ sessionID, directory })
+```
+
+```ts
+// V2: resume false stops; resume true lets queued input continue
+const result = await client.session.interrupt({ sessionID, resume: false })
+// result.interrupted is false when nothing ran: treat it as success
+```
+
+#### noReply becomes resume: false
+
+V1 `noReply: true` has no direct twin. `resume: false` admits the item **without waking execution**. It is delivered with the next turn.
+
+```ts
+// V1
+await client.session.promptAsync({ sessionID, directory, parts, noReply: true })
+```
+
+```ts
+// V2: a user message that should not start a turn
+await client.session.prompt({ sessionID, text, resume: false })
+// V2: model context that is not a user message
+await client.session.synthetic({ sessionID, text, delivery: 'steer', resume: false })
+```
+
+<Aside>
+<Warning>
+**A queued `noReply` does not work.** If you queue a context-only prompt without `resume: false`, the inbox delivers it later and the agent starts a turn and replies.
+</Warning>
+</Aside>
+
+#### system becomes an instruction entry
+
+```ts
+// V1: system string sent with every prompt
+await client.session.promptAsync({ sessionID, parts, system: buildSystemPrompt() })
+```
+
+```ts
+// V2: written once, stored by OpenCode, inherited by forks
+await client.session.instructions.entry.put({ sessionID, key: 'myapp', value: buildSystemPrompt() })
+```
+
+Write it **before the first prompt**. The payload limit is 256 KiB. The route is under `/experimental/`. See [instruction entries and the prompt cache](#instruction-entries-and-the-prompt-cache).
+
+#### Questions become forms
+
+```ts
+// V1
+await client.question.reply({ requestID, directory, answers: [['Red'], ['Apple', 'Kiwi']] })
+```
+
+```ts
+// V2: answers keyed by field, not positional
+await client.session.form.reply({ sessionID, formID, answer: { q0: 'Red', q1: ['Apple', 'Kiwi'] } })
+await client.session.form.cancel({ sessionID, formID })
+```
+
+### Common operations
+
+| Operation                       | V2 call                                                         |
+| ------------------------------- | --------------------------------------------------------------- |
+| Create a session                | `session.create({ location, permissions, agent, model, metadata })` |
+| Read one session                | `session.get({ sessionID })`                                    |
+| Admit a user prompt             | `session.prompt({ sessionID, text, files?, delivery? })`        |
+| Admit synthetic context         | `session.synthetic({ sessionID, text, delivery, resume })`      |
+| Interrupt execution             | `session.interrupt({ sessionID, resume? })`                     |
+| Store system instructions       | `session.instructions.entry.put({ sessionID, key, value })`     |
+| Change agent or model           | `session.switchAgent(...)` / `session.switchModel(...)`         |
+| Rename                          | `session.update({ sessionID, title })`                          |
+| Change rules                    | `session.update({ sessionID, permissions })`                    |
+| Busy sessions                   | `session.active()`, keys are running session IDs                |
+| Pending input                   | `session.inbox.list / cancel / update`                          |
+| Pending questions               | `session.form.list / reply / cancel`                            |
+| Pending permissions             | `permission.list / reply`                                       |
+| User shell command              | `session.shell({ sessionID, command })`                         |
+| Run a command                   | `session.command({ sessionID, name, text, files, delivery })`   |
+| Compact                         | `session.compact({ sessionID })`                                |
+| Fork                            | `session.fork({ sessionID, before? })`                          |
+| Move to another directory       | `session.move({ sessionID, directory, delivery })`              |
+| Wait until idle (experimental)  | `session.wait({ sessionID })`                                   |
+| Mark read in the sidebar        | `session.view({ sessionID, idle })`                             |
+| Agents, commands, models        | `agent.list`, `command.list`, `model.list` with `{ location }`  |
+
+### Pagination
+
+Every list endpoint is **cursor-paginated** and returns `{ data, cursor }`. `cursor.next` is opaque. This covers `message.list`, `session.list`, `agent.list`, `command.list`, `model.list` and `shell.list`.
+
+```ts
+async function allMessages(client: OpenCodeClient, sessionID: string) {
+  const messages = []
+  let cursor: string | undefined
+  do {
+    const page = await client.message.list({
+      sessionID,
+      limit: 200,
+      ...(cursor ? { cursor } : { order: 'asc' }),
+    })
+    messages.push(...page.data)
+    cursor = page.cursor?.next ?? undefined
+  } while (cursor)
+  return messages
+}
+```
+
+Three traps:
+
+- **`message.list` is newest first by default.** Pass `order: 'asc'` before you render markdown or pick the latest user turn.
+- **`cursor` must not be combined with `order`.** The cursor already carries it.
+- **`limit` is at most 200.**
+
+### Location rules
+
+One service serves **many project directories**, called locations. V1 cached one client per directory. V2 uses one client and selects a location per call.
+
+```ts
+// V1: one client per directory
+const client = createOpencodeClient({ baseUrl, directory })
+clientCache.set(directory, client)
+
+// V2: one client, location in the call
+const client = OpenCode.make({ baseUrl: endpoint.url, headers: Service.headers(endpoint) })
+await client.agent.list({ location: { directory } })
+await client.session.prompt({ sessionID, text })   // session calls resolve the stored location
+```
+
+- **Location belongs in `session.create`.** Later session calls only need `sessionID`.
+- Non-session routes take `location: { directory }`, the `x-opencode-directory` header, or `?location[directory]=` in raw HTTP. Not `?directory=`.
+- **`session.list` without scope is global** across every project. See [ordered and scoped reads](#ordered-and-scoped-reads).
+
+### Upgrading from 2.0.2 to 2.0.19
+
+OpenCode publishes no V2 release notes. The API changes are in `V2_HTTP_API_AUDIT.md` on the [v2 branch](https://github.com/anomalyco/opencode/tree/v2). If you ported against an early V2, these renames will hit you:
+
+| 2.0.2                                                  | 2.0.19                                                       |
+| ------------------------------------------------------ | ------------------------------------------------------------ |
+| `plugin.awaitActivation`                               | removed; prompt, command and shell handlers wait server side |
+| `permission.rules({ sessionID, permissions })`         | `session.update({ sessionID, permissions })`                 |
+| `permission.reply({ reply })`                          | `permission.reply({ decision })`                             |
+| `session.rename({ sessionID, title })`                 | `session.update({ sessionID, title })`                       |
+| `session.fork({ boundary: { type: 'through' } })`      | `session.fork({ sessionID })`                                |
+| `session.fork({ boundary: { type: 'before', messageID } })` | `session.fork({ sessionID, before: messageID })`        |
+| `session.interrupt({ continue })`                      | `session.interrupt({ resume })`                              |
+| `session.command({ command })`                         | `session.command({ name })`                                  |
+| `form.list / reply / cancel({ sessionID, ... })`       | `session.form.list / reply / cancel(...)`, `form.state` removed |
+| `worktree.*({ location })`                             | `worktree.*({ projectID })`, from `location.get().project.id` |
+| `project.time.initialized`                             | removed                                                      |
+| `GET /api/health`                                      | `GET /api/info`                                              |
+| `session.step.started` event                           | now carries `data.started`                                   |
+
+`session.form.list` returns **only pending** forms. `model.list` does not wait for plugin activation, so an early read can miss plugin providers.
+
+## A complete V2 integration example
+
+One file that does the **whole loop**: discover the service, create a marked session, store instructions, prompt, subscribe with an `AbortSignal`, reconnect, fold text and tools, and stop when the execution ends. Run it with `tsx example.ts "list the files in this repo"`.
+
+```ts
+import { OpenCode, type OpenCodeClient, type V2Event } from '@opencode/client'
+import { Service } from '@opencode/client/service'
+import { setTimeout as sleep } from 'node:timers/promises'
+
+const STREAM_IDLE_TIMEOUT_MS = 45_000
+const MAX_BACKOFF_MS = 30_000
+
+async function connect() {
+  const endpoint = (await Service.discover()) ?? (await Service.ensure({
+    command: ['opencode', 'serve', '--service', '--hostname', '127.0.0.1'],
+  }))
+  const client = OpenCode.make({ baseUrl: endpoint.url, headers: Service.headers(endpoint) })
+  const info = await client.server.info({ signal: AbortSignal.timeout(5_000) })
+  console.error(`connected to OpenCode ${info.version}`)
+  return client
+}
+
+function eventSessionId(event: V2Event): string | null {
+  if (event.type === 'form.created') return event.data.form.sessionID
+  const data: Record<string, unknown> = event.data
+  return typeof data['sessionID'] === 'string' ? data['sessionID'] : null
+}
+
+type View = { toolNames: Map<string, string>; done: boolean }
+
+// Pure fold: one event in, printed lines out.
+function fold(view: View, event: V2Event): string[] {
+  switch (event.type) {
+    case 'session.text.ended':
+      return event.data.text.trim() ? [event.data.text.trim()] : []
+    case 'session.tool.input.started':
+      view.toolNames.set(`${event.data.assistantMessageID}:${event.data.id}`, event.data.name)
+      return []
+    case 'session.tool.called': {
+      const name = view.toolNames.get(`${event.data.assistantMessageID}:${event.data.id}`) ?? 'tool'
+      return [`  > ${name} ${JSON.stringify(event.data.input).slice(0, 80)}`]
+    }
+    case 'session.tool.failed':
+      if (event.data.error.type === 'aborted') return []
+      return [`  x ${event.data.error.message}`]
+    case 'session.execution.succeeded':
+      view.done = true
+      return ['done']
+    case 'session.execution.failed':
+      view.done = true
+      return [`failed: ${event.data.error.message}`]
+    case 'session.execution.interrupted':
+      view.done = true
+      return [`interrupted: ${event.data.reason}`]
+    default:
+      return []
+  }
+}
+
+async function watch({ client, sessionID, signal }: { client: OpenCodeClient; sessionID: string; signal: AbortSignal }) {
+  const view: View = { toolNames: new Map(), done: false }
+  let backoff = 500
+  while (!signal.aborted && !view.done) {
+    const attempt = new AbortController()
+    const attemptSignal = AbortSignal.any([signal, attempt.signal])
+    let timer: NodeJS.Timeout | undefined
+    // The server sends a keepalive every 15s; silence means a half-open stream.
+    const touch = () => {
+      clearTimeout(timer)
+      timer = setTimeout(() => attempt.abort(), STREAM_IDLE_TIMEOUT_MS)
+    }
+    touch()
+    try {
+      const stream = client.event.subscribe({ signal: attemptSignal, onActivity: touch })
+      let first = true
+      for await (const event of stream) {
+        if (first) {
+          if (event.type !== 'server.connected') throw new Error('first event was not server.connected')
+          first = false
+          backoff = 500
+          // Hydrate: did the run end while we were away?
+          const active = await client.session.active({ signal: attemptSignal })
+          if (!(sessionID in active)) {
+            view.done = true
+            console.log('session is idle')
+            break
+          }
+          continue
+        }
+        if (eventSessionId(event) !== sessionID) continue
+        for (const line of fold(view, event)) console.log(line)
+        if (view.done) break
+      }
+    } catch (error) {
+      if (signal.aborted) break
+      console.error('stream lost, reconnecting', error instanceof Error ? error.message : error)
+    } finally {
+      clearTimeout(timer)
+      attempt.abort()
+    }
+    if (view.done) break
+    await sleep(backoff, undefined, { signal }).catch(() => {})
+    backoff = Math.min(backoff * 2, MAX_BACKOFF_MS)
+  }
+}
+
+async function main() {
+  const text = process.argv[2] ?? 'Say hello in one sentence.'
+  const controller = new AbortController()
+  process.on('SIGINT', () => controller.abort())
+
+  const client = await connect()
+  const session = await client.session.create({
+    title: 'example',
+    location: { directory: process.cwd() },
+    metadata: { example: { createdBy: 'example.ts' } },
+  })
+  await client.session.instructions.entry.put({
+    sessionID: session.id,
+    key: 'example',
+    value: 'Answer briefly. You are driven by a script, not a human.',
+  })
+
+  // Subscribe before prompting, so no event of the first turn is missed.
+  const watching = watch({ client, sessionID: session.id, signal: controller.signal })
+  await sleep(200)
+  await client.session.prompt({ sessionID: session.id, text, delivery: 'steer' })
+  await watching
+}
+
+await main()
+```
+
+What this example skips, and the sections that cover it: [subagents](#subagent-events), [forms and permissions](#forms-and-questions), [queued turns in one execution](#execution-lifecycle), and [held events during hydration](#event-stream-subscribe-reconnect-hydrate).
 
 <Aside>
 <Note>
-**Never pin a version** when you start the service. Installing a different OpenCode replaces the running server and kills the user's open TUI sessions.
+**The `sleep(200)` is a shortcut.** A real integration keeps one long-lived subscription for the whole process and binds the new session in its routing map before calling `session.prompt`. Then no wait is needed.
 </Note>
 </Aside>
 
-### Call shapes
+## The V2 protocol model
 
-Calls take **flat inputs** and return the value directly, or reject. Remove every `.data`, `.error`, nested `path`/`query`/`body` and `throwOnError`.
-
-| OpenCode V1                                 | OpenCode V2                                                      |
-| ------------------------------------------- | ---------------------------------------------------------------- |
-| `session.create({ directory, permission })` | `session.create({ location: { directory }, permissions })`       |
-| `session.promptAsync({ parts })`            | `session.prompt({ sessionID, text, files, delivery })`           |
-| `promptAsync({ noReply: true })`            | `session.prompt({ sessionID, text, resume: false })`             |
-| `promptAsync({ system })`                   | `session.instructions.entry.put({ sessionID, key, value })`      |
-| `session.abort(...)`                        | `session.interrupt({ sessionID, resume? })`                      |
-| `session.update({ permission })`            | `session.update({ sessionID, permissions })`                     |
-| question APIs and events                    | `session.form.*` and `form.*` events                             |
-| `message.part.*` snapshots                  | `session.text.*`, `session.reasoning.*`, `session.tool.*` events |
-
-```ts
-const session = await client.session.create({
-  location: { directory },
-  permissions: [{ action: 'edit', resource: `${directory}/**`, effect: 'allow' }],
-})
-
-await client.session.prompt({
-  sessionID: session.id,
-  text: 'Fix the failing test',
-  delivery: 'steer',
-})
-```
-
-`session.prompt` returns the **accepted inbox item**, not the reply. The answer arrives on the event stream.
-
-## Events, inbox and execution
-
-V1 sent mutable part snapshots. V2 sends **facts**: live deltas, then a durable terminal event with the full value.
+OpenCode V2 emits **facts**, not mutable V1 part snapshots. Live events carry deltas. Durable terminal events and projected messages carry complete values.
 
 ```diagram
-  session.prompt({ delivery: 'steer' | 'queue' })
-        │
-        ├──> session.inbox.enqueued
-        ├──> session.execution.started          start typing, start timer
-        ├──> session.inbox.delivered            prompt is now visible history
-        │
-        ├──> session.text.delta ... session.text.ended          full text on ended
-        ├──> session.tool.input.* ... session.tool.success | failed
-        │
-        └──> session.execution.succeeded | failed | interrupted
+  session.prompt()
+       │ returns the inbox item
+       ▼
+  session.inbox.enqueued ──────────> (admitted, pending)
+  session.execution.started ───────> busy period starts, typing on
+  session.inbox.delivered ─────────> prompt becomes visible history
+       │
+       ├── session.step.started       one model call (model, agent)
+       │     ├── session.text.started / delta… / ended
+       │     ├── session.tool.input.started (name) / delta… / ended
+       │     ├── session.tool.called (parsed input) / progress… / success | failed
+       │     └── session.step.ended   tokens of this call
+       ├── session.step.started …     more steps while tools run
+       │
+       └── session.execution.succeeded | failed | interrupted
 ```
 
-The **inbox** replaces abort-and-replay:
+A successful `session.prompt` call only means the **inbox accepted** the item. One inbox item can produce many steps while tools and retries run. One execution can also **consume several inbox items**.
 
-- `delivery: 'steer'` lands at the next safe step boundary of the running turn.
-- `delivery: 'queue'` waits until the current execution finishes.
-- `resume: false` adds the message without waking the agent.
+### V1 events and their V2 replacement
 
-Use `session.execution.succeeded` as the "turn done" signal. `session.idle` is deprecated and also fires after an interrupt.
+| V1 event                                   | V2 replacement                                                                 |
+| ------------------------------------------ | ------------------------------------------------------------------------------ |
+| `message.part.updated` (with `partID`, `state`) | `session.text.*`, `session.reasoning.*`, `session.tool.*`. No `partID`, no part states |
+| `message.updated` (natural completion)     | `session.step.ended` per model call, `session.execution.succeeded` per busy period |
+| `session.idle`                             | `session.execution.succeeded / failed / interrupted`                           |
+| `session.status` (busy, idle, retry)       | `session.execution.started` plus terminal events, `session.retry.scheduled`    |
+| `session.error`                            | `session.execution.failed`, `session.step.failed`, `session.tool.failed`       |
+| `question.asked` / `question.replied`      | `form.created` with `metadata.kind === 'question'`, `form.replied`, `form.cancelled` |
+| `permission.asked` / `permission.replied`  | same names, new payload (`action`, `resources`, `save`, `source`)              |
+| `session.updated` (title)                  | `session.renamed { title }`                                                    |
+| none                                       | `session.inbox.enqueued / delivered / cancelled / delivery.changed`            |
+| none                                       | `session.shell.started / ended` (user `!cmd`)                                  |
+| none                                       | `session.compaction.started / delta / ended / failed`                          |
+| none                                       | `session.forked`, `session.moved`, `session.agent.selected`, `session.model.selected` |
 
-## Gotchas we hit porting Kimaki
+`session.status` and `session.idle` still exist in the schema, but **V2 core does not publish them**. Code waiting for `session.idle` waits forever.
 
-These are **not in the official guide**. We found each one while porting Kimaki.
+### Event reference with real payloads
 
-1. **The event stream does not reconnect.** `client.event.subscribe()` is a lazy async iterable. On reconnect you must read state again (active sessions, inbox, pending forms, permissions). Missed deltas are gone; restore the final values.
-2. **Lists can be newest-first.** Check the order of `message.list` and `session.list` before you pick "the latest user message".
-3. **Scope every `session.list`** to a directory or project, or you mirror sessions from other projects.
-4. **`session.form.list` returns only pending forms.** Questions are forms with `metadata.kind = "question"`.
-5. **`permission.reply` takes `decision`** (`once`, `always`, `reject`), not `reply`.
-6. **Agent and model are session-wide.** If `switchAgent` or `switchModel` fails, stop. Do not send the prompt with the old model.
-7. **Plugins run for every session.** A plugin loaded for your integration also runs in the user's own TUI sessions. Tag your sessions with metadata and return early on the others.
-8. **Route subagents by `parentID`.** The tool is `subagent`, its input is `agent`, and the child is linked through `session.created.data.parentID`.
+Every event has the same **envelope**. V1 used `event.properties`; V2 uses `event.data`.
+
+```ts
+type Envelope = {
+  id: string                 // evt_...
+  type: string
+  created: number            // epoch ms; server.connected has none
+  location?: { directory: string }
+  metadata?: Record<string, unknown>
+  data: unknown
+  durable?: { aggregateID: string; seq: number; version: number }   // seq counts per session
+}
+```
+
+Most session events carry `data.sessionID`. **`form.created` carries it in `data.form.sessionID`.** Global events (`shell.created`, `shell.exited`, `skill.updated`, `project.updated`) carry none.
+
+These payloads were recorded on a real 2.0.19 server. Long IDs and strings are trimmed.
+
+```json
+{"id":"evt_0f1fe238…","type":"server.connected","data":{}}
+```
+
+```json
+{"type":"session.created","data":{"sessionID":"ses_f0dfeef7…","slug":"quiet-engine","version":"2.0.19",
+  "projectID":"05de62d3…","location":{"directory":"/repo"},"title":"abort",
+  "model":{"id":"gpt-6-luna","providerID":"openai","variant":"low"}},
+ "durable":{"aggregateID":"ses_f0dfeef7…","seq":0,"version":1}}
+```
+
+A subagent child carries **`parentID` and `agent`**:
+
+```json
+{"type":"session.created","data":{"sessionID":"ses_f0dfdb26…","parentID":"ses_f0dfdbc0…",
+  "title":"Find SQLite schema file","agent":"general",
+  "model":{"id":"gpt-6-luna","providerID":"openai","variant":"low"}}}
+```
+
+Inbox admission and delivery. **`delivered` carries only the ID**, so keep the text from `enqueued`:
+
+```json
+{"type":"session.inbox.enqueued","data":{"inboxID":"msg_0f201109…","sessionID":"ses_f0dfeef7…",
+  "item":{"type":"user","payload":{"text":"Run `sleep 30 && echo never`, then summarize."},"delivery":"steer"}},
+ "durable":{"aggregateID":"ses_f0dfeef7…","seq":1,"version":1}}
+{"type":"session.inbox.delivered","data":{"sessionID":"ses_f0dfeef7…","inboxID":"msg_0f201109…"}}
+```
+
+Other inbox item types are `synthetic` (shell output, subagent results, plan mode notes) and `compaction`:
+
+```json
+{"type":"session.inbox.enqueued","data":{"inboxID":"msg_0f2017b8…","sessionID":"ses_f0dfe955…",
+  "item":{"type":"compaction","payload":{},"delivery":"steer"}}}
+```
+
+Execution and step. **`execution.succeeded` carries only the session ID**: no duration, no tokens.
+
+```json
+{"type":"session.execution.started","data":{"sessionID":"ses_f0dfeef7…"},"durable":{"seq":2}}
+{"type":"session.step.started","data":{"sessionID":"ses_…","agent":"build",
+  "model":{"id":"gpt-6-luna","providerID":"openai","variant":"low"},
+  "assistantMessageID":"msg_0f20110a…","started":1790766551209}}
+{"type":"session.step.ended","data":{"sessionID":"ses_…","assistantMessageID":"msg_0f201209…",
+  "finish":"stop","cost":0,"tokens":{"input":897,"output":8,"reasoning":0,"cache":{"read":24064,"write":0}}}}
+{"type":"session.execution.succeeded","data":{"sessionID":"ses_f0dfeef7…"},"durable":{"seq":21}}
+{"type":"session.execution.interrupted","data":{"sessionID":"ses_…","reason":"user"}}
+```
+
+`finish` is `"tool-calls"` or `"stop"`. The interrupt `reason` is `user`, `shutdown`, `superseded` or `inactivity`.
+
+Text. `delta` is live only; `ended` has the full text:
+
+```json
+{"type":"session.text.started","data":{"sessionID":"ses_…","assistantMessageID":"msg_0f201209…","ordinal":0}}
+{"type":"session.text.delta","data":{"sessionID":"ses_…","assistantMessageID":"msg_0f201209…","ordinal":0,"delta":"resumed after abort"}}
+{"type":"session.text.ended","data":{"sessionID":"ses_…","assistantMessageID":"msg_0f201209…","ordinal":0,
+  "text":"resumed after abort","state":{"itemId":"msg_0d818140…","phase":"final_answer"}}}
+```
+
+`state.phase` is provider specific (OpenAI). Do not depend on it.
+
+Tools. **`tool.input.started` is the only event with the tool name.** `tool.called` has the parsed input but no name:
+
+```json
+{"type":"session.tool.input.started","data":{"sessionID":"ses_…","assistantMessageID":"msg_0f20110a…",
+  "id":"call_lLObP9GZ…","name":"shell"}}
+{"type":"session.tool.input.ended","data":{"sessionID":"ses_…","assistantMessageID":"msg_0f20110a…",
+  "id":"call_lLObP9GZ…","text":"{\"command\":\"sleep 30 && echo never\"}"}}
+{"type":"session.tool.called","data":{"sessionID":"ses_…","assistantMessageID":"msg_0f20110a…",
+  "id":"call_lLObP9GZ…","input":{"command":"sleep 30 && echo never"},"executed":false}}
+{"type":"session.tool.progress","data":{"sessionID":"ses_…","assistantMessageID":"msg_0f20110a…",
+  "id":"call_lLObP9GZ…","metadata":{"shellID":"sh_0f201178…"}}}
+{"type":"session.tool.success","data":{"sessionID":"ses_…","assistantMessageID":"msg_0f202ace…",
+  "id":"call_ZXxEebKO…","content":[{"type":"text","text":"first\n"}],
+  "metadata":{"status":"completed","truncated":false,"exit":0},"executed":false}}
+{"type":"session.tool.failed","data":{"sessionID":"ses_…","assistantMessageID":"msg_0f20110a…","id":"call_lLObP9GZ…",
+  "error":{"type":"aborted","message":"Tool execution interrupted"},"executed":false}}
+```
+
+Tool success `content` is an **array of content items**, not the V1 `state.output` string. The shell tool also no longer appends "Command exited with code 0."
+
+Questions and permissions:
+
+```json
+{"type":"form.created","data":{"form":{"id":"frm_0f1ff040…","sessionID":"ses_f0e01095…","title":"Questions",
+  "metadata":{"kind":"question","tool":{"messageID":"msg_0f1fef6c…","id":"call_BavYrlCj…"}},
+  "fields":[
+    {"key":"q0","title":"Color","description":"Which color do you prefer?","type":"string",
+     "options":[{"value":"Red","label":"Red","description":"Red"}],"custom":true},
+    {"key":"q1","title":"Fruits","type":"multiselect",
+     "options":[{"value":"Apple","label":"Apple","description":"Apple"}],"custom":true}]}}}
+{"type":"form.replied","data":{"id":"frm_0f1ff040…","sessionID":"ses_f0e01095…","answer":{"q0":"green","q1":["apple","kiwi"]}}}
+{"type":"permission.asked","data":{"id":"per_0f202b5a…","sessionID":"ses_f0dfd533…",
+  "action":"shell","resources":["echo first"],"save":["echo *"],
+  "source":{"type":"tool","messageID":"msg_0f202ace…","id":"call_ZXxEebKO…"}}}
+{"type":"permission.replied","data":{"sessionID":"ses_f0dfd533…","requestID":"per_0f202b5a…","reply":"once"}}
+```
+
+Shapes not in our fixtures, from the schema:
+
+```ts
+// session.retry.scheduled (durable)
+{ sessionID, assistantMessageID, attempt: number, at: number /* epoch ms of next try */, error: SessionError }
+// session.execution.failed (durable)
+{ sessionID, error: SessionError }
+// SessionError
+{ type: string, message: string, status?: number, response?: { body: string } }
+// session.moved
+{ sessionID, location: { directory } }
+// session.compaction.failed
+{ sessionID, reason: 'auto' | 'manual', error: SessionError, inputID?, cost, tokens }
+```
+
+### Live and durable events
+
+**Live-only** events are never in history and are lost on disconnect. Everything with a `durable` block is part of the session's stored history.
+
+| Live event                 | Live value                    | Durable boundary                                |
+| -------------------------- | ----------------------------- | ----------------------------------------------- |
+| `session.text.delta`       | `data.delta` chunk            | `session.text.ended` with full `data.text`      |
+| `session.reasoning.delta`  | `data.delta` chunk            | `session.reasoning.ended` with full `data.text` |
+| `session.tool.input.delta` | raw JSON chunk                | `session.tool.input.ended` with full raw input  |
+| `session.tool.progress`    | replacement progress metadata | `session.tool.success` or `session.tool.failed` |
+| `session.compaction.delta` | text chunk                    | `session.compaction.ended` with full text       |
+| `session.usage.updated`    | cumulative tokens             | `session.step.ended` tokens per call            |
+
+Also live-only: `permission.*`, `form.*`, `tui.toast.show`, `vcs.branch.updated`, `server.connected` and plugin `rpc.*` events.
+
+**Noisy global events** arrive on the same stream: `skill.updated` (dozens per turn), `project.updated`, `provider.updated`, `model.updated`, `agent.updated`, `command.updated`, `plugin.updated`, `worktree.updated`, `integration.updated`. Drop them before per-session routing. Watch only the catalog ones you need:
+
+```ts
+const CATALOG_EVENTS = new Set(['model.updated', 'provider.updated', 'integration.updated', 'credential.updated', 'credential.switched'])
+```
+
+### Fold by identity, not by order
+
+There is **no `partID`**. Concurrent tool and producer fibers interleave events, so global event order is not a part identity. Key live state like this:
+
+| Content           | Identity key                                     |
+| ----------------- | ------------------------------------------------ |
+| Text, reasoning   | `sessionID + assistantMessageID + ordinal`       |
+| Tool call         | `sessionID + assistantMessageID + id`            |
+| Compaction        | `inputID` of the compaction inbox item           |
+
+On an `ended`, `success` or `failed` event, **replace** the live buffer with the complete terminal value. If you render append-only (a chat bot, a log), you can skip deltas entirely and render from terminal events:
+
+```ts
+function toolKey(data: { assistantMessageID: string; id: string }) {
+  return `${data.assistantMessageID}:${data.id}`
+}
+
+switch (event.type) {
+  case 'session.text.ended': {
+    const text = event.data.text.trim()
+    if (text) emit({ type: 'markdown', text, blankLineBefore: view.lastKind === 'tool' })
+    view.lastKind = 'text'
+    return
+  }
+  case 'session.tool.input.started':
+    view.tools[toolKey(event.data)] = { name: event.data.name }
+    return
+  case 'session.tool.called': {
+    // Fallback name when the subscription started after input.started.
+    const name = view.tools[toolKey(event.data)]?.name ?? 'tool'
+    emit({ type: 'send', text: formatToolLine({ name, input: event.data.input }) })
+    view.lastKind = 'tool'
+    return
+  }
+  case 'session.tool.success':
+  case 'session.tool.failed':
+    delete view.tools[toolKey(event.data)]
+    return
+}
+```
+
+Render tool lines at **`tool.called`**, not `input.started`. `input.started` has the name but the model is still streaming the JSON arguments:
+
+```diagram
+  input.started   name: shell, id: call_456
+  input.delta     partial JSON {"command":"pnpm
+  input.ended     raw input text complete
+  tool.called     parsed input { command: "pnpm test" }   <── render here
+```
+
+The missing name on `tool.called` is tracked in [anomalyco/opencode#35638](https://github.com/anomalyco/opencode/issues/35638).
+
+### The inbox: steer, queue, resume false
+
+The **inbox** replaces V1 abort-and-replay. Every prompt, synthetic note, compaction and subagent result is an inbox item.
+
+| Option              | Effect                                                           |
+| ------------------- | ---------------------------------------------------------------- |
+| `delivery: 'steer'` | admitted at the next safe step boundary of the current run       |
+| `delivery: 'queue'` | waits until the current execution drains                         |
+| `resume: false`     | admitted without waking execution; delivered with the next turn  |
+
+Pending work is managed with three calls. `session.inbox.list` returns only **pending** items; delivery removes the row in the same transaction that creates the visible user message.
+
+```ts
+const inbox = await client.session.inbox.list({ sessionID })
+const queued = inbox.filter((item) => item.type === 'user' && item.delivery === 'queue')
+
+await client.session.inbox.cancel({ sessionID, inboxID: queued[0].id })        // fires session.inbox.cancelled
+await client.session.inbox.update({ sessionID, inboxID: queued[1].id, delivery: 'steer' }) // fires delivery.changed
+```
+
+**Custom prompt IDs** map your own messages to inbox items with no stored state. The ID must start with `msg_`. A repeated ID returns the existing item and starts nothing, so retries are idempotent.
+
+```ts
+const promptId = (chatMessageId: string) => `msg_chat_${chatMessageId}`
+
+await client.session.prompt({ sessionID, id: promptId(message.id), text, delivery: 'queue' })
+// user deleted the chat message
+await client.session.inbox.cancel({ sessionID, inboxID: promptId(message.id) })
+```
+
+**Editing queued text has no API.** `inbox.update` changes only `delivery`. Cancel and enqueue again with a new ID; the item moves to the end of the queue. Feature request: [anomalyco/opencode#52275](https://github.com/anomalyco/opencode/issues/52275).
+
+```ts
+await client.session.inbox.cancel({ sessionID, inboxID })
+await client.session.prompt({ sessionID, id: `${promptId(message.id)}_e${editedAt}`, text: message.content, delivery: 'queue' })
+```
+
+Prompt **metadata** survives into `inbox.enqueued.data.item.payload.metadata`. Use it to tell your prompts from prompts typed in the TUI. `session.command` takes no `id` and no `metadata`.
+
+### Interrupt, then steer
+
+A new user message while the agent runs should **stop the run and start the new prompt**. The order of the calls matters.
+
+```ts
+// V1: a plugin inside OpenCode polled status, aborted, then replayed the prompt
+await client.session.abort({ sessionID, directory })
+// session.abort() cleared the queued prompt, so it had to be sent again
+await client.session.promptAsync(replayParams)
+```
+
+```ts
+// V2: cancel pending UI ─> interrupt(resume false) ─> prompt(steer)
+export async function steer({ client, sessionID, text }: { client: OpenCodeClient; sessionID: string; text: string }) {
+  for (const form of await client.session.form.list({ sessionID })) {
+    await client.session.form.cancel({ sessionID, formID: form.id })
+  }
+  for (const request of await client.permission.list({ sessionID })) {
+    await client.permission.reply({ sessionID, requestID: request.id, decision: 'reject' })
+  }
+  await client.session.interrupt({ sessionID, resume: false })
+  return client.session.prompt({ sessionID, text, delivery: 'steer' })
+}
+```
 
 <Aside>
-<Tip>
-We keep **reducer fixtures** of real V2 event streams in the Kimaki repo. Replaying recorded events is the fastest way to debug an integration.
-</Tip>
+<Warning>
+**Interrupt first, then prompt.** The other order, `prompt(steer)` then `interrupt({ resume: true })`, **parks queued items forever**: the resumed drain is steer-scoped and never promotes `queue` items. We found this only by recording real events. With interrupt first, the new prompt's wake has input scope: the steer runs, then the queue.
+</Warning>
 </Aside>
+
+After an interrupt, **OpenCode's inbox decides what runs next**. Do not drain any queue of your own on `execution.interrupted`; that caused duplicate runs in our first port.
+
+### Execution lifecycle
+
+**Execution** is separate from inbox admission. One execution is one busy period, and it can cover several user turns.
+
+| Event                           | Meaning                          | What to do                               |
+| ------------------------------- | -------------------------------- | ---------------------------------------- |
+| `session.execution.started`     | busy period starts               | start duration timer and typing          |
+| `session.execution.succeeded`   | ran to natural completion        | flush output, post footer, run analytics |
+| `session.execution.failed`      | the run failed                   | show `data.error.message`, no footer     |
+| `session.execution.interrupted` | stopped (`reason`)               | no footer, no error line                 |
+
+**Duration is not in the event.** Compute it from envelopes: `succeeded.created - started.created`.
+
+**Queued prompts run in the same execution.** Two prompts queued while busy produce one `execution.succeeded` after both:
+
+```diagram
+  inbox.enqueued A (steer) ─> execution.started ─> inbox.delivered A ─> steps…
+  inbox.enqueued Q1 (queue)      inbox.enqueued Q2 (queue)
+  inbox.delivered Q1 ─> step.started ─> text.ended ─> step.ended
+  inbox.delivered Q2 ─> step.started ─> text.ended ─> step.ended
+  execution.succeeded                                    <── only one
+```
+
+To show one result per user turn, treat **`inbox.delivered` of a queued user item** as the turn boundary:
+
+```ts
+case 'session.inbox.delivered': {
+  const queued = view.inbox.find((item) => item.inboxID === event.data.inboxID && item.delivery === 'queue')
+  if (queued && view.turn?.model) {
+    emit({ type: 'footer', durationMs: event.created - view.turn.startedAt, model: view.turn.model, notify: false })
+    view.turn.startedAt = event.created
+  }
+  view.inbox = view.inbox.filter((item) => item.inboxID !== event.data.inboxID)
+  return
+}
+```
+
+A **compaction-only execution** has no `step.started` and no model. Skip the footer when you saw no step.
+
+### Waiting for a session
+
+`session.wait({ sessionID })` (experimental) resolves when the session is idle. Use it before revert or after a move. It is **not** a "turn finished" check for users:
+
+- It does **not return** while a question waits for an answer.
+- An idle session can be idle because the run failed or was interrupted.
+
+A CLI `--wait` flag must subscribe to events and stop on the first terminal execution event, a pending form or a pending permission. Only `session.execution.succeeded` counts as success.
+
+### Forms and questions
+
+V1 `question.*` is gone. The built-in `question` tool creates a **form** with `metadata.kind = "question"`. Fields are `q0`, `q1`… of type `string` (single choice) or `multiselect`, with `options[]` and `custom: true` when free text is allowed.
+
+```ts
+case 'form.created': {
+  const form = event.data.form           // sessionID is at data.form.sessionID
+  showForm({ id: form.id, sessionID: form.sessionID, fields: form.fields, kind: form.metadata.kind })
+  return
+}
+case 'form.replied':
+case 'form.cancelled':
+  closeForm(event.data.id)
+  return
+```
+
+```ts
+// answer by field key; arrays for multiselect
+await client.session.form.reply({ sessionID, formID, answer: { q0: 'Red', q1: ['Apple', 'Kiwi'] } })
+// free text or dismiss
+await client.session.form.cancel({ sessionID, formID })
+```
+
+**Render every form kind**, not only `question`. The first `websearch` call asks for a provider through a form of kind `websearch.provider`. We rendered only questions; OpenCode cancelled the form after one minute and every search failed with "Web search cancelled". Render generically: boolean as Yes/No, string without options as free text.
+
+To **turn the question tool off** for your sessions, deny it. A wildcard deny removes the tool from the model's tool list, and forks and subagents inherit it:
+
+```ts
+const NO_QUESTION_TOOL = { action: 'question', resource: '*', effect: 'deny' } as const
+await client.session.create({ location: { directory }, permissions: [NO_QUESTION_TOOL] })
+```
+
+### Permissions
+
+The event names stayed; the **payload changed**. `permission.asked` has `action`, `resources`, `save` and `source`. Reply with the ask's `data.id` as `requestID`.
+
+```ts
+// V1
+await client.permission.reply({ requestID, directory, reply: 'reject', message: 'timed out' })
+```
+
+```ts
+// V2
+case 'permission.asked':
+  showPermission({ id: event.data.id, action: event.data.action, resources: event.data.resources })
+  return
+
+await client.permission.reply({ sessionID, requestID, decision: 'once' })   // 'once' | 'always' | 'reject'
+const pending = await client.permission.list({ sessionID })
+```
+
+- **`always` saves exactly the `save` patterns** from the ask (for example `["echo *"]`). A reply cannot widen them.
+- **Reject ends the run.** The tool fails with "The user declined this tool call" and the execution ends. V1 needed an empty `promptAsync({ parts: [] })` to resume after a reject; delete that.
+- V2 rule shape is `{ action, resource, effect }` and **the last matching rule wins**. The bash action is `shell`.
+
+<Aside>
+<Warning>
+**Pending forms and permissions live in server memory.** A service restart or a **plugin reload** cancels them, together with the tool call waiting for them. Rebuild your UI from `session.form.list` and `permission.list` after every reconnect.
+</Warning>
+</Aside>
+
+### Instruction entries and the prompt cache
+
+V2 **freezes the system prompt** at session start and keeps it stable until compaction starts a new instruction epoch. Later changes are appended to history as a delta system message (`session.instructions.updated`). That keeps the provider prompt cache hitting.
+
+```diagram
+  session start ──> instructions (AGENTS.md, skills, entries, env) frozen as system baseline
+  entry changes ──> session.instructions.updated ──> appended to history (delta only)
+  compaction    ──> new epoch, new baseline
+```
+
+Put session-level text in an **instruction entry**. Never in a plugin `context` hook:
+
+```ts
+// Good: stored once, cache stays warm
+await client.session.instructions.entry.put({ sessionID, key: 'myapp', value: systemPrompt })
+```
+
+```ts
+// Breaks the cache: runs on every request and sits before all messages
+await ctx.session.hook('context', async (event) => {
+  event.system.push(`Current git branch: ${await currentBranch()}`)   // any change busts the prefix
+})
+```
+
+Three cache rules we learned the hard way:
+
+- **Changing text goes into history**, not the system prompt. Kimaki moved its branch line to a `session.synthetic` note, written only when the branch changes.
+- **Shape `compaction` and `generate` requests like `context`.** We edited only `context` requests; compaction and OpenCode's warming keep-alive requests had a different prefix and rewrote the cache. Register one handler for all three hooks.
+- **Forks keep the source entry**, so their cache is warm. Writing a new entry on a fork appends an update and loses it. Put fork-specific IDs in the next prompt text instead.
+
+Per-turn user context (who wrote the message) goes in prompt **`metadata`**, rendered by your plugin into the model request only. Stored text stays clean for the TUI, and the same metadata always renders the same text.
+
+### Usage, tokens and context percent
+
+Use **`session.step.ended.tokens`**, not `session.usage.updated`. `step.ended` is durable and per model call. `usage.updated` is cumulative and live-only, so a delta needs a baseline you do not have after a restart.
+
+```ts
+type Tokens = { input: number; output: number; reasoning: number; cache: { read: number; write: number } }
+
+// OpenCode reports output without reasoning but bills both.
+const total = (t: Tokens) => t.input + t.output + t.reasoning + t.cache.read + t.cache.write
+
+case 'session.step.ended':
+  if (view.turn) view.turn.tokens = total(event.data.tokens)   // context size = last finished step
+  return
+```
+
+The **context percent** needs the model limit from `model.list`. Omit the percent when the limit is unknown; never print a fake `0%`.
+
+```ts
+const models = await client.model.list({ location: { directory } })
+const limits = Object.fromEntries(models.data.map((m) => [`${m.providerID}/${m.id}`, m.limit.context]))
+
+function contextPercent(tokens: number, model: { providerID: string; id: string }) {
+  const limit = limits[`${model.providerID}/${model.id}`]
+  if (!limit || tokens <= 0) return null
+  return Math.round((tokens / limit) * 100)
+}
+```
+
+Reload limits on the catalog events listed above, or footers lose the percent for models added through a login.
+
+For **billing analytics**, sum `step.ended` **and** `step.failed` tokens per execution (failed steps are billed), root and subagents, and emit on the terminal execution event. Skip executions you did not observe from their start.
+
+**Prompt cache misses** are visible: the cached prefix should only grow within a session.
+
+```ts
+const CACHE_MISS_SLACK = 1_024
+const read = event.data.tokens.cache.read
+if (view.cached && read + CACHE_MISS_SLACK < view.cached.tokens) {
+  emit({ type: 'send', text: `prompt cache miss: read ${read}, expected ${view.cached.tokens}` })
+}
+view.cached = { tokens: read + event.data.tokens.cache.write, at: event.created }
+```
+
+Causes: a changed prefix, a model switch, or provider cache TTL (about 5 minutes idle on Anthropic). Reset `cached` after compaction.
+
+### Compaction events
+
+Compaction is **its own inbox item and its own execution**. There is no `session.compacted` event.
+
+```diagram
+  session.inbox.enqueued    { item: { type: 'compaction', delivery: 'steer' } }
+  session.compaction.started { reason: 'manual' | 'auto', inputID }
+  session.compaction.delta   { text }               live only, many
+  session.compaction.ended   { reason, text, tokens, cost }
+  session.execution.succeeded                        no step, no model
+```
+
+```json
+{"type":"session.compaction.ended","data":{"sessionID":"ses_…","reason":"manual",
+  "text":"## Objective\n- Remember the secret word…",
+  "recent":"[User]: What was the secret word?\n\n[Assistant]: mango",
+  "tokens":{"input":1402,"output":98,"reasoning":0,"cache":{"read":24064,"write":0}},"cost":0}}
+```
+
+The **new context size** is known only at the next `step.ended`. Set a flag on `compaction.ended` and report the size then:
+
+```ts
+case 'session.compaction.ended':
+  view.cached = null       // new prefix: the first cache miss is expected
+  view.compacted = true    // size known when the next step reads it
+  return
+case 'session.compaction.failed':
+  if (event.data.error.type !== 'aborted') emit({ type: 'send', text: `compaction failed: ${event.data.error.message}` })
+  return
+```
+
+OpenCode **rejects a summary without its template headings** (`## Objective`, …). A deterministic test provider must answer compaction requests with them.
+
+### Retries and errors
+
+`session.retry.scheduled { attempt, at, error }` is durable. `at` is the epoch ms of the next try, so the delay is `at - event.created`. **Always show `error.message`**: a line like "retrying in 3s (attempt 2)" without the cause cannot be debugged later.
+
+```ts
+const RETRY_NOTICE_INTERVAL_MS = 10_000
+
+case 'session.retry.scheduled':
+  if (view.lastRetryAt !== null && event.created - view.lastRetryAt < RETRY_NOTICE_INTERVAL_MS) return
+  view.lastRetryAt = event.created
+  emit({ type: 'send', text: `retrying in ${Math.round((event.data.at - event.created) / 1000)}s (attempt ${event.data.attempt}): ${event.data.error.message}` })
+  return
+```
+
+V1 `session.error` is gone. Errors arrive at **three levels** with one shape:
+
+| Event                      | Scope           | Show it?                                                  |
+| -------------------------- | --------------- | --------------------------------------------------------- |
+| `session.tool.failed`      | one tool call   | yes, except `aborted`, the `question` tool, your own UI tools |
+| `session.step.failed`      | one model call  | count tokens; the error repeats at execution level        |
+| `session.execution.failed` | the whole run   | yes, with a notification; no footer                       |
+
+An **interrupt** emits, in order: `tool.failed { error.type: 'aborted' }`, `step.failed { error.type: 'aborted' }`, `execution.interrupted { reason: 'user' }`, plus global `shell.deleted` / `shell.exited`. None of these are user-facing errors. `reason: 'shutdown'` means the server stopped.
+
+### Subagent events
+
+The `task` tool is now **`subagent`**, with `agent` instead of `subagent_type` and `sessionID` instead of `task_id`. A child session runs its own executions. Linking it to the exact tool call takes three events:
+
+```diagram
+  parent  tool.input.started { name: 'subagent' }
+  parent  tool.called        { input: { agent, description, prompt, background?, sessionID? } }
+  child   session.created    { sessionID, parentID, agent, title }           earliest signal
+  parent  tool.progress      { metadata: { sessionID: child, status: 'running' } }   links call
+  child   inbox.enqueued     { item: { type: 'user', payload: { text: 'You are a subagent…' } } }
+  child   execution.started … tool events … execution.succeeded
+  parent  tool.success       { content: [{ text: '<subagent sessionID="…" state="completed">…' }] }
+```
+
+`session.created` only **registers** the child. `tool.progress` gives the exact call, so it sets the label. Guessing the label from "the earliest open subagent call" broke with parallel subagents created in a different order.
+
+```ts
+case 'session.created': {
+  const { sessionID, parentID } = event.data
+  if (!parentID || view.children[sessionID]) return
+  if (parentID !== view.sessionId && !view.children[parentID]) return   // grandchildren allowed
+  view.children[sessionID] = { agent: event.data.agent ?? 'subagent', description: '', background: false, running: false }
+  return
+}
+case 'session.tool.progress': {
+  const childId = event.data.metadata['sessionID']
+  const tool = view.tools[toolKey(event.data)]
+  if (typeof childId !== 'string' || !tool?.subagent) return
+  view.children[childId] = { ...tool.subagent, running: view.children[childId]?.running ?? false }
+  tool.subagent = null
+  return
+}
+```
+
+**Background subagents end the parent execution early.** With `background: true` the tool returns at once. The parent can reach `execution.succeeded` while children still run. Each child completion enqueues a synthetic `<subagent … state=completed>` item into the parent, which starts a **new parent execution**.
+
+```ts
+const isBusy = (view: View) => view.turn !== null || Object.values(view.children).some((child) => child.running)
+// Post the final footer only when the parent ended and no child runs.
+```
+
+Two more child rules:
+
+- **Reused children.** The `subagent` tool accepts `sessionID` to continue a child. The child gets a new inbox item and **no new `session.created`**. Update its label from the new call.
+- **Children ask questions and permissions too.** Route child `form.*` and `permission.*` to the root conversation, labelled by agent, or the child waits on a prompt nobody sees.
+
+### Shell events
+
+A user shell command (`!cmd`) is **`session.shell`**, not a prompt. V1 integrations spawned the command themselves and sent the output as a `noReply` prompt.
+
+```ts
+// V1
+const child = spawn(`exec 2>&1\n${command}`, { shell: true, cwd })
+// collect output, then promptAsync({ parts, noReply: true })
+```
+
+```ts
+// V2: never awaited, the request returns only when the command ends
+void client.session.shell({ sessionID, command }).catch((cause) => report(cause))
+```
+
+```json
+{"type":"session.shell.started","data":{"sessionID":"ses_…","shell":{"id":"sh_0f2012d9…","status":"running",
+  "command":"echo hi && git log --oneline -1","cwd":"/repo","metadata":{"sessionID":"ses_…","background":true},"pid":50334}}}
+{"type":"session.shell.ended","data":{"sessionID":"ses_…","shell":{"id":"sh_0f2012d9…","status":"exited","exit":0},
+  "output":{"output":"hi\n05de62d feat: …\n","cursor":91,"size":91,"truncated":false}}}
+```
+
+After it ends, OpenCode enqueues a **synthetic `resume: false` item** ("The following shell command was executed by the user: …"). The agent sees it on the next turn. While a run is busy it is delivered at the next step boundary, so the model gets another step and may answer it.
+
+| Family                                   | Who                                | Has `sessionID`             |
+| ---------------------------------------- | ---------------------------------- | --------------------------- |
+| `session.shell.started / ended`          | user shells                        | yes, `data.sessionID`       |
+| `shell.created / exited / deleted`       | every shell, including the tool's  | no, only `info.metadata.sessionID` |
+
+Route the session family. Drop the global one, or correlate it through `tool.progress.metadata.shellID`.
+
+**`session.shell` has no `delivery`**, so a shell cannot be queued behind inbox items. **`session.interrupt` does not stop user shells.** A full stop has to kill them:
+
+```ts
+const shells = await client.shell.list({ location: { directory } })
+for (const shell of shells.data.filter((s) => s.status === 'running' && s.metadata['sessionID'] === sessionID)) {
+  await client.shell.remove({ id: shell.id, location: { directory } })
+}
+```
+
+## Event stream: subscribe, reconnect, hydrate
+
+`client.event.subscribe()` is a **lazy `AsyncIterable`** over `GET /api/event`. It does not reconnect and **has no replay**. You own reconnect, backoff and recovery.
+
+```ts
+// V1
+const result = await client.global.event({ signal })
+for await (const event of result.stream) dispatch(event.payload)   // event.properties.sessionID
+
+// V2
+for await (const event of client.event.subscribe({ signal, onActivity })) dispatch(event)   // event.data.sessionID
+```
+
+One stream carries **every session of every location**, including the user's TUI sessions. Five rules:
+
+1. **The first event must be `server.connected`.** Use it as the "refetch everything" signal after every (re)connect.
+2. **Never block the reader.** The server drops a subscriber whose 4096-event buffer overflows. Route and fold synchronously; never await UI work in the loop.
+3. **Watch for half-open streams.** The server sends a keepalive every 15s. Abort after 45s of silence (three missed keepalives, like the OpenCode web client). This matters after laptop sleep and wake.
+4. **Re-resolve the endpoint on every attempt.** A restarted or upgraded service has a new port and password. Re-read `service.json`; never reuse a cached URL.
+5. **Fail fast only at startup.** No service on the first attempt is a clear error. After a first connect, failures are restarts: keep retrying.
+
+### The connect protocol
+
+Copy the **OpenCode mini TUI** (`packages/tui/src/mini/stream-v2.transport.ts`). It solves the same problem as a chat bot: append-only output from a stream.
+
+```diagram
+  loop:
+    generation++                                 stale attempts become no-ops
+    stream = client.event.subscribe()
+    first event must be server.connected         else: disconnected
+    hold live events in a list  ─────────────┐
+    hydrate in parallel:                      │  session.active(), inbox.list,
+      race(hydrate, consume)                  │  form.list, permission.list
+    apply held events in order  <────────────┘
+    go live
+  on error: backoff 0.5s ─> 30s, re-resolve endpoint, retry
+```
+
+`Promise.race` with the consumer matters: if the stream dies during hydration, the attempt fails at once instead of waiting for REST calls.
+
+### Reconnect loop
+
+Kimaki's version adds an **idle watchdog** and an **`AbortController` per attempt**, so a stale hydration can never publish into a newer connection:
+
+```ts
+const STREAM_IDLE_TIMEOUT_MS = 45_000
+
+async function runAttempt({ endpoint, reconnect }: { endpoint: Endpoint; reconnect: boolean }) {
+  const attempt = new AbortController()
+  const signal = AbortSignal.any([stopController.signal, attempt.signal])
+  let timer: NodeJS.Timeout | undefined
+  const touch = () => {
+    clearTimeout(timer)
+    timer = setTimeout(() => attempt.abort(), STREAM_IDLE_TIMEOUT_MS)
+  }
+  touch()
+  const iterator = endpoint.client.event.subscribe({ signal, onActivity: touch })[Symbol.asyncIterator]()
+  const result = await (async () => {
+    const first = await iterator.next().catch((cause: unknown) => new StreamClosedError({ cause }))
+    if (first instanceof Error) return first
+    if (first.done || first.value.type !== 'server.connected') {
+      return new StreamClosedError({ reason: 'first event was not server.connected' })
+    }
+    const held: V2Event[] = []
+    const phase = { booting: true }
+    const consume = (async (): Promise<Error> => {
+      while (true) {
+        const next = await iterator.next().catch((cause: unknown) => new StreamClosedError({ cause }))
+        if (next instanceof Error) return next
+        if (next.done) return new StreamClosedError({ reason: 'stream ended' })
+        if (signal.aborted) return new StreamClosedError({ reason: 'stopped' })
+        if (phase.booting) held.push(next.value)
+        else emit(next.value)
+      }
+    })()
+    const hydrated = await Promise.race([hydrate({ client: endpoint.client, reconnect, signal }), consume])
+    if (hydrated instanceof Error) return hydrated
+    if (signal.aborted) return new StreamClosedError({ reason: 'stopped' })
+    state.endpoint = endpoint                       // switch endpoint before draining held events
+    for (const event of held.splice(0)) emit(event)
+    phase.booting = false
+    return consume
+  })()
+  clearTimeout(timer)
+  attempt.abort()
+  void iterator.return?.(undefined).catch(() => {})
+  return result
+}
+
+let backoff = 500
+while (!stopController.signal.aborted) {
+  const endpoint = await resolveEndpoint()          // re-reads service.json every time
+  if (endpoint instanceof Error && state.endpoint === null) return endpoint   // fatal only at startup
+  if (!(endpoint instanceof Error)) {
+    await runAttempt({ endpoint, reconnect: state.endpoint !== null })
+    if (state.endpoint === endpoint) backoff = 500
+  }
+  await sleep(backoff, undefined, { signal: stopController.signal }).catch(() => {})
+  backoff = Math.min(backoff * 2, 30_000)
+}
+```
+
+Bugs a review found in our first connect loop, all real:
+
+- `stop()` could still start a new subscription.
+- Old reconnect data was applied to a newer connection.
+- Subagents that were already running at connect were not found.
+- A failed session lookup lost that session's events forever.
+- Held catalog events started reads against the **old** server, failed, and dropped the refresh. Switch the endpoint before draining.
+- Typing could restart after shutdown.
+
+### Hydration
+
+**Hydrate on every connect**, not only at startup. Hold live events meanwhile.
+
+| State                         | Source                                                      |
+| ----------------------------- | ----------------------------------------------------------- |
+| busy sessions                 | `session.active()`; keys are running IDs, absent means idle |
+| queue                         | `session.inbox.list({ sessionID })` (root only)             |
+| questions                     | `session.form.list({ sessionID })` (root and children)      |
+| permissions                   | `permission.list({ sessionID })` (root and children)        |
+| working directory             | `session.get({ sessionID }).location.directory`             |
+| subagents started while away  | for each unknown active session, walk `session.get` → `parentID` |
+
+```ts
+async function hydrate({ client, signal }: { client: OpenCodeClient; signal: AbortSignal }) {
+  const active = await client.session.active({ signal })
+  const unknown = Object.keys(active).filter((id) => !routes.has(id) && !ignored.has(id))
+  await Promise.all(unknown.map((sessionId) => adoptIfChild({ client, sessionId, signal })))
+  for (const [threadId, root] of roots) {
+    const sessions = [root, ...childrenOf(threadId)]
+    const reads = await Promise.all(sessions.map(async (sessionId) => {
+      const [inbox, forms, permissions] = await Promise.all([
+        sessionId === root ? client.session.inbox.list({ sessionID: sessionId }, { signal }) : null,
+        client.session.form.list({ sessionID: sessionId }, { signal }),
+        client.permission.list({ sessionID: sessionId }, { signal }),
+      ])
+      return { sessionId, inbox, forms, permissions }
+    }))
+    // Fed through the same reducer as live events.
+    deliver(threadId, { type: 'myapp.snapshot', at: Date.now(), activeSessionIds: Object.keys(active), sessions: reads })
+  }
+}
+```
+
+Feed the snapshot **through the reducer as a synthetic event**. Then restore logic lives in the same pure fold as live events:
+
+```ts
+case 'myapp.snapshot': {
+  const active = new Set(event.activeSessionIds)
+  for (const [id, child] of Object.entries(view.children)) child.running = active.has(id)
+  if (!active.has(view.sessionId)) view.turn = null
+  else view.turn ??= { startedAt: event.at, model: null, agent: null, tokens: 0 }   // partial: footer skipped
+  if (!isBusy(view)) view.tools = {}           // tool ends missed while away are over
+  for (const session of event.sessions) {
+    if (session.inbox) hydrateQueue(view, session.inbox)
+    hydrateForms(view, session.sessionId, session.forms)       // also settle forms that are gone
+    hydratePermissions(view, session.sessionId, session.permissions)
+  }
+  return
+}
+```
+
+Hydration rules:
+
+- **Restore state, not output.** We tried replaying missed text from `message.list` with dedupe keys and dropped it: it doubled the render paths. If you need it, the TUI renders from `message.list` on reconnect.
+- **`session.form.list` is pending-only.** Settle any UI you still show whose form is gone, or a cancelled form keeps a live dropdown forever.
+- **Reads are not atomic.** `active`, `inbox.list`, `form.list` and `permission.list` describe different moments. Holding live events avoids lost and duplicated events but not every race.
+- **Binding a session mid-stream** (resume, fork): hold that session's live events while its snapshot is read, then fold the snapshot first and held events second.
+- **`session.log` is not a catch-up API yet.** `GET /api/experimental/session/:id/log?after=<seq>&follow=true` returned only `{ type: 'log.synced', seq }` on 2.0.19, even with `after=0`.
+
+### Routing events to conversations
+
+Route by `sessionID` with **two maps**: every session (including subagents) to its conversation, and each conversation to its root session. A reverse search of the first map returned a subagent as the root after a restart.
+
+```ts
+function onEvent(event: V2Event) {
+  if (CATALOG_EVENTS.has(event.type)) return reloadCatalog()
+  const sessionId = eventSessionId(event)
+  if (!sessionId) return                                  // global events
+  const threadId = routes.get(sessionId)
+  if (threadId) return deliver(threadId, event)
+  if (ignored.has(sessionId)) return                      // TUI sessions
+  const parentThread = event.type === 'session.created' && event.data.parentID ? routes.get(event.data.parentID) : undefined
+  if (parentThread) {
+    routes.set(sessionId, parentThread)
+    return deliver(parentThread, event)
+  }
+  hold(sessionId, event)                                  // bounded, arrival order
+  void resolveUnknown(sessionId)                          // session.get → parentID chain
+}
+```
+
+Unknown sessions: **walk the parent chain** and hold their events meanwhile. On a lookup error keep the held events and retry on the next event. On "no parent" add the session to `ignored`, and clear `ignored` on every reconnect. Cap held events (we use 1000).
+
+```ts
+async function findAncestorThread({ client, sessionId, signal }: { client: OpenCodeClient; sessionId: string; signal: AbortSignal }) {
+  let current = sessionId
+  for (let depth = 0; depth < 8; depth++) {
+    const info = await client.session.get({ sessionID: current }, { signal })
+    if (!info.parentID) return null                       // an unrelated root session
+    const threadId = routes.get(info.parentID)
+    if (threadId) return threadId
+    current = info.parentID
+  }
+  return null
+}
+```
+
+**Bind before the first prompt.** Write the routing entry for a new session synchronously before `session.prompt`, so no event of the first turn arrives for an unknown session.
+
+**Gate user actions on "connected".** A chat platform can replay offline messages right after login, before the OpenCode stream is up. Await your ready promise in the ingress path, or those messages are lost.
+
+## Migration invariants
+
+A migration is complete **only when these invariants hold**. Passing TypeScript while old behavior is disabled, or routed through dead compatibility code, is not enough.
+
+### One submission path
+
+All user, queued, voice, command and synthetic inputs **share one submission function**. Resolve session, agent, model, variant, instructions, text, files, delivery and error handling once, then pick the native operation:
+
+| Input                 | Native operation                              |
+| --------------------- | --------------------------------------------- |
+| Normal user turn      | `session.prompt` with `delivery: 'steer'`     |
+| Explicit queued turn  | `session.prompt` with `delivery: 'queue'`     |
+| Context-only message  | `session.synthetic` with `resume: false`      |
+| Command               | `session.command` or the native API for it    |
+| Shell                 | `session.shell`                               |
+
+```ts
+export async function submit(input: Submission) {
+  const session = await resolveSession(input)
+  if (session instanceof Error) return session
+  const selected = await applySelection({ sessionID: session.id, agent: input.agent, model: input.model })
+  if (selected instanceof Error) return selected          // never continue with the old model
+  const files = await attach(input.attachments)
+  if (input.kind === 'context') return client.session.synthetic({ sessionID: session.id, text: input.text, resume: false })
+  return client.session.prompt({ sessionID: session.id, id: input.id, text: input.text, files, delivery: input.delivery, metadata: input.metadata })
+}
+```
+
+Parallel builders **drift**. Ours lost queued images (the local queue read images but sent only text), and voice sessions ignored the model and the instructions.
+
+Agent and model selection is **session-wide** in V2. A failed `switchAgent` or `switchModel` must stop submission with a visible error. Until selection can be bound to an inbox item, serialize selection and admission per session.
+
+### Native events only
+
+Production types and tests use `V2Event`. **Remove** handlers for these V1-only events once their behavior has native coverage:
+
+- `message.updated`
+- `message.part.*`
+- `question.*`
+- `session.error` as the completion channel
+- `session.idle` as a success signal
+
+```bash
+rg -n "'message\.(updated|part\.)|'question\.|'session\.(idle|error)'" src
+```
+
+**Do not convert V2 events into fake SDK `Part` objects.** Our first port did, with fake `pending` / `running` states and fake timestamps, so the old formatter kept working. Tool input was lost on `success` when the part was not seen (`input: {}`). A small display model is fine; fold its fields directly from native delta and terminal facts.
+
+**Filter by the owning session before buffering.** Our first port broadcast every event into every conversation's 1000-event buffer. A delta flood evicted the busy markers and broke queueing. The final design keeps no buffer: fold each event into a view, then drop it.
+
+### Parent and subagent routing
+
+| Meaning                       | V1 field          | V2 field                           |
+| ----------------------------- | ----------------- | ---------------------------------- |
+| Tool name                     | `task`            | `subagent`                         |
+| Selected agent input          | `subagent_type`   | `agent`                            |
+| Continue a child              | `task_id`         | `sessionID`                        |
+| Child session in tool metadata | `sessionId`      | `sessionID`                        |
+| Parent on session creation    | part metadata     | `session.created.data.parentID`    |
+
+Build parent-child ownership from these facts **before** the per-session filter. Our first port still searched for `task`, `subagent_type` and `sessionId`: subagent output, labels and token accounting failed silently. Cover child text, tool output, labels, completion, interruption and token usage in native event tests.
+
+### Durable completion and analytics
+
+`session.execution.succeeded` is the **successful run boundary**. Cleanup and queue logic must run even when your output, including the footer, fails to send.
+
+Emit analytics from native facts:
+
+- `turn_completed` from `session.execution.succeeded`
+- failed and interrupted outcomes from their execution events
+- tokens from `session.step.ended` plus `session.step.failed`
+
+Do not leave analytics attached to unreachable V1 `session.idle` or `message.updated` handlers.
+
+### Ordered and scoped reads
+
+**Check the default order of every list API.** `message.list` is newest first. Normalize to chronological order before rendering markdown, picking the latest user turn, or mirroring sessions.
+
+**Scope every `session.list`** to a project unless the feature really wants all projects. Filtering by exact directory hides sessions in linked worktrees; resolve the project ID instead:
+
+```ts
+const location = await client.location.get({ location: { directory } })
+const page = await client.session.list({ project: location.project.id, limit: 200, order: 'desc' })
+```
+
+- An all-project search must **deduplicate** session IDs.
+- A resume command must not attach a session owned by another project.
+- `session.list({ search })` matches **titles only** (a SQL `LIKE`). There is no content search.
+- External sync must apply its startup cutoff locally when the API has no `start` filter. Never mirror historical sessions just because they are on the first page.
+
+### Reconnect recovery
+
+An SSE reconnect is **not recovery by itself**. After a connection loss:
+
+1. Read state for owned active sessions (`session.active`, `session.get`).
+2. Fold completed facts into your display state once.
+3. List forms and permissions, restore the pending ones, settle the gone ones.
+4. Recheck inbox and execution state before restarting typing or any follow-up work.
+
+Do not replay a missed typewriter animation. Test a **disconnect during output**, not only a server restart followed by a new prompt.
+
+## Command migration checks
+
+Commands need **behavioral** migration, not renamed methods. Port each command behavior by behavior.
+
+### Provider login
+
+Keep the native integration **method kinds**: `oauth`, `key`, `command`, `env`. Do not coerce command or environment methods into API-key forms; render each method's declared fields.
+
+```ts
+const info = await client.integration.get({ integrationID: 'anthropic', location })
+// info.data.methods: [{ id, type: 'oauth' | 'key' | 'command' | 'env', ... }]
+
+// API key
+await client.integration.connect.key({ integrationID: 'anthropic', key, location })
+
+// OAuth: keep the unique attemptID, never the provider ID
+const attempt = await client.integration.oauth.connect({ integrationID: 'anthropic', methodID: method.id, location })
+showLink(attempt.data.url, attempt.data.instructions)
+const attemptID = attempt.data.attemptID
+if (attempt.data.mode === 'code') {
+  await client.integration.oauth.complete({ integrationID: 'anthropic', attemptID, code, location })
+} else {
+  await client.integration.oauth.status({ integrationID: 'anthropic', attemptID, location })
+}
+// user gave up
+await client.integration.oauth.cancel({ integrationID: 'anthropic', attemptID, location })
+```
+
+**A provider ID is not an OAuth attempt ID.** Our first port passed the provider ID as `attemptID`, and OAuth never completed.
+
+V2 also stores **several credentials per provider** (`credential.*`, `opencode auth switch`). That replaces V1 multi-account rotation plugins.
+
+### Worktrees and workspaces
+
+These are **two different concepts**:
+
+| API           | What it is                              | Identifier         |
+| ------------- | --------------------------------------- | ------------------ |
+| `worktree.*`  | a local git worktree                    | its directory      |
+| `workspace.*` | a provider-backed logical workspace     | an OpenCode ID     |
+
+`worktree.create` **returns a directory**. Do not invent a `wrk_<uuid>` and pass it to workspace APIs; our first port did, and cleanup failed because OpenCode never created that resource. Remove worktrees with `worktree.remove`. Use `workspace.*` only for workspaces OpenCode created.
+
+```ts
+const location = await client.location.get({ location: { directory: projectDirectory } })
+const worktree = await client.worktree.create({ projectID: location.project.id, name: 'fix-login' })
+const session = await client.session.create({ location: { directory: worktree.directory } })
+```
+
+The V1 custom **workspace adaptor** API (`experimental_workspace.register`) is gone; V2 has no public workspace driver API. Native `worktree.create` also runs the project's configured start command. If you need your own worktree logic (submodules, lockfiles), create the git worktree yourself and give OpenCode only the directory.
+
+**Fork into a worktree** with fork, then move, then wait:
+
+```ts
+// V1
+await client.session.fork({ sessionID, directory, workspace: workspaceId })
+```
+
+```ts
+// V2
+const forked = await client.session.fork({ sessionID })              // title becomes "<title> (fork #1)"
+await client.session.move({ sessionID: forked.id, directory: checkout.directory })
+await client.session.wait({ sessionID: forked.id })
+const moved = await client.session.get({ sessionID: forked.id })
+if (moved.location.directory !== checkout.directory) throw new Error('move did not apply')
+```
+
+- A fork emits **`session.forked`**, not `session.created`. Bind it from the response.
+- Forks **inherit metadata**. Overwrite your marker with the new conversation's IDs.
+- `session.moved { location }` changes the session's directory. Update your view and reload context limits for the new location.
+
+### Revert, wait, forms and fresh sessions
+
+**Revert** stages at a **user message** boundary. It reverts that turn and later ones. Stop the run and wait first, like the TUI.
+
+```ts
+// V1: status poll, abort, wait for idle, revert at an assistant message
+const status = await client.session.status({ directory })
+if (status.data?.[sessionID]?.type !== 'idle') await client.session.abort({ sessionID, directory })
+await client.session.revert({ sessionID, directory, messageID: assistantMessageId })
+```
+
+```ts
+// V2
+await client.session.interrupt({ sessionID, resume: false })
+await client.session.wait({ sessionID })
+await client.session.revert.stage({ sessionID, messageID: userMessageId, files: false })   // files false: skip snapshot restore
+await client.session.revert.clear({ sessionID })                                           // redo
+```
+
+- **`--wait` flags**: only a successful natural completion counts. Errors and tool-call-only intermediate steps are not completion.
+- **Form cancel**: cancel only the form the user picked. Keep its UI until the API confirms. Our first port cancelled every pending form on one click.
+- **A failed form reply is a real error.** Interrupt cancels pending forms in 2.0.19, so the V1 fallback "resend the answers as a prompt" is wrong. Keep the UI and ask the user to retry.
+- **Fresh sessions** (voice, scheduled, forked) must apply the requested model and the same instruction entry as text-created sessions.
+- **Mark sessions read** with `session.view({ sessionID, idle })` after output is posted, or they stay unread in the TUI sidebar.
+- **No permanent "not available" commands.** `/share` has no V2 API: remove it and document the break.
+
+### Model and agent switching
+
+The prompt has no `agent` or `model`. Switch **before** prompting, or set them at `session.create`.
+
+```ts
+// V1: every promptAsync carried agent, model and variant
+await client.session.promptAsync({ sessionID, parts, agent: 'plan', model: { providerID, modelID }, variant })
+```
+
+```ts
+// V2: session-wide, stop on failure
+const switched = await client.session.switchModel({ sessionID, model: { providerID, id: modelId, ...(variant && { variant }) } })
+  .catch((cause) => new Error(`could not switch model: ${cause}`))
+if (switched instanceof Error) return showError(switched)
+await client.session.switchAgent({ sessionID, agent: 'plan' })      // agent ID, not display name
+await client.session.prompt({ sessionID, text })
+```
+
+- **Agent IDs vs names.** `agent.list` returns `{ id: 'plan', name: 'Plan' }`. `session.create`, `switchAgent` and `SessionInfo.agent` take the **ID**.
+- **Model refs** are `{ providerID, id, variant? }`, not `{ providerID, modelID }`. `ModelInfo.id` matches `step.started.data.model.id`.
+- `switchModel` applies at the **next step**, so it is safe mid-turn.
+- **Do not switch agent for a queued prompt.** It also changes the running turn.
+- `switchAgent('plan')` enqueues a **synthetic** "You are in Plan mode" item. Never render synthetic items as user messages.
+- `session.agent.selected` and `session.model.selected` let you see switches made from the TUI.
+- Interrupt with `resume: true` plus `switchModel` replaces the V1 "abort and replay with the new model" trick.
+
+## Bugs we hit during the migration
+
+Every item below shipped as a fix commit in Kimaki. **Check each one** before you call your port done.
+
+1. **Two queues.** We kept our local queue and also sent `delivery: 'queue'`. Messages waited twice. Delete the local queue; render from `session.inbox.*`.
+2. **Parked queue.** `prompt(steer)` then `interrupt({ resume: true })` left queued items in the inbox forever. Interrupt with `resume: false` first, then prompt.
+3. **Draining on interrupt.** A leftover "drain my queue" call on `execution.interrupted` started duplicate runs.
+4. **`noReply` that replied.** We detected `noReply` but still called a normal `session.prompt`, so the agent ran. Use `resume: false`.
+5. **Missing tool names.** `tool.called` has no name; lines showed `tool` until we kept a map from `tool.input.started`.
+6. **Old subagent names.** Code searched for `task`, `subagent_type` and `sessionId`. Subagent output, labels and tokens failed silently.
+7. **Wrong subagent labels.** Guessing from "the earliest open call" broke with parallel subagents. Use `tool.progress` metadata.
+8. **Form session ID.** `form.created` keeps it in `data.form.sessionID`. Questions were routed nowhere.
+9. **Unrendered form kinds.** Only `question` forms were shown; `websearch.provider` forms timed out and every web search failed.
+10. **Stale dropdowns.** `session.form.list` is pending-only. Forms cancelled while disconnected kept live UI until we settled missing ones on reconnect.
+11. **Plugin reloads killed forms.** Rewriting the plugin shim on every start reloaded every location and cancelled pending forms and permissions. Write files only when content changes.
+12. **Plugin files ignored.** 2.0.19 silently ignores standalone plugin files; tools failed with `Unknown tool`. Use a directory with `index.js`.
+13. **Plugin activation race.** Sessions created right after writing the plugin missed its tools. Wait until `plugin.list` shows it `active`.
+14. **Fallback model at boot.** `model.list` and `agent.list` do not wait for plugin activation; a cold location picked a fallback model and a saved agent failed for ~700ms. `integration.list` waits, so read it first.
+15. **Empty catalogs.** On 2.0.26, `model.list` and `provider.list` returned empty on the first call for an unloaded location. Retry a few times.
+16. **Location event storms.** Reading catalogs for 88 project locations cold-booted each one and flooded the stream. Read global catalogs from one location.
+17. **Leaked ancestor config.** Any directory walks up and loads every ancestor's `.opencode`. A data directory inside a project leaked that project's catalog. Read the global catalog from OpenCode's global config dir.
+18. **Random password, port-only discovery.** CLI subcommands found the port but could not authenticate. The password lives in `service.json`.
+19. **Inherited env.** `OPENCODE_CONFIG` from an agent shell made a test server load the bot's V1 config. Strip `OPENCODE_*` when you spawn a server from a script.
+20. **Env leaks the other way.** Our supervisor flag leaked into the OpenCode service and every agent shell. Delete such vars at startup.
+21. **Orphaned servers.** Spawning `node_modules/.bin/opencode` (a shell wrapper) left the server running after SIGTERM. Spawn the native binary.
+22. **Half-open streams.** After sleep and wake the stream stayed open and silent. Add the 45s idle watchdog.
+23. **Lost offline messages.** Chat messages replayed at login arrived before the stream was up and failed with "not connected". Gate ingress on ready.
+24. **Newest-first exports.** `message.list` default order reversed markdown exports and fork previews.
+25. **Empty trailing sections.** New idle and system message types in `message.list` rendered as empty blocks. Skip non user and assistant messages.
+26. **Worktree sessions hidden.** Listing by exact directory hid linked worktrees; `session list --active` exited early while worktree sessions still ran. List by project.
+27. **Invented workspace IDs.** A local worktree got a fake `wrk_` ID and `workspace.destroy` failed.
+28. **OAuth never completed.** The provider ID was used as `attemptID`.
+29. **Silent model fallback.** Switch failures were discarded and the old model kept running.
+30. **Cache busted by the branch line.** A git branch line in the `context` hook changed the prefix of every request. Moved to a synthetic history note.
+31. **Cache busted by compaction.** Only `context` requests were shaped; `compaction` and `generate` had another prefix.
+32. **Cache lost on forks.** Writing a new instruction entry on a fork appended an update. Keep the inherited entry.
+33. **Optional plugin tool args.** Models send `null` for optional fields; `Schema.optional(Schema.String)` rejected them. Use `Schema.optional(Schema.NullOr(Schema.String))`.
+34. **Unsupported files.** V2 shows the model only png, jpeg, gif, webp, PDF and text files, drops others silently, and one file over 20 MB fails the whole prompt. Send other files as paths in the text.
+35. **Retry lines without a cause.** "retrying in 3s (attempt 2)" with no error message. Always include `error.message`.
+36. **Debug exports broke.** A wrapper around events read the directory from the V1 location. Keep exports in the raw event shape.
+37. **No event history.** `session.log` was empty on 2.0.19 and `message.list` drops retry events. Record your own event JSONL per session for bug reports.
+38. **Unread sessions.** Without `session.view`, every bot session stayed unread in the TUI.
+39. **Dead V1 handlers.** Production kept handlers and tests for `message.updated` and `session.idle` that could never fire.
+40. **Silent no-ops.** Config files for a removed injection-guard plugin were still written with no reader.
+
+## Test against a real OpenCode V2 server
+
+Use native V2 events and real V2 APIs. **No mocks and no V1 fixtures**: V1 JSONL fixtures do not even parse as V2 events.
+
+### An isolated server per test file
+
+Every path comes from **XDG dirs or `OPENCODE_*` env**, so a test server never touches the user's service:
+
+```ts
+import { spawn } from 'node:child_process'
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
+
+// macOS: os.tmpdir() is /var/... but OpenCode resolves /private/var/...
+const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'oc-test-')))
+const env = {
+  ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('OPENCODE_') && !key.endsWith('_API_KEY'))),
+  HOME: `${root}/home`,
+  XDG_DATA_HOME: `${root}/data`,
+  XDG_STATE_HOME: `${root}/state`,
+  XDG_CONFIG_HOME: `${root}/config`,
+  XDG_CACHE_HOME: `${root}/cache`,
+  OPENCODE_TEST_HOME: `${root}/home`,
+  OPENCODE_CONFIG_CONTENT: JSON.stringify(testConfig),
+  OPENCODE_DISABLE_PROJECT_CONFIG: '1',
+  OPENCODE_DISABLE_MODELS_FETCH: '1',
+}
+const server = spawn(opencodeBinary, ['serve', '--service', '--port', String(port), '--hostname', '127.0.0.1'], { env })
+// Same discovery path as production.
+const endpoint = await Service.discover({ file: `${root}/state/opencode/service.json` })
+```
+
+- **`serve --service` needs `--port`.** The default port is fixed, so parallel files collide.
+- **Strip `*_API_KEY`.** `model.list` includes providers from env keys, which breaks snapshots.
+- **Warm up once per file.** The first turn on a fresh server costs 2 to 4 seconds. Run one throwaway create, prompt and wait in `beforeAll`.
+- **No fake timers.** `vi.useFakeTimers()` freezes the client and HTTP timeouts. Inject a clock into scheduling code instead.
+- **One server costs about 400 MB.** Cap parallel test files.
+
+### A deterministic provider
+
+Point the test config at a **local provider package** that implements `@ai-sdk/provider` v3 and returns canned responses. Tool calls are real `tool-call` stream parts, so OpenCode runs real tools (`shell`, `subagent`) and emits real V2 tool events.
+
+```json
+{
+  "providers": {
+    "det": { "package": "aisdk:file:///abs/path/to/deterministic-provider.js", "models": { "deterministic-v2": {} } }
+  },
+  "model": "det/deterministic-v2"
+}
+```
+
+- **Scope every matcher** with a marker in the latest user text. Broad matchers re-fire after an abort and retry.
+- Answer compaction requests with the template headings, or OpenCode rejects the summary.
+- Prefer content-aware polling ("does this message have a reply after it?") over message counts.
+
+### Recorded fixtures and replay
+
+Hand-built event objects passed while real behavior differed; the [parked queue](#interrupt-then-steer) was only found in a recording. **Record fixtures from a real server** and replay them through your pure reducer:
+
+```ts
+// record: subscribe, drive a scenario, write one { at, event } per line
+for await (const event of client.event.subscribe({ signal })) {
+  fs.appendFileSync(file, JSON.stringify({ at: Date.now(), event }) + '\n')
+}
+```
+
+```ts
+test('footer after a text-only turn', () => {
+  const events = loadFixture('tools.events.jsonl').filter((event) => !event.type.startsWith('session.tool.'))
+  const { view, effects } = replay({ events })
+  expect(effectLines(effects)).toMatchInlineSnapshot()
+  expect(view.turn).toBe(null)
+})
+```
+
+Filter a recording to the scenario's sessions, including children (via `tool.progress.metadata.sessionID` and `parentID`). Never hand-edit fixtures. Recording every production event per conversation (skip deltas, cap the file size) turns user bug reports into fixtures.
+
+### Completion test matrix
+
+| Area        | Required regression coverage                                                 |
+| ----------- | ---------------------------------------------------------------------------- |
+| Submission  | direct text, queued text, queued image, voice model, context-only synthetic  |
+| Execution   | success footer, failure, interruption without footer, tool continuation      |
+| Inbox       | steer while busy, queue until idle, cancel by `inboxID`, same `msg_` ID idempotent |
+| Routing     | two active conversations, subagent child output, child usage, background subagents |
+| Recovery    | SSE loss during output, server restart, pending form recovery, expired forms |
+| Ordering    | chronological markdown, external synchronization                            |
+| Scope       | project session list, all-project deduplication, safe resume                 |
+| Login       | OAuth attempt ID, key form, command form, environment form                  |
+| Worktrees   | create, move and fork, remove, fresh clone                                   |
+| Permissions | V1 alias conversion, native session rules, reject ends the run               |
+| Plugins     | activation, every ported hook, no hook on unmarked sessions                  |
+| Commands    | undo, redo, wait success, wait error, wait on tool-only step, form cancel    |
+
+Also **validate a fresh clone**. Dirty submodule checkouts can hide a recorded gitlink that points backward. The repository must reference the exact remote commits your local tests used.
+
+```bash
+git clone --recurse-submodules https://github.com/you/your-repo /tmp/fresh && cd /tmp/fresh
+pnpm install && pnpm build && pnpm test
+```
+
+## Known V2 limitations
+
+These are **runtime constraints** in 2.0.19, not unfinished migration work. Design around them.
+
+| Limitation                                         | Workaround                                                |
+| -------------------------------------------------- | --------------------------------------------------------- |
+| SSE has no replay; deltas are lost on disconnect   | hydrate state, render from terminal events               |
+| `session.log` returns no history                   | record your own event log                                 |
+| `tool.called` has no tool name                     | map from `tool.input.started` ([#35638](https://github.com/anomalyco/opencode/issues/35638)) |
+| Queued prompt text cannot be edited                | cancel and enqueue again ([#52275](https://github.com/anomalyco/opencode/issues/52275)) |
+| `session.shell` has no `delivery`                  | run shells at once; no ordered shell queue               |
+| `session.interrupt` does not stop user shells      | `shell.list` plus `shell.remove`                          |
+| `session.command` has no `id` or `metadata`        | dispatch your own marker before the command               |
+| Hydration reads are not atomic                     | hold live events while hydrating                          |
+| Forms and permissions are in memory                | rebuild from list calls after restart                     |
+| `usage.recorded` is internal                       | use `step.ended` tokens                                   |
+| Context percent needs the model limit              | omit it when unknown                                      |
+| Session search is title-only                       | keep your own index if you need content search            |
+| Plugin `SessionDomain` lacks some HTTP operations  | use `@opencode/client` there                              |
+| Execution recovery is at-least-once                | a crash can repeat a tool side effect                     |
+| No share API                                       | remove share commands                                     |
+
+Experimental routes may change: `session.log`, `instructions.entry`, `session.wait`, session export and import, and `fs.write`.
 
 ## Migration checklist
 
-- [ ] V1 removed, V2 installed with `curl -fsSL https://opencode.ai/v2/install | bash`
-- [ ] Models, credentials, agents, permissions and MCP servers checked in one project
-- [ ] `external_directory` rule added if you want V1 behavior
-- [ ] Every plugin rewritten with `Plugin.define` and a stable `id`
-- [ ] Imports moved from `@opencode-ai/sdk` (and `/v2`) to `@opencode/client`
-- [ ] Integration discovers the shared service instead of starting its own
-- [ ] Completion uses `session.execution.*`, not `session.idle`
-- [ ] Reconnect reads state again
-- [ ] Session-level prompt text in instruction entries, not the `context` hook
+Copy this into your PR description and tick each box with evidence.
+
+- [ ] No import of `@opencode-ai/sdk`, `@opencode-ai/sdk/v2` or `@opencode-ai/plugin` remains
+- [ ] All `@opencode/*` packages pinned to the same exact version
+- [ ] Connects with `Service.discover()` / `Service.ensure()`, never pins a server version
+- [ ] Checks `server.info().version` and stops with install instructions on V1
+- [ ] Readiness requires a 2xx; the password is never logged
+- [ ] No `.data` / `.error` checks on V2 calls; rejections become typed errors
+- [ ] Sessions are created with `location`, `permissions` and a `metadata` marker
+- [ ] System prompt is an instruction entry written before the first prompt
+- [ ] `promptAsync` replaced by `session.prompt`; `noReply` by `resume: false`
+- [ ] Steering is interrupt (`resume: false`) first, then `prompt(steer)`
+- [ ] No local queue; queue UI is rendered from `session.inbox.*`
+- [ ] One submission path for text, queue, voice, commands and synthetic input
+- [ ] No handler for `message.updated`, `message.part.*`, `question.*`, `session.idle`, `session.error`
+- [ ] Tool names map from `tool.input.started`; `shell`, `subagent`, `path` renames applied
+- [ ] Turn end is `session.execution.*`; queued items handled inside one execution
+- [ ] Subagents routed by `parentID` and `tool.progress`, including background children
+- [ ] Forms of every kind rendered; child forms and permissions shown in the parent
+- [ ] Event stream: `server.connected` check, idle watchdog, backoff, endpoint re-resolve
+- [ ] Hydration on every connect, live events held meanwhile
+- [ ] Tokens from `step.ended` plus `step.failed`; context percent omitted when unknown
+- [ ] Every `message.list` and `session.list` call ordered and scoped
+- [ ] OAuth uses `attemptID`; worktrees use directories, not invented workspace IDs
+- [ ] Plugin rewritten with `Plugin.define`, guarded by the session marker
+- [ ] Tests run against a real V2 server with recorded V2 fixtures
+- [ ] Fresh clone builds and passes
 
 ## FAQ
 
-### Can I run OpenCode V1 and V2 side by side?
+### Can OpenCode V1 and V2 run side by side?
 
-**No**, not by default. Both use the `opencode` command and the same config locations. Do not point V1 at a config you converted to the native V2 shape.
+**No.** Both install as `opencode` and the V2 installer replaces the V1 binary. Some installs add an `opencode2` alias for the same V2 binary. Keep a copy of your V1 setup while you test, and test integrations against an isolated V2 server.
 
 ### Do I have to convert opencode.json?
 
-**No.** V2 reads the V1 shape and normalizes it in memory. You can mix V1 and V2 fields at the top level. Keep each agent, provider, command and model entry in one format.
+**No.** V2 reads the V1 shape and normalizes it in memory without rewriting the file. Convert only if you want the native shape; see [migrate the configuration](#migrate-the-configuration-optional). V1 plugins listed in it fail to load until you rewrite them.
 
 ### Is @opencode-ai/sdk/v2 the OpenCode V2 SDK?
 
-**No.** It is a legacy client from OpenCode 1. The V2 SDK is `@opencode/client` for network access and `@opencode/sdk` for embedding.
+**No.** It is a V1-era transitional client. The V2 network client is `@opencode/client`, plugins use `@opencode/plugin`. See [the trap](#the-opencode-aisdkv2-trap).
 
-### Where do I find the V2 source and API reference?
+### How do I know a turn finished?
 
-The source is the [v2 branch of anomalyco/opencode](https://github.com/anomalyco/opencode/tree/v2). Client docs are in the [OpenCode client guide](https://opencode.ai/v2/docs/build/client).
+Wait for **`session.execution.succeeded`** (or `failed` / `interrupted`) of the root session. Not `session.idle`, which V2 core does not publish, and not `step.ended`, which is one model call. Remember that queued prompts and background subagents can make one execution cover several turns, or a turn span several executions. See [execution lifecycle](#execution-lifecycle).
+
+### Can I steer without aborting?
+
+**Yes.** `session.prompt({ delivery: 'steer' })` alone admits the prompt at the next safe step boundary, without stopping the current run. Interrupt first only when the new message should replace the current work. See [interrupt, then steer](#interrupt-then-steer).
+
+### Where is the V2 source and documentation?
+
+- Source: [github.com/anomalyco/opencode/tree/v2](https://github.com/anomalyco/opencode/tree/v2). Not `opencode-ai/opencode`, which is an unrelated repo.
+- Client guide: [opencode.ai/v2/docs/build/client](https://opencode.ai/v2/docs/build/client)
+- Client migration tracker: [anomalyco/opencode#34359](https://github.com/anomalyco/opencode/issues/34359)
+- Promise-first embedded SDK design: [anomalyco/opencode#44746](https://github.com/anomalyco/opencode/pull/44746)
+- API changes between V2 releases: `V2_HTTP_API_AUDIT.md` on the v2 branch
 
 ## Use OpenCode V2 from Discord
 
-Kimaki runs on **native OpenCode V2**. It connects to the same shared service as your TUI, so a session started on your phone in Discord is the same session on your laptop. [Get started with Kimaki](../index.mdx).
+**Kimaki** runs on native OpenCode V2. It connects to the same shared service as your TUI, so a session you start from Discord is visible in `opencode` on your machine, and the other way around.
+
+```diagram
+  Discord thread ──> Kimaki ──> your OpenCode V2 service <── opencode TUI
+                                    │
+                                    └──> your projects, your models, your plugins
+```
+
+Every pattern in this guide is in its source: one event stream, a pure reducer, native inbox steering and queueing, and recorded V2 fixtures.
+
+[Get started with Kimaki](../index.mdx)
