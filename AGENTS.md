@@ -1,3 +1,5 @@
+Decisions: `plans/decisions/`. Search them before designing or refactoring.
+
 the important package in this repo is `kimaki/`: the Kimaki Discord bot and `kimaki` CLI (npm package `kimaki`), built on OpenCode V2. it replaced the V1 `cli/` package; `kimaki/CHANGELOG.md` keeps the V1 release history. this branch supports OpenCode V2 only. the legacy OpenCode V1 compatible codebase lives in the `cli/` folder of the `v1` branch (https://github.com/remorses/kimaki/tree/v1/cli); read it there with `git show v1:cli/<path>`, never re-add V1 support here.
 
 after every change and every feature run `pnpm build` (tsc) inside `kimaki`. it validates types and keeps `kimaki/dist` up to date: the OpenCode plugin autostarts the bot from `dist/cli.js` (`src/autostart.ts`), so a stale dist starts old code. try to never use `as any`.
@@ -47,7 +49,8 @@ OpenCode events ──▶ opencode-server.ts ──▶ event-loop.ts ──▶ t
 
 - `main.ts`: wiring. lock port, then SQLite migration, then OpenCode and Discord login in parallel.
 - `bot.ts`: the `Bot` context passed to every module. `store.ts`: the one zustand store.
-- `ingress.ts`: Discord messages, attachments, voice. `slash-commands.ts` + `commands/*`: slash commands and components.
+- `ingress.ts`: Discord messages, attachments, voice. In a **mainmast** channel (default; `--no-mainmast` turns it off) the channel itself is the conversation of one long coordinator session: `roots[channelId]`, bound in `thread_sessions` with the channel ID, a `Conversation` is a thread or that channel (`bot.ts`). `startMainmast` in `sessions.ts` creates it.
+- `mainmast.ts`: when a thread run ends, a `<session-finished>` synthetic note goes to the mainmast (wakes it when the mainmast started that thread with `--parent-session`, silent otherwise). `plugin/mainmast.ts`: idle nudge and compaction at the end of the OpenCode warming window, only for the mainmast session. Decisions: `plans/decisions/mainmast.md`. `slash-commands.ts` + `commands/*`: slash commands and components.
 - `opencode-server.ts`: finds the OpenCode service, owns the event subscription, installs the plugin shim.
 - `event-loop.ts`: routes events to threads, hydrates after a (re)connect. `thread-reducer.ts`: pure fold of events into a thread view plus effects.
 - `effects.ts`: the only Discord writer for session output. `format-parts.ts`, `markdown/`: formatting.
@@ -301,7 +304,8 @@ markdown tables and callouts render as a Components V2 `Container` (`markdown/co
 
 use this to write tests that find messages matching specific patterns. formatting lives in `format-parts.ts`.
 
-- Kimaki creates a thread on the first user message and replies in it. sessions the bot created start with a banner: `-# *using anthropic/claude-sonnet-4 ⋅ build*` (`formatBanner`).
+- in a mainmast channel the coordinator replies in the channel itself (banner, text, tool lines, footer) and posts `-# ⬦ <title> finished: <#thread>` when a thread it started ends. idle-nudge turns that answer nothing post nothing, not even a footer.
+- with `--no-mainmast`, Kimaki creates a thread on the first user message and replies in it. sessions the bot created start with a banner: `-# *using anthropic/claude-sonnet-4 ⋅ build*` (`formatBanner`).
 - assistant text is plain Discord markdown, full width, **never quoted**. reasoning is never shown.
 - tool lines are subtext: `-# ┣ shell _ls_`, file edits and writes use `◼︎`: `-# ◼︎ edit *file.ts* (+3-1)` (`formatToolLine`). subagent lines carry the agent: `-# ┣ general ⋅ glob _*.md_`. when the kind changes between text and tool, the next block starts with a blank line.
 - verbosity per channel is `tools` (default) or `text` (`isToolVisible`). `tools` hides read-only tools and shells with `hasSideEffect: false`. file edits always show.
