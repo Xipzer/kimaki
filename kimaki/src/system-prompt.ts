@@ -52,6 +52,8 @@ export function baseInstructions({
 }): string {
   const userArg = ` --user '${userId}'`
   const parentArg = ` --parent-session ${sessionId}`
+  // The mainmast lives in the channel itself: thread-only parts are left out.
+  const isMainmast = mainmastSessionId === sessionId
   const topic = channelTopic?.trim()
   const agentList = agents.map((agent) => `- \`${agent.name}\`${agent.description ? `: ${agent.description}` : ''}`).join('\n')
   const parts: Array<[PromptSection | null, string]> = [
@@ -86,10 +88,10 @@ export function baseInstructions({
       \`hasSideEffect\` only decides if Discord shows the shell call. Set it to \`true\` for every command the user should be aware of, for example commands that change state or that the user asked you to run (the user says "run sleep 100", so \`sleep 100\` gets \`true\`). Set \`false\` only for routine commands the user does not need to see.
       The shell environment provides the \`kimaki\` command and OPENCODE_SESSION_ID. Do not pass stale IDs copied from another session.
     `],
-    [null, !mainmastSessionId ? '' : mainmastSessionId === sessionId ? mainmastSection({ sessionId, channelId, dataDir }) : workerSection(mainmastSessionId)],
+    [null, !mainmastSessionId ? '' : isMainmast ? mainmastSection({ sessionId, channelId, dataDir }) : workerSection(mainmastSessionId)],
     [null, dedent`
       Discord channel ID: ${channelId}
-      Discord thread ID: ${threadId}
+      ${isMainmast ? 'You run in this channel, not in a thread.' : `Discord thread ID: ${threadId}`}
       Discord guild ID: ${guildId}
       ${parentSessionId ? `${PARENT_SESSION_LINE}${parentSessionId}\nYou can send a message back to the parent session with:\nkimaki send --session ${parentSessionId} --prompt 'your update here' --agent <current_agent>\nDo NOT message the parent session unless the user explicitly asks you to.` : ''}
 
@@ -178,7 +180,7 @@ export function baseInstructions({
       On a wake where nothing changed, do not post a status report. Write one short line, then sleep again with a longer wait (double it, up to 1d).
     `],
     [null, scheduledTask ? scheduledTaskSection(scheduledTask) : ''],
-    [null, dedent`
+    [null, isMainmast ? '' : dedent`
       ## archiving the current thread
 
       To archive the current Discord thread (hide it from sidebar) without stopping the session, run:
@@ -196,7 +198,7 @@ export function baseInstructions({
 
       This stops the AI from processing but keeps the thread visible in Discord. Different from \`kimaki session archive\` which hides the thread.
     `],
-    [null, dedent`
+    [null, isMainmast ? '' : dedent`
       ## updating the session title
 
       Skip the first turn. OpenCode already auto-generates the title from the first message.
@@ -208,7 +210,8 @@ export function baseInstructions({
       Current Discord title is in \`<discord-user thread-name="..." />\`. Discord follows the OpenCode title.
       Do not retitle every turn. Discord rate-limits thread renames.
       Keep titles short. No emoji. No btw: or Fork: prefixes.
-
+    `],
+    [null, dedent`
       ## discord user mentions
 
       Prefer Discord user IDs for mentions. Discord bots cannot ping by @name; use \`<@userId>\` in message text or pass the ID to \`--user\`.
@@ -313,9 +316,7 @@ export function baseInstructions({
 
       ### session handoff
 
-      When you are approaching the **context window limit**, or the user asks to "handoff", "continue in new thread", or "start fresh session", or a complex task would benefit from a clean slate, start a fresh session with a summary:
-
-      kimaki send --channel ${channelId} --prompt 'Continuing from previous session: <summary of current task and state>' --agent <current_agent>${parentArg}${userArg}
+      ${isMainmast ? handoffMainmast : `${handoffThread}\n\nkimaki send --channel ${channelId} --prompt 'Continuing from previous session: <summary of current task and state>' --agent <current_agent>${parentArg}${userArg}`}
 
       ## scheduled sends and routines
 
@@ -694,6 +695,9 @@ function mainmastSection({ sessionId, channelId, dataDir }: { sessionId: string;
     You may get a reminder that the user has not replied for a while. Start work only if it clearly moves the user's goals forward: check on open threads, verify results, prepare the next step. Otherwise reply with exactly \`IDLE\` and nothing else: Kimaki hides it.
   `
 }
+
+const handoffThread = 'When you are approaching the **context window limit**, or the user asks to "handoff", "continue in new thread", or "start fresh session", or a complex task would benefit from a clean slate, start a fresh session with a summary:'
+const handoffMainmast = 'You never hand off: Kimaki compacts your context when it grows. Keep what must survive in MEMORY.md. When the user wants a fresh coordinator, tell them to run `/new-mainmast` in this channel.'
 
 // A thread of a mainmast channel. A btw fork carries the coordinator's history: it must not take its role.
 function workerSection(mainmastSessionId: string): string {
