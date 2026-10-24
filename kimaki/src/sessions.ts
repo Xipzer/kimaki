@@ -830,6 +830,8 @@ export async function forkBtw(
     messageId,
     files = [],
     agent,
+    parentSessionId,
+    waited,
   }: {
     source: Conversation
     text: string
@@ -838,17 +840,21 @@ export async function forkBtw(
     files?: readonly PromptFile[]
     // A voice message asked for this agent.
     agent?: string
+    // Explicit `kimaki send --parent-session`: the fork's finished runs wake it (mainmast.ts).
+    parentSessionId?: string
+    // `kimaki send --wait`: the waiting sender gets the answer, so no note while it runs.
+    waited?: boolean
   },
 ): Promise<ConfigError | OpenCodeUnavailableError | OpenCodeError | DiscordError | DbError | { threadId: string; sessionId: string }> {
-  const parentSessionId = rootSession(bot, source.id)
-  if (parentSessionId instanceof Error) return parentSessionId
+  const sourceSessionId = rootSession(bot, source.id)
+  if (sourceSessionId instanceof Error) return sourceSessionId
   const project = await conversationProject(bot, source)
   if (project instanceof Error) return project
   const channel = await textChannel(bot, project.channelId)
   if (channel instanceof Error) return channel
 
   const [forked, thread] = await Promise.all([
-    oc(bot, 'session.fork', (client) => client.session.fork({ sessionID: parentSessionId })),
+    oc(bot, 'session.fork', (client) => client.session.fork({ sessionID: sourceSessionId })),
     channel.threads
       .create({ name: `btw: ${text.replace(/\s+/g, ' ')}`.slice(0, 100), autoArchiveDuration: 1440 })
       .catch((cause) => new DiscordError({ operation: 'create btw thread', cause })),
@@ -864,14 +870,14 @@ export async function forkBtw(
     return thread
   }
 
-  const kimaki = { threadId: thread.id, channelId: project.channelId, source: 'discord', ...cliContext(bot) }
+  const kimaki = { threadId: thread.id, channelId: project.channelId, source: 'discord', ...cliContext(bot), ...(parentSessionId && { parentSessionId }) }
   const fromMainmast = !source.isThread()
   const marked = await oc(bot, 'session.update', (client) => client.session.update({ sessionID: forked.id, metadata: { kimaki } }))
   if (marked instanceof Error) return marked
   // A fork of a thread keeps its copied instructions (prompt cache); a fork of a mainmast gets thread
   // ones. The plugin makes it a worker (plugin/mainmast.ts).
   if (fromMainmast) {
-    const instructions = await putInstructions(bot, { sessionId: forked.id, conversation: thread, channel, directory: project.directory, userId: author.id, parentSessionId })
+    const instructions = await putInstructions(bot, { sessionId: forked.id, conversation: thread, channel, directory: project.directory, userId: author.id, parentSessionId: sourceSessionId })
     if (instructions instanceof Error) return instructions
   }
   const bound = await bindThread(bot, {
@@ -896,11 +902,12 @@ export async function forkBtw(
     sessionId: forked.id,
     threadId: thread.id,
     threadName: thread.name,
-    text: btwPrompt({ text, parentSessionId, sourceThreadId: source.id, sessionId: forked.id, threadId: thread.id }),
+    text: btwPrompt({ text, parentSessionId: sourceSessionId, sourceThreadId: source.id, sessionId: forked.id, threadId: thread.id }),
     author,
     messageId,
     delivery: 'steer',
     files,
+    waited,
   })
   if (sent instanceof Error) return sent
   return { threadId: thread.id, sessionId: forked.id }

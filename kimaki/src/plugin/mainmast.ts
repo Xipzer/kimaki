@@ -237,6 +237,11 @@ function mainmastSection({ sessionId, channelId, dataDir }: { sessionId: string;
     - Other projects: \`--channel\` of that project (\`kimaki project list --json\`). Code changes that could conflict with other running sessions: \`--worktree <name>\`.
     - Run sessions in parallel only when their write scopes do not overlap. Otherwise use separate worktrees, or run them one after another.
     - A follow-up for an existing worker: \`kimaki send --thread <thread_id> --prompt '...'\`, with \`. queue\` at the end when it may be busy. Prefer continuing a worker that has the context over re-explaining it to a new one.
+    - Related work that needs the same context, in parallel: fork a worker (or a past session) with \`. btw\` at the end, only when it touches different files than the work still running there:
+
+      kimaki send --thread <thread_id> --prompt '... btw' --agent <agent> --parent-session ${sessionId}
+
+      The fork gets a new thread with the whole history; the source keeps running. Its \`<session-finished>\` note wakes you like any worker.
     - Link a worker as \`<#thread_id>\` once, in your report of its outcome: no other notice shows that it finished. Nowhere else: no thread links, session URLs or session IDs in other replies.
 
     ### writing prompts for workers

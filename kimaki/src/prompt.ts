@@ -388,6 +388,7 @@ export async function dispatch(
     echo,
     waited,
     model,
+    parentSessionId,
   }: {
     conversation: Conversation
     route: Route
@@ -397,6 +398,8 @@ export async function dispatch(
     echo?: string
     waited?: boolean
     model?: ModelChoice | null
+    // `kimaki send --parent-session`: only a btw fork records it, the session itself exists.
+    parentSessionId?: string
   },
 ) {
   const sessionId = rootSession(bot, conversation.id)
@@ -415,7 +418,7 @@ export async function dispatch(
   if (marked instanceof Error) return marked
   switch (route.kind) {
     case 'btw':
-      return forkBtw(bot, { source: conversation, text: route.text, author, messageId, files, agent: route.agent })
+      return forkBtw(bot, { source: conversation, text: route.text, author, messageId, files, agent: route.agent, parentSessionId, waited })
     case 'new-session':
       // A fresh conversation in the same channel, with no history.
       return startSession(bot, {
@@ -582,7 +585,7 @@ export async function send(bot: Bot, input: SendInput, { localOnly = false, task
       if (switched instanceof Error) return switched
     }
     const echo = task ? formatEcho({ username: author.username, text: routeText(route) }) : undefined
-    const result = await dispatch(bot, { conversation: thread, route, author, messageId, files: input.files, echo, waited: input.wait })
+    const result = await dispatch(bot, { conversation: thread, route, author, messageId, files: input.files, echo, waited: input.wait, parentSessionId: input.parentSessionId })
     if (result instanceof Error) return result
     return result ?? { threadId, sessionId: bot.store.getState().roots[threadId]! }
   }

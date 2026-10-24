@@ -69,6 +69,8 @@ beforeAll(async () => {
         { id: 'waited-worker', priority: 100, when: { latestUserTextIncludes: 'waited-worker-marker' }, then: { parts: textParts('Waited job done.') } },
         // Slow enough that the delegating run ends first: the note then wakes an idle mainmast.
         { id: 'worker', priority: 100, when: { latestUserTextIncludes: 'worker-marker' }, then: { parts: textParts('Job done in the worker.'), defaultPartDelayMs: 300 } },
+        { id: 'fork', priority: 100, when: { latestUserTextIncludes: 'fork-marker' }, then: { parts: textParts('Fork job done.') } },
+        { id: 'woken-by-fork', priority: 310, when: { latestUserTextIncludes: '<session-finished', rawPromptIncludes: 'Fork job done.' }, then: { parts: textParts('The fork finished the job.') } },
         { id: 'btw', priority: 100, when: { latestUserTextIncludes: 'btw-marker' }, then: { parts: textParts('Side answer.') } },
         { id: 'side', priority: 100, when: { latestUserTextIncludes: 'side-marker' }, then: { parts: textParts('Side check done.') } },
         // The silent note of the side thread is in the history only when it arrived.
@@ -177,6 +179,30 @@ test('a worker started with --parent-session gets a thread and wakes the mainmas
   expect(workerRoles).toHaveLength(1)
   expect(workerRoles[0]).toContain(`## worker of a mainmast`)
   expect(workerRoles[0]).toContain(`kimaki session read ${channelId}`)
+})
+
+test('a btw fork of a worker sent with --parent-session wakes the mainmast when done', async () => {
+  const { discord, channelId } = twin
+  const root = bot.store.getState().roots[channelId]!
+  const worker = (await discord.channel(channelId).getThreads()).find((candidate) => candidate.name === 'Worker task')
+  if (!worker) throw new Error('no Worker task thread')
+  const footers = (await discord.channel(channelId).getMessages()).filter((message) => message.content.startsWith('-# *project')).length
+  // What the coordinator runs: kimaki send --thread <worker> --prompt '... btw' --parent-session <mainmast>
+  const forked = await send(bot, { threadId: worker.id, prompt: 'fork-marker related job. btw', parentSessionId: root })
+  if (forked instanceof Error) throw forked
+  await waitForFooter({ discord, threadId: forked.threadId })
+  await waitForFooter({ discord, threadId: channelId, count: footers + 1 })
+
+  const text = await discord.channel(channelId).text()
+  expect(text.slice(text.lastIndexOf('The worker finished the job.'))).toMatchInlineSnapshot(`
+    "The worker finished the job.
+    -# *project ⋅ main ⋅ Ns ⋅ N% ⋅ deterministic-v2*
+    The fork finished the job.
+    -# *project ⋅ main ⋅ Ns ⋅ N% ⋅ deterministic-v2*"
+  `)
+  const fork = await (await server.client()).session.get({ sessionID: forked.sessionId! })
+  expect(Reflect.get(Object(fork.metadata?.['kimaki']), 'parentSessionId')).toBe(root)
+  expect((await roleTexts(fork.id)).at(-1)).toContain('## worker of a mainmast')
 })
 
 test('a worker started with --wait answers through the wait, with no note', async () => {

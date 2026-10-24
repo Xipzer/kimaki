@@ -13,6 +13,7 @@ Add **mainmast** channels, the new default. A project channel is now a chat with
 ```
 
 - The mainmast starts workers in the background and says in one line what it started. When a worker run ends, its final answer wakes the mainmast, which reports the outcome with one link to the thread. Kimaki posts no other finish notice.
+- For related work that needs the same context, the mainmast can fork a worker or a past session with `kimaki send --thread <id> --prompt '... btw' --parent-session <mainmast>`, when the fork touches different files. `--parent-session` now also applies to btw forks, so the fork wakes the mainmast when it ends, like any worker.
 - Worker threads do not join your sidebar unless you ask to follow one, or the work is planning or long work you will probably take part in. You can still open and steer any worker thread.
 - With `kimaki send --wait` the sender gets the answer in the command output instead: a run whose prompt came from `--wait` sends no note while its sender still runs, so the result is never reported twice. Other threads of the channel and routines leave a silent note for the next prompt.
 - The mainmast reads files and the repo source itself to understand the project, and delegates edits, builds, tests, long debugging and big research, so its context stays clean across many compactions. It writes short worker prompts as bullet lists without headings, in the style of its replies. Every worker is a visible thread you can talk to. The mainmast uses the `subagent` tool only for quick throwaway lookups.
