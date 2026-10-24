@@ -9,7 +9,7 @@ import { fileURLToPath } from 'node:url'
 import { Resvg } from '@resvg/resvg-js'
 import * as errore from 'errore'
 import { DomUtils, parseDocument } from 'htmlparser2'
-import { render } from 'pele'
+import { detectType, render } from 'pele'
 import postcss from 'postcss'
 import valueParser, { type Node as ValueNode } from 'postcss-value-parser'
 
@@ -17,7 +17,7 @@ const FONTS_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..
 const SCALE = 2
 const PADDING = 24
 
-// Category hues for classDef / style lines in diagrams, as fill + stroke.
+// Category hues. Built in as classDefs, so diagrams only write `node:::blue`.
 const DIAGRAM_COLORS = {
   blue: { fill: '#0b1f38', stroke: '#1d68c5' },
   green: { fill: '#1a2c1e', stroke: '#49a45f' },
@@ -141,9 +141,23 @@ function hexChannels(color: string | undefined): number[] | undefined {
 }
 
 // Renders Mermaid source to PNG bytes. pele syntax errors already include the line and a pointer.
+// Diagram types whose grammar accepts classDef lines.
+const CLASS_DEF_TYPES = new Set(['flowchart', 'swimlane', 'state', 'class', 'er', 'requirement'])
+
+// Appends a classDef per color the source does not define itself.
+export function withColorClasses(source: string): string {
+  const type = detectType(source)
+  if (!type || !CLASS_DEF_TYPES.has(type)) return source
+  const defined = new Set(source.split('\n').flatMap((line) => line.trim().match(/^classDef\s+(\S+)/)?.[1]?.split(',') ?? []))
+  const lines = Object.entries(DIAGRAM_COLORS)
+    .filter(([name]) => !defined.has(name))
+    .map(([name, { fill, stroke }]) => `  classDef ${name} fill:${fill},stroke:${stroke},color:${THEME.get('--pele-fg')}`)
+  return [source.trimEnd(), ...lines].join('\n')
+}
+
 export function renderDiagram(source: string): DiagramError | Buffer {
   const result = errore.try(
-    () => render(source, { fontFamily: 'Geist', fontFamilyMono: 'Geist Mono', padding: PADDING, responsive: false, autoDirection: false, links: false, images: false }),
+    () => render(withColorClasses(source), { fontFamily: 'Geist', fontFamilyMono: 'Geist Mono', padding: PADDING, responsive: false, autoDirection: false, links: false, images: false }),
     (error) => new DiagramError({ reason: error instanceof Error ? error.message : String(error) }),
   )
   if (result instanceof Error) return result

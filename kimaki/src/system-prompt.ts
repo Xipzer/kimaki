@@ -574,86 +574,36 @@ export function baseInstructions({
     ['diagrams', dedent`
       ## diagrams
 
-      Make heavy use of diagrams to explain architecture, flows, state machines, and relationships. Prefer a diagram over a long text explanation.
-
-      ALWAYS draw diagrams as images. NEVER draw ASCII or Unicode box diagrams in code blocks. Write Mermaid source to a file in /tmp, render it to a dark themed PNG with \`kimaki diagram\`, then upload the PNG:
+      Use diagrams to explain architecture, flows, and state. ALWAYS render them as images, NEVER as ASCII or Unicode art:
 
       \`\`\`bash
-      cat > /tmp/auth-flow.mmd <<'EOF'
+      cat > /tmp/flow.mmd <<'EOF'
       flowchart LR
         ...
       EOF
-      kimaki diagram /tmp/auth-flow.mmd -o /tmp/auth-flow.png
-      kimaki upload-to-discord /tmp/auth-flow.png
+      kimaki diagram /tmp/flow.mmd -o /tmp/flow.png
+      kimaki upload-to-discord /tmp/flow.png
       \`\`\`
 
-      Syntax errors print the line and column. Fix the source and run again. Write the upload as the visual part of your answer and keep the text short around it.
+      Mermaid kinds: \`flowchart\`, \`sequenceDiagram\`, \`stateDiagram-v2\`, \`erDiagram\`, \`classDiagram\`, \`gitGraph\`, \`mindmap\`, \`timeline\`, \`gantt\`, \`pie\`, \`xychart\`, \`sankey\`, \`architecture-beta\`.
 
-      Make diagrams **rich**, not 2 or 3 boxes: 8 to 20 nodes, real names from the code (files, functions, events, tables), subgraphs for system boundaries, labels on most edges, notes for important details. A diagram that only says "A --> B --> C" is useless; put the concepts the user needs to understand in it.
-
-      Make them **colorful**. The theme is dark (near-black background). Give each category one hue with \`classDef\` and use them on nodes, and color the important path with \`linkStyle\`:
-
-      \`\`\`
-      classDef blue fill:#0b1f38,stroke:#1d68c5,color:#ededed
-      classDef green fill:#1a2c1e,stroke:#49a45f,color:#ededed
-      classDef purple fill:#251931,stroke:#8955a7,color:#ededed
-      classDef pink fill:#371523,stroke:#c14c70,color:#ededed
-      classDef amber fill:#4c3d20,stroke:#f2b342,color:#ededed
-      classDef red fill:#3c1618,stroke:#e5484d,color:#ededed
-      classDef teal fill:#0d2d2a,stroke:#12a594,color:#ededed
-      \`\`\`
-
-      Typical mapping: users and clients green, our system blue, third party services purple, storage amber, errors red or pink. Sequence diagrams color regions with \`rect rgb(11, 31, 56)\`. Pie, xychart, gitGraph and mindmap are colored automatically.
-
-      Available kinds (Mermaid 12 syntax): \`flowchart\` (architecture, data flow), \`sequenceDiagram\` (requests between components over time), \`stateDiagram-v2\` (state machines, lifecycles), \`erDiagram\` (database schemas), \`classDiagram\` (types and modules), \`gitGraph\` (branches and merges), \`mindmap\` (concept overviews), \`timeline\`, \`gantt\`, \`pie\`, \`xychart\` (bar and line charts with numbers), \`quadrantChart\`, \`sankey\`, \`architecture-beta\`, \`block\`, \`C4Container\`, \`kanban\`, \`treeView-beta\` (file trees).
-
-      Example of the expected richness:
+      Make them **rich**: 8 to 20 nodes with real names from the code, subgraphs for boundaries, labels on edges. Never 3 boxes in a row.
+      Make them **colorful**: give nodes a built-in color class with \`:::name\` (\`blue\`, \`green\`, \`purple\`, \`pink\`, \`amber\`, \`red\`, \`teal\`), one per category: clients green, our system blue, third party purple, storage amber, errors red. Color the key path with \`linkStyle\`. Sequence regions: \`rect rgb(11, 31, 56)\`.
 
       \`\`\`
       flowchart LR
-        subgraph client[Browser]
+        subgraph browser[Browser]
           ui[React app<br/>useSession]:::green
-          cookie[(session cookie)]:::amber
         end
-        subgraph worker[Cloudflare Worker]
-          mw[auth middleware<br/>getSession]:::blue
-          routes[API routes<br/>/api/*]:::blue
-          cb[OAuth callback<br/>/auth/callback]:::blue
+        subgraph worker[Worker]
+          mw[auth middleware]:::blue
+          cb["/auth/callback"]:::blue
         end
-        subgraph ext[Third party]
-          google[Google OAuth]:::purple
-        end
-        db[(Postgres<br/>users, sessions)]:::amber
-        ui -->|fetch with cookie| mw
-        mw -->|valid| routes
-        mw -.->|expired: 401| ui
-        ui -->|sign in| google -->|code| cb
-        cb -->|upsert user| db
-        cb -->|Set-Cookie| cookie
-        routes -->|query| db
-        classDef green fill:#1a2c1e,stroke:#49a45f,color:#ededed
-        classDef blue fill:#0b1f38,stroke:#1d68c5,color:#ededed
-        classDef purple fill:#251931,stroke:#8955a7,color:#ededed
-        classDef amber fill:#4c3d20,stroke:#f2b342,color:#ededed
-        linkStyle 3,4,5 stroke:#f2b342,stroke-width:2px
-      \`\`\`
-
-      \`\`\`
-      sequenceDiagram
-        autonumber
-        actor U as User
-        participant W as Worker
-        participant DO as Durable Object
-        participant DB as Postgres
-        U->>W: POST /checkout
-        W->>DO: lock(cartId)
-        rect rgb(55, 21, 35)
-          Note over DO,DB: retried up to 3 times on conflict
-          DO->>DB: BEGIN, reserve stock
-          DB-->>DO: ok
-        end
-        DO-->>W: order id
-        W-->>U: 201 Created
+        google[Google OAuth]:::purple
+        db[(Postgres)]:::amber
+        ui -->|cookie| mw -->|query| db
+        ui -->|sign in| google -->|code| cb -->|upsert user| db
+        linkStyle 2,3,4 stroke:#f2b342,stroke-width:2px
       \`\`\`
     `],
     ['action-buttons', dedent`
