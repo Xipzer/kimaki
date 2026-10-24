@@ -52,7 +52,7 @@ import {
   type ToolInput,
   type UiMessage,
 } from './format-parts.ts'
-import { IDLE_NUDGE_SOURCE } from './plugin/mainmast.ts'
+import { IDLE_NUDGE_SOURCE, IDLE_REPLY } from './plugin/mainmast.ts'
 import { closePermission, hydratePermissions, showPermission, STATUS, type PendingPermission } from './permissions.ts'
 import { closeForm, formatAnswer, hydrateForms, showForm, withAnswer, type PendingForm } from './questions.ts'
 import { cancelQueued, deliverQueued, enqueueInput, hydrateQueue, promoteQueued, queuedItems, type PendingInput } from './queue.ts'
@@ -381,7 +381,8 @@ function applyRoot(context: Context & { event: V2Event }) {
     }
     case 'session.text.ended': {
       const text = event.data.text.trim()
-      if (!text) return
+      // An idle nudge with nothing to do answers IDLE_REPLY: Discord shows nothing.
+      if (!text || (draft.idleNudge && text === IDLE_REPLY)) return
       emit({ type: 'markdown', text, blankLineBefore: draft.lastKind === 'tool' })
       draft.lastKind = 'text'
       return
@@ -415,7 +416,7 @@ function applyRoot(context: Context & { event: V2Event }) {
       return toolLine(context, formatError(`compaction failed: ${event.data.error.message}`))
     case 'session.execution.succeeded': {
       const turn = draft.turn
-      // An idle nudge answered with nothing: no footer, nothing in Discord.
+      // An idle nudge that posted nothing: no footer either.
       const silent = draft.idleNudge && draft.lastKind === null
       draft.turn = null
       draft.lastKind = null

@@ -79,7 +79,7 @@ test('session cwd changes preserve the session and use the new location after re
   expect(fs.existsSync(path.join(server.projectDirectory, 'cwd.txt'))).toBe(false)
   const source = await bot.discord.channels.fetch(sent.threadId)
   if (!source?.isThread()) throw new Error('No thread')
-  const fork = await forkBtw(bot, { sourceThread: source, text: 'Side question', author: { id: TEST_USER_ID, username: 'tommy' }, messageId: 'cwd-btw' })
+  const fork = await forkBtw(bot, { source, text: 'Side question', author: { id: TEST_USER_ID, username: 'tommy' }, messageId: 'cwd-btw' })
   if (fork instanceof Error) throw fork
   await waitForFooter({ discord: twin.discord, threadId: fork.threadId })
   expect(hide(await twin.discord.thread(fork.threadId).text())).toMatchInlineSnapshot(`

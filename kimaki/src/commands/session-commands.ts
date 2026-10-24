@@ -82,7 +82,7 @@ async function newSession(bot: Bot, interaction: ChatInputCommandInteraction) {
 async function resumeCommand(bot: Bot, interaction: ChatInputCommandInteraction) {
   const target = await resolveTarget(bot, interaction.channelId)
   if (target instanceof Error) return replyError(interaction, target)
-  if (target.thread?.isThread()) {
+  if (target.conversation?.isThread()) {
     return replyError(interaction, new ConfigError({ reason: 'This command can only be used in project channels, not threads' }))
   }
   await interaction.deferReply()
@@ -173,7 +173,7 @@ async function forkSelected(bot: Bot, { interaction, subagents }: { interaction:
   const selected = interaction.values[0]
   const target = await resolveTarget(bot, interaction.channelId)
   if (target instanceof Error) return replyError(interaction, target)
-  if (!selected || !target.thread || target.sessionId !== sourceSessionId) {
+  if (!selected || !target.conversation || target.sessionId !== sourceSessionId) {
     await interaction.update({ content: 'This selection expired. Run the command again.', components: [] })
     return
   }
@@ -186,7 +186,7 @@ async function forkSelected(bot: Bot, { interaction, subagents }: { interaction:
   })()
   if (subagent instanceof Error) return replyError(interaction, subagent)
   const result = await fork(bot, {
-    sourceThread: target.thread,
+    source: target.conversation,
     sessionId: subagents ? selected : sourceSessionId,
     ...(!subagents && { before: selected }),
     ...(subagent && { subagent }),

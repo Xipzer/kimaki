@@ -7,10 +7,12 @@
 // The note is a synthetic inbox item, like OpenCode's own subagent completion
 // (core/src/session/subagent-completion.ts): `resume` decides if it wakes the session.
 
-import { oc, projectOf, readMarker, threadOfSession, type Bot } from './bot.ts'
+import { oc, projectOf, readMarker, threadOfSession, type Bot, type MainmastTimers } from './bot.ts'
+import { parseDuration } from './duration.ts'
 import type { RunEnded } from './event-loop.ts'
 import { createLogger } from './logger.ts'
 import { finalAnswer } from './session-events.ts'
+import { escapeAttribute } from './system-prompt.ts'
 
 const logger = createLogger('MAINMAST')
 
@@ -19,8 +21,23 @@ const WAKE_ANSWER_CHARS = 2_000
 const NOTE_ANSWER_CHARS = 400
 const ANSWER_MESSAGES = 30
 
-function attribute(value: string): string {
-  return value.replaceAll('&', '&amp;').replaceAll('"', '&quot;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replace(/\s+/g, ' ')
+// OpenCode's warming default (core/src/plugin/warming.ts) and the nudge when warming is off.
+const OPENCODE_WARMING_MS = 30 * 60_000
+const UNWARMED_NUDGE_MS = 30 * 60_000
+
+// Timers of a new mainmast (plugin/mainmast.ts) from the OpenCode `warming` config of its
+// directory, like OpenCode reads it (Config.latest): nudge at half the window, compact at its end.
+// Without warming the cache is cold after minutes, so there is nothing to compact cheaply.
+export async function mainmastTimers(bot: Bot, directory: string): Promise<MainmastTimers> {
+  if (bot.mainmastTimers) return bot.mainmastTimers
+  const entries = await oc(bot, 'config.get', (client) => client.config.get({ location: { directory } }))
+  if (entries instanceof Error) logger.warn('read warming config', entries)
+  const documents = entries instanceof Error ? [] : entries.flatMap((entry) => (entry.type === 'document' ? [entry.info] : []))
+  const warming = documents.findLast((info) => info.warming !== undefined)?.warming
+  if (!warming) return { nudgeMs: UNWARMED_NUDGE_MS, compactMs: null }
+  const parsed = warming === true || !warming.duration ? OPENCODE_WARMING_MS : parseDuration(warming.duration, 'warming.duration')
+  const window = parsed instanceof Error ? OPENCODE_WARMING_MS : parsed
+  return { nudgeMs: window / 2, compactMs: window }
 }
 
 function cut(text: string, max: number): string {
@@ -62,7 +79,7 @@ async function noteRunEnded(bot: Bot, run: RunEnded): Promise<void> {
   const title = info.title || 'Untitled'
   const routine = marker?.task ? ` routine="#${marker.task.id}"` : ''
   const text = [
-    `<session-finished sessionID="${run.sessionId}" threadID="${run.threadId}" state="${state}" title="${attribute(title)}"${routine} wake="${wake}">`,
+    `<session-finished sessionID="${run.sessionId}" threadID="${run.threadId}" state="${state}" title="${escapeAttribute(title)}"${routine} wake="${wake}">`,
     cut(answer, wake ? WAKE_ANSWER_CHARS : NOTE_ANSWER_CHARS),
     `More: kimaki session read ${run.sessionId}`,
     '</session-finished>',

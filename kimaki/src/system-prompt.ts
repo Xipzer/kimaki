@@ -728,7 +728,7 @@ function mainmastSection({ sessionId, channelId, dataDir }: { sessionId: string;
 
     ### while the user is away
 
-    You may get a reminder that the user has not replied for a while. Start work only if it clearly moves the user's goals forward: check on open threads, verify results, prepare the next step. Otherwise reply with nothing at all, not even an acknowledgement.
+    You may get a reminder that the user has not replied for a while. Start work only if it clearly moves the user's goals forward: check on open threads, verify results, prepare the next step. Otherwise reply with exactly \`IDLE\` and nothing else: Kimaki hides it.
   `
 }
 
@@ -745,7 +745,7 @@ function scheduledTaskSection(task: ScheduledRun): string {
   `
 }
 
-function escapeAttribute(value: string): string {
+export function escapeAttribute(value: string): string {
   return value.replaceAll('&', '&amp;').replaceAll('"', '&quot;').replaceAll('<', '&lt;')
 }
 

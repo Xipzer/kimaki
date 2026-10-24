@@ -495,7 +495,7 @@ export const lockRoutes = {
       if (target instanceof Error) return target
       const thread = await fetchConversation(bot, target.threadId)
       if (thread instanceof Error) return thread
-      return sessionCwd(bot, { thread, directory: input.directory })
+      return sessionCwd(bot, { conversation: thread, directory: input.directory })
     },
   }),
   'session.title': route({
@@ -544,7 +544,7 @@ export const lockRoutes = {
       const thread = await fetchConversation(bot, target.threadId)
       if (thread instanceof Error) return thread
       // A child session ID forks that child, not the root.
-      return fork(bot, { sourceThread: thread, sessionId: input.sessionId ?? target.sessionId, before: input.before, name: input.name, author: cliAuthor(bot) })
+      return fork(bot, { source: thread, sessionId: input.sessionId ?? target.sessionId, before: input.before, name: input.name, author: cliAuthor(bot) })
     },
   }),
   'session.command': route({

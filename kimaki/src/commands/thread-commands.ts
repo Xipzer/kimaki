@@ -31,7 +31,7 @@ import {
 import { shellQuote } from '../onboarding.ts'
 import { abort, clearQueue, dispatch, redo, undo } from '../prompt.ts'
 import type { Route } from '../routes.ts'
-import { forkBtw } from '../sessions.ts'
+import { endMainmast, forkBtw } from '../sessions.ts'
 
 const execFileAsync = promisify(execFile)
 
@@ -91,34 +91,44 @@ export function parseCritiqueOutput(output: string): { ok: true; url: string; id
 
 // --- Run control
 
-async function abortCommand(bot: Bot, interaction: ChatInputCommandInteraction, { thread }: SessionTarget) {
+async function abortCommand(bot: Bot, interaction: ChatInputCommandInteraction, { conversation }: SessionTarget) {
   await interaction.deferReply()
-  const result = await abort(bot, { threadId: thread.id })
+  const result = await abort(bot, { threadId: conversation.id })
   if (result instanceof Error) return replyError(interaction, result)
   const note = result.cleared > 0 ? `, cleared ${result.cleared} queued message${result.cleared > 1 ? 's' : ''}` : ''
   await interaction.editReply({ content: `Request **aborted**${note}` })
 }
 
+async function newMainmastCommand(bot: Bot, interaction: ChatInputCommandInteraction, { conversation }: SessionTarget) {
+  if (conversation.isThread()) return replyError(interaction, new ConfigError({ reason: 'Use /new-mainmast in a project channel' }))
+  await interaction.deferReply()
+  const stopped = await abort(bot, { threadId: conversation.id })
+  if (stopped instanceof Error) return replyError(interaction, stopped)
+  const ended = await endMainmast(bot, conversation.id)
+  if (ended instanceof Error) return replyError(interaction, ended)
+  await interaction.editReply({ content: 'The next message starts a new mainmast session' })
+}
+
 // /queue and /queue-command: the echo reply is the queued message the ack points at.
-async function queueInput(bot: Bot, { interaction, thread, route, echo }: { interaction: ChatInputCommandInteraction; thread: SessionTarget['thread']; route: Route; echo: string }) {
+async function queueInput(bot: Bot, { interaction, conversation, route, echo }: { interaction: ChatInputCommandInteraction; conversation: SessionTarget['conversation']; route: Route; echo: string }) {
   const author = authorOf(interaction)
   const reply = await replyWithEcho(interaction, { author, text: echo })
   if (reply instanceof Error) return replyError(interaction, reply)
-  const result = await dispatch(bot, { thread, route, author, messageId: reply.id })
+  const result = await dispatch(bot, { conversation, route, author, messageId: reply.id })
   if (result instanceof Error) return replyError(interaction, result)
 }
 
-async function queueCommand(bot: Bot, interaction: ChatInputCommandInteraction, { thread }: SessionTarget) {
+async function queueCommand(bot: Bot, interaction: ChatInputCommandInteraction, { conversation }: SessionTarget) {
   const text = interaction.options.getString('message', true).trim()
-  return queueInput(bot, { interaction, thread, route: { kind: 'queue', text }, echo: text })
+  return queueInput(bot, { interaction, conversation, route: { kind: 'queue', text }, echo: text })
 }
 
-async function queueOpencodeCommand(bot: Bot, interaction: ChatInputCommandInteraction, { thread }: SessionTarget) {
+async function queueOpencodeCommand(bot: Bot, interaction: ChatInputCommandInteraction, { conversation }: SessionTarget) {
   const name = interaction.options.getString('command')?.trim().replace(/^\//, '') ?? ''
   const args = (interaction.options.getString('arguments') ?? '').trim()
   if (!name) return replyError(interaction, new ConfigError({ reason: 'Pass a command name, for example /queue-command command:review' }))
   const echo = `/${name} ${args}`.trim()
-  return queueInput(bot, { interaction, thread, route: { kind: 'command', name, arguments: args, queue: true }, echo })
+  return queueInput(bot, { interaction, conversation, route: { kind: 'command', name, arguments: args, queue: true }, echo })
 }
 
 async function queueCommandChoices(bot: Bot, interaction: AutocompleteInteraction) {
@@ -135,19 +145,19 @@ async function queueCommandChoices(bot: Bot, interaction: AutocompleteInteractio
   )
 }
 
-async function clearQueueCommand(bot: Bot, interaction: ChatInputCommandInteraction, { thread }: SessionTarget) {
+async function clearQueueCommand(bot: Bot, interaction: ChatInputCommandInteraction, { conversation }: SessionTarget) {
   await interaction.deferReply()
-  const result = await clearQueue(bot, { threadId: thread.id, position: interaction.options.getInteger('position') })
+  const result = await clearQueue(bot, { threadId: conversation.id, position: interaction.options.getInteger('position') })
   if (result instanceof Error) return replyError(interaction, result)
   const content =
     result.cleared === 0 ? 'No queued messages' : `-# Cleared ${result.cleared} queued message${result.cleared > 1 ? 's' : ''}`
   await interaction.editReply({ content })
 }
 
-async function btwCommand(bot: Bot, interaction: ChatInputCommandInteraction, { thread }: SessionTarget) {
+async function btwCommand(bot: Bot, interaction: ChatInputCommandInteraction, { conversation }: SessionTarget) {
   const text = interaction.options.getString('prompt', true).trim()
   await interaction.deferReply()
-  const result = await forkBtw(bot, { sourceThread: thread, text, author: authorOf(interaction), messageId: interaction.id })
+  const result = await forkBtw(bot, { source: conversation, text, author: authorOf(interaction), messageId: interaction.id })
   if (result instanceof Error) return replyError(interaction, result)
   await interaction.editReply({ content: `Session forked! Continue in <#${result.threadId}>` })
 }
@@ -161,9 +171,9 @@ async function compactCommand(bot: Bot, interaction: ChatInputCommandInteraction
   await interaction.editReply({ content: 'Compacting the session context' })
 }
 
-async function undoCommand(bot: Bot, interaction: ChatInputCommandInteraction, { thread }: SessionTarget) {
+async function undoCommand(bot: Bot, interaction: ChatInputCommandInteraction, { conversation }: SessionTarget) {
   await interaction.deferReply()
-  const result = await undo(bot, { threadId: thread.id })
+  const result = await undo(bot, { threadId: conversation.id })
   if (result instanceof Error) return replyError(interaction, result)
   if (!result.reverted) {
     await interaction.editReply({ content: 'No messages to undo' })
@@ -172,9 +182,9 @@ async function undoCommand(bot: Bot, interaction: ChatInputCommandInteraction, {
   await interaction.editReply({ content: 'Undone - removed the last turn from the session. File changes were kept' })
 }
 
-async function redoCommand(bot: Bot, interaction: ChatInputCommandInteraction, { thread }: SessionTarget) {
+async function redoCommand(bot: Bot, interaction: ChatInputCommandInteraction, { conversation }: SessionTarget) {
   await interaction.deferReply()
-  const result = await redo(bot, { threadId: thread.id })
+  const result = await redo(bot, { threadId: conversation.id })
   if (result instanceof Error) return replyError(interaction, result)
   const content = {
     nothing: 'Nothing to redo - no previous undo found',
@@ -217,12 +227,12 @@ async function contextUsageCommand(bot: Bot, interaction: ChatInputCommandIntera
 async function sessionIdCommand(bot: Bot, interaction: ChatInputCommandInteraction) {
   const target = await resolveTarget(bot, interaction.channelId)
   if (target instanceof Error) return replyError(interaction, target)
-  if (!target.thread || !target.sessionId) {
+  if (!target.conversation || !target.sessionId) {
     await interaction.reply({ content: 'Run /session-id inside a Kimaki session thread.', flags: MessageFlags.Ephemeral })
     return
   }
   await interaction.reply({
-    content: sessionIdReply({ sessionId: target.sessionId, threadId: target.thread.id, directory: target.directory }),
+    content: sessionIdReply({ sessionId: target.sessionId, threadId: target.conversation.id, directory: target.directory }),
     flags: MessageFlags.Ephemeral,
   })
 }
@@ -268,6 +278,10 @@ export const threadRoutes: InteractionRoutes = {
     abort: {
       definition: new SlashCommandBuilder().setName('abort').setDescription('Stop the current run and clear the queue'),
       run: inThread(abortCommand),
+    },
+    'new-mainmast': {
+      definition: new SlashCommandBuilder().setName('new-mainmast').setDescription('Start a fresh mainmast session in this channel'),
+      run: inThread(newMainmastCommand),
     },
     queue: {
       definition: new SlashCommandBuilder()

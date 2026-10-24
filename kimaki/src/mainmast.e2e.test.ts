@@ -6,6 +6,7 @@ import fs from 'node:fs'
 import { afterAll, beforeAll, expect, test } from 'vitest'
 
 import type { BotHandle } from './main.ts'
+import { mainmastTimers } from './mainmast.ts'
 import { send } from './prompt.ts'
 import {
   TEST_USER_ID,
@@ -183,4 +184,33 @@ test('a btw fork of the mainmast is a worker: no coordinator timers, subagents a
   const client = await server.client()
   const fork = await client.session.get({ sessionID: bot.store.getState().roots[thread.id]! })
   expect({ mainmast: Reflect.get(Object(fork.metadata?.['kimaki']), 'mainmast'), subagentDenied: fork.permissions?.some((rule) => rule.action === 'subagent') ?? false }).toEqual({ mainmast: undefined, subagentDenied: false })
+})
+
+test('the mainmast survives a bot restart; /new-mainmast starts a fresh one', async () => {
+  const { discord, channelId } = twin
+  const root = bot.store.getState().roots[channelId]
+  await bot.stop()
+  bot = await startTestBot({ dataDir, twin, server, mainmast: true, mainmastTimers: { nudgeMs: 3_600_000, compactMs: null } })
+  expect(bot.store.getState().roots[channelId]).toBe(root)
+  // No `warming` in the test config: a nudge after 30 minutes, nothing to compact cheaply.
+  expect(await mainmastTimers({ ...bot, mainmastTimers: null }, server.projectDirectory)).toEqual({ nudgeMs: 1_800_000, compactMs: null })
+
+  const { id: interactionId } = await discord.channel(channelId).user(TEST_USER_ID).runSlashCommand({ name: 'new-mainmast' })
+  await discord.channel(channelId).waitForInteractionAck({ interactionId, timeout: 4_000 })
+  expect(bot.store.getState().roots[channelId]).toBeUndefined()
+  const footers = (await discord.channel(channelId).getMessages()).filter((message) => message.content.startsWith('-# *project')).length
+  await discord.channel(channelId).user(TEST_USER_ID).sendMessage({ content: 'Fresh start hello-marker' })
+  await waitForFooter({ discord, threadId: channelId, count: footers + 1 })
+
+  const fresh = bot.store.getState().roots[channelId]
+  expect(fresh && fresh !== root).toBe(true)
+  const text = await discord.channel(channelId).text()
+  expect(text.slice(text.lastIndexOf('--- from: user'))).toMatchInlineSnapshot(`
+    "--- from: user (tommy)
+    Fresh start hello-marker
+    --- from: assistant (TestBot)
+    -# *using deterministic-provider/deterministic-v2 ⋅ build*
+    Hello from the mainmast.
+    -# *project ⋅ main ⋅ Ns ⋅ N% ⋅ deterministic-v2*"
+  `)
 })

@@ -30,6 +30,8 @@ export type Author = { id: string; username: string }
 
 export type PromptFile = { uri: string; name: string }
 
+// When the plugin acts on an idle mainmast (plugin/mainmast.ts): ask for work nudgeMs
+// after its last request, compact compactMs after it (end of warming; null: never).
 export type MainmastTimers = { nudgeMs: number; compactMs: number | null }
 
 export type ModelChoice = { providerID: string; id: string; variant: string | null }
@@ -77,9 +79,8 @@ export type Bot = {
   // Project channel messages go to one long coordinator session in the channel
   // (mainmast); off with `kimaki --no-mainmast`.
   mainmast: boolean
-  // When the mainmast plugin acts on an idle mainmast session, from its last
-  // user prompt: ask for work at nudgeMs, compact at compactMs (end of warming; null: never).
-  mainmastTimers: MainmastTimers
+  // Fixed mainmast timers (tests); null reads them from OpenCode's warming config.
+  mainmastTimers: MainmastTimers | null
   features: BotFeatures
 }
 

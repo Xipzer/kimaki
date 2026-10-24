@@ -43,7 +43,7 @@ import { formatEcho } from './queue.ts'
 import { noAnswerError, parseRemoteResult, remoteEnvelope, promptFilePath, REMOTE_TIMEOUT_MS, type RemoteResult } from './remote-send.ts'
 import { parseTextMessage, type Route } from './routes.ts'
 import { allMessages } from './session-events.ts'
-import { ensureSessionMarker, forkBtw, startSession, switchAgent, threadProject } from './sessions.ts'
+import { ensureSessionMarker, forkBtw, startSession, switchAgent, conversationProject } from './sessions.ts'
 import { cancelSleep } from './sleeps.ts'
 import type { ScheduledRun } from './system-prompt.ts'
 import { attachmentsBlock, type PromptAttachment, type TurnContext } from './system-prompt.ts'
@@ -373,7 +373,7 @@ export async function runInSession(
 export async function dispatch(
   bot: Bot,
   {
-    thread,
+    conversation,
     route,
     author,
     messageId,
@@ -381,7 +381,7 @@ export async function dispatch(
     echo,
     model,
   }: {
-    thread: Conversation
+    conversation: Conversation
     route: Route
     author: Author
     messageId: string
@@ -390,15 +390,15 @@ export async function dispatch(
     model?: ModelChoice | null
   },
 ) {
-  const sessionId = rootSession(bot, thread.id)
+  const sessionId = rootSession(bot, conversation.id)
   if (sessionId instanceof Error) return sessionId
   // New input supersedes a pending `kimaki sleep` of this session.
   await cancelSleep(bot, sessionId)
-  const project = await threadProject(bot, thread)
+  const project = await conversationProject(bot, conversation)
   if (project instanceof Error) return project
   const marked = await ensureSessionMarker(bot, {
     sessionId,
-    thread,
+    conversation,
     channelId: project.channelId,
     directory: project.directory,
     userId: author.id,
@@ -406,9 +406,9 @@ export async function dispatch(
   if (marked instanceof Error) return marked
   switch (route.kind) {
     case 'btw':
-      return forkBtw(bot, { sourceThread: thread, text: route.text, author, messageId, files, agent: route.agent })
+      return forkBtw(bot, { source: conversation, text: route.text, author, messageId, files, agent: route.agent })
     case 'new-session':
-      // A fresh thread in the same channel, with no history.
+      // A fresh conversation in the same channel, with no history.
       return startSession(bot, {
         channelId: project.channelId,
         directory: project.directory,
@@ -421,8 +421,8 @@ export async function dispatch(
     default:
       return runInSession(bot, {
         sessionId,
-        threadId: thread.id,
-        threadName: thread.name,
+        threadId: conversation.id,
+        threadName: conversation.name,
         directory: project.directory,
         route,
         author,
@@ -571,7 +571,7 @@ export async function send(bot: Bot, input: SendInput, { localOnly = false, task
       if (switched instanceof Error) return switched
     }
     const echo = task ? formatEcho({ username: author.username, text: routeText(route) }) : undefined
-    const result = await dispatch(bot, { thread, route, author, messageId, files: input.files, echo })
+    const result = await dispatch(bot, { conversation: thread, route, author, messageId, files: input.files, echo })
     if (result instanceof Error) return result
     return result ?? { threadId, sessionId: bot.store.getState().roots[threadId]! }
   }

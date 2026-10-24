@@ -41,8 +41,13 @@ beforeAll(async () => {
           when: { latestUserTextIncludes: 'idle-marker' },
           then: { parts: [{ type: 'text-start', id: 't' }, { type: 'text-delta', id: 't', delta: 'Hi there.' }, { type: 'text-end', id: 't' }, { type: 'finish', finishReason: 'stop', usage: bigUsage }] },
         },
-        // Nothing to do while the user is away: no text at all.
-        { id: 'nudge', priority: 500, when: { latestUserTextIncludes: 'has not replied' }, then: { parts: [{ type: 'finish', finishReason: 'stop', usage: bigUsage }] } },
+        // Nothing to do while the user is away: the IDLE reply that Discord hides.
+        {
+          id: 'nudge',
+          priority: 500,
+          when: { latestUserTextIncludes: 'has not replied' },
+          then: { parts: [{ type: 'text-start', id: 'n' }, { type: 'text-delta', id: 'n', delta: 'IDLE' }, { type: 'text-end', id: 'n' }, { type: 'finish', finishReason: 'stop', usage: bigUsage }] },
+        },
       ],
     }),
     startTwin(),

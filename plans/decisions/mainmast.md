@@ -9,10 +9,12 @@
 - Every project channel holds one long session (`roots[channelId]`, `thread_sessions` row keyed by the channel ID). `kimaki --no-mainmast` restores one thread per message.
 - Workers are `kimaki send` threads, not `subagent` children: they reuse all thread code, work in other projects and worktrees, and users can talk to them. The mainmast session denies `subagent:*`.
 - A finished thread run sends the mainmast a synthetic `<session-finished>` item like OpenCode's subagent completion. `resume: true` only when the mainmast started it (`--parent-session`); threads of the channel and routines get `resume: false`.
-- Warming is OpenCode's global `warming` config: Kimaki writes `{ "duration": "1 hour" }` once when no config sets the key. A user value wins.
+- Warming is OpenCode's own `warming` config. Kimaki never writes it (writing changed every TUI session and reloaded OpenCode); it reads it at mainmast creation for the timers.
+- (agent) A nudge with nothing to do answers `IDLE`, which the reducer hides: "reply with nothing" was not reliable.
+- (agent) `/new-mainmast` unbinds the channel; the old session stays resumable.
 - (agent) The plugin nudges the mainmast at half the warming window after the last user prompt, and compacts it when the window ends if the last request used at least 20% of the context.
 - (agent) `kimaki session read` defaults to prompts and final answers; `--full` shows tool calls.
 - Why: the coordinator keeps the whole picture in a small context; every piece of work is a visible thread.
 - Lost: hidden subagent parallelism in the mainmast; threads per channel message by default.
 - Open: per-session warming (opencode#58163); notes from sessions on other machines (TODO in `mainmast.ts`); compacting worker sessions.
-- Lives in: `kimaki/src/mainmast.ts`, `kimaki/src/plugin/mainmast.ts`, `kimaki/src/sessions.ts` (`startMainmast`), `kimaki/src/ingress.ts`, `kimaki/src/opencode-server.ts` (`ensureWarming`), `kimaki/src/system-prompt.ts` (`mainmastSection`).
+- Lives in: `kimaki/src/mainmast.ts`, `kimaki/src/plugin/mainmast.ts`, `kimaki/src/sessions.ts` (`startMainmast`), `kimaki/src/ingress.ts`, `kimaki/src/mainmast.ts` (`mainmastTimers`), `kimaki/src/system-prompt.ts` (`mainmastSection`).

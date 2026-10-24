@@ -54,7 +54,7 @@ export type InteractionRoutes = {
 export type InteractionTarget = {
   channelId: string
   directory: string
-  thread: Conversation | null
+  conversation: Conversation | null
   sessionId: string | null
   projectDirectory: string
 }
@@ -80,10 +80,10 @@ export async function resolveTarget(bot: Bot, channelId: string | null): Promise
   const sessionId = conversation ? (bot.store.getState().roots[conversation.id] ?? null) : null
   const directory = sessionId ? await sessionDirectory(bot, sessionId) : row.directory
   if (directory instanceof Error) return directory
-  return { channelId: projectChannelId, directory, projectDirectory: row.directory, thread: conversation, sessionId }
+  return { channelId: projectChannelId, directory, projectDirectory: row.directory, conversation, sessionId }
 }
 
-export type SessionTarget = InteractionTarget & { thread: Conversation; sessionId: string }
+export type SessionTarget = InteractionTarget & { conversation: Conversation; sessionId: string }
 
 // The session thread of a command, or null after a reply saying where it works.
 export async function sessionTarget(bot: Bot, interaction: ChatInputCommandInteraction): Promise<SessionTarget | null> {
@@ -92,11 +92,11 @@ export async function sessionTarget(bot: Bot, interaction: ChatInputCommandInter
     await replyError(interaction, target)
     return null
   }
-  if (!target.thread || !target.sessionId) {
+  if (!target.conversation || !target.sessionId) {
     await interaction.reply({ content: 'Use this command in a thread with a Kimaki session', flags: MessageFlags.Ephemeral })
     return null
   }
-  return { ...target, thread: target.thread, sessionId: target.sessionId }
+  return { ...target, conversation: target.conversation, sessionId: target.sessionId }
 }
 
 // --- Replies

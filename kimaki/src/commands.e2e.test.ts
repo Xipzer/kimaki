@@ -90,6 +90,7 @@ test('the bot registers exactly the static and catalog commands in the guild', a
       "/merge-worktree: Merge this worktree into a local branch",
       "/model: Set the model for this session, channel or all channels",
       "/model-variant: Change the thinking level of the current model",
+      "/new-mainmast: Start a fresh mainmast session in this channel",
       "/new-session: Start a new OpenCode session",
       "/new-worktree: Start an isolated Git worktree session; fork context when used in a thread",
       "/opencode-skill: Use this skill for any question about OpenCode itself, including how OpenCode works, using or config",

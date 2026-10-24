@@ -268,7 +268,7 @@ async function handleMessage(bot: Bot, message: Message) {
   // Mainmast: the channel is the conversation of one long session.
   if (!thread && bot.mainmast && channel.type === ChannelType.GuildText) {
     const result = bot.store.getState().roots[channel.id]
-      ? await dispatch(bot, { thread: channel, route, author, messageId: message.id, files })
+      ? await dispatch(bot, { conversation: channel, route, author, messageId: message.id, files })
       : route.kind === 'new-session'
         ? await startSession(bot, { channelId, directory: project.directory, route: { kind: 'steer', text: route.text, ...(route.agent && { agent: route.agent }) }, author, messageId: message.id, startMessageId: null, files })
         : await startMainmast(bot, {
@@ -303,7 +303,7 @@ async function handleMessage(bot: Bot, message: Message) {
     return
   }
 
-  const result = await dispatch(bot, { thread, route, author, messageId: message.id, files })
+  const result = await dispatch(bot, { conversation: thread, route, author, messageId: message.id, files })
   if (result instanceof Error) return reportError(result)
   if (!result) return
   const note =
