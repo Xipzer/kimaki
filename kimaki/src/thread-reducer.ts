@@ -38,6 +38,7 @@ import {
   buttonRow,
   formatBanner,
   formatCacheMiss,
+  formatCompacted,
   formatError,
   formatRetry,
   formatShellEnded,
@@ -112,6 +113,8 @@ export type ThreadView = {
   lastRetryAt: number | null
   // Prompt tokens the provider holds in cache after the last root step, and when that step ended.
   cached: { tokens: number; at: number } | null
+  // The root context was compacted: the next root step (or the execution end) posts the new size.
+  compacted: boolean
   // Root inbox: user items not delivered yet, in order (queuedItems() for the queue).
   inbox: readonly PendingInput[]
   // Kimaki runs an OpenCode command (kimaki.command): the next root user item
@@ -216,6 +219,7 @@ export function emptyView({
     lastKind: null,
     lastRetryAt: null,
     cached: null,
+    compacted: false,
     inbox: [],
     commandPending: null,
     forms: {},
@@ -272,11 +276,16 @@ function toolLine({ draft, emit }: Context, text: string) {
   draft.lastKind = 'tool'
 }
 
-function contextPercent({ turn, prefs }: { turn: Draft<Turn>; prefs: Prefs }): number | null {
-  if (!turn.model || turn.tokens <= 0) return null
-  const limit = prefs.contextLimits[`${turn.model.providerID}/${turn.model.id}`]
+function showCompacted(context: Context, size: { tokens: number | null; percent: number | null }) {
+  context.draft.compacted = false
+  toolLine(context, formatCompacted(size))
+}
+
+function contextPercent({ tokens, model, prefs }: { tokens: number; model: ModelRef | null; prefs: Prefs }): number | null {
+  if (!model || tokens <= 0) return null
+  const limit = prefs.contextLimits[`${model.providerID}/${model.id}`]
   if (!limit || limit <= 0) return null
-  return Math.round((turn.tokens / limit) * 100)
+  return Math.round((tokens / limit) * 100)
 }
 
 // The footer closing the answer of `turn` at `at`.
@@ -289,7 +298,7 @@ function emitFooter({ draft, prefs, emit, turn, at, notify }: Context & { turn: 
     type: 'footer',
     directory: draft.directory,
     durationMs: at - turn.startedAt,
-    contextPercent: contextPercent({ turn, prefs }),
+    contextPercent: contextPercent({ tokens: turn.tokens, model: turn.model, prefs }),
     model: { providerID: turn.model.providerID, id: turn.model.id },
     agent: turn.agent,
     notify,
@@ -361,6 +370,10 @@ function applyRoot(context: Context & { event: V2Event }) {
       if (!draft.turn) return
       const { tokens } = event.data
       draft.turn.tokens = tokens.input + tokens.output + tokens.reasoning + tokens.cache.read + tokens.cache.write
+      if (draft.compacted) {
+        const prompt = tokens.input + tokens.cache.read + tokens.cache.write
+        showCompacted(context, { tokens: prompt, percent: contextPercent({ tokens: prompt, model: draft.turn.model, prefs }) })
+      }
       // The prompt only grows, so the cached prefix should too. A drop means the provider
       // re-read it: changed prefix, other model, or cache expired (TTL). The slack absorbs cache block rounding.
       const previous = draft.cached
@@ -401,10 +414,14 @@ function applyRoot(context: Context & { event: V2Event }) {
     case 'session.compaction.ended':
       // A compacted history has a new prefix: its first miss is expected.
       draft.cached = null
-      return toolLine(context, asSubtext('⬦ context compacted'))
+      // Its size is only known when the next step reads it.
+      draft.compacted = true
+      return
     case 'session.compaction.failed':
       return toolLine(context, formatError(`compaction failed: ${event.data.error.message}`))
     case 'session.execution.succeeded': {
+      // `/compact` alone: no step reads the new context in this execution.
+      if (draft.compacted) showCompacted(context, { tokens: null, percent: null })
       const turn = draft.turn
       draft.turn = null
       draft.lastKind = null
@@ -413,12 +430,14 @@ function applyRoot(context: Context & { event: V2Event }) {
       return
     }
     case 'session.execution.failed':
+      if (draft.compacted) showCompacted(context, { tokens: null, percent: null })
       draft.turn = null
       draft.lastKind = null
       emit({ type: 'send', text: formatError(event.data.error.message), notify: true })
       emit({ type: 'viewed', sessionId: draft.sessionId, idle: event.created })
       return
     case 'session.execution.interrupted':
+      if (draft.compacted) showCompacted(context, { tokens: null, percent: null })
       draft.turn = null
       draft.lastKind = null
       // A shutdown does not make the session idle in OpenCode.

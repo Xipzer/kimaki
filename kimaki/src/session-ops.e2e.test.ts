@@ -104,7 +104,7 @@ test('/compact summarizes the history without a footer', async () => {
     ok
     -# *project ⋅ main ⋅ Ns ⋅ deterministic-v2*
     Compacting the session context
-    -# ⬦ context compacted"
+    -# context compacted"
   `)
   const sessionId = bot.store.getState().roots[thread.id]!
   const messages = await (await server.client()).message.list({ sessionID: sessionId, order: 'asc' })

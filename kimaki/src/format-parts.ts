@@ -165,8 +165,17 @@ export function formatRetry({ attempt, delayMs, message }: { attempt: number; de
   return asSubtext(`⬦ retrying in ${seconds}s (attempt ${attempt}): ${inline(message, 200)}`)
 }
 
+function k(tokens: number): string {
+  return tokens < 1_000 ? String(tokens) : `${Math.round(tokens / 1_000)}k`
+}
+
+// `tokens`: prompt size of the first step after the compaction, null when no step ran yet (`/compact`).
+export function formatCompacted({ tokens, percent }: { tokens: number | null; percent: number | null }): string {
+  if (tokens === null) return asSubtext('context compacted')
+  return asSubtext(`context compacted to ${k(tokens)} tokens${percent === null ? '' : ` (${percent}%)`}`)
+}
+
 export function formatCacheMiss({ read, expected, idleMs }: { read: number; expected: number; idleMs: number }): string {
-  const k = (tokens: number) => (tokens < 1_000 ? String(tokens) : `${Math.round(tokens / 1_000)}k`)
   return asSubtext(`⬦ prompt cache miss: ${k(read)} of ${k(expected)} tokens cached, ${formatDuration(idleMs)} after the last request`)
 }
 

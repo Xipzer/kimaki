@@ -305,7 +305,7 @@ use this to write tests that find messages matching specific patterns. formattin
 - assistant text is plain Discord markdown, full width, **never quoted**. reasoning is never shown.
 - tool lines are subtext: `-# ┣ shell _ls_`, file edits and writes use `◼︎`: `-# ◼︎ edit *file.ts* (+3-1)` (`formatToolLine`). subagent lines carry the agent: `-# ┣ general ⋅ glob _*.md_`. when the kind changes between text and tool, the next block starts with a blank line.
 - verbosity per channel is `tools` (default) or `text` (`isToolVisible`). `tools` hides read-only tools and shells with `hasSideEffect: false`. file edits always show.
-- status lines use the `⬦` glyph: `⬦ retrying in 5s (attempt 2): ...`, `⬦ general finished: ...`, `⬦ context compacted`, `⬦ prompt cache miss: ...`. errors start with `✗ `.
+- status lines use the `⬦` glyph: `⬦ retrying in 5s (attempt 2): ...`, `⬦ general finished: ...`, `⬦ prompt cache miss: ...`. errors start with `✗ `.
 - on a successful turn a footer shows folder, branch, duration, context percent, model and agent (agent omitted when `build`): `-# *kimakivoice ⋅ main ⋅ 2m 30s ⋅ 71% ⋅ claude-opus-4-6*`. never after an interrupt or failure, and not while a subagent still runs.
 - `!cmd` in a thread runs a user shell: a start line, then one output message from `session.shell.*` events.
 - queued messages (`/queue`, or a message sent while busy with queue delivery) get `-# Queued at position N...`. when delivered, the bot posts `» **Tommy:** content` and edits the ack to `Queued message sent`. remove one by deleting the Discord message or with `/clear-queue`.

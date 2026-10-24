@@ -288,6 +288,33 @@ test('cache miss notice when the cached prefix shrinks, e.g. after the cache TTL
   expect(effectLines(replay({ events }).effects).filter((line) => line.includes('cache'))).toEqual([])
 })
 
+test('compaction posts the new context size from the next root step', () => {
+  const events = loadFixture('tools.events.jsonl')
+  const sessionID = rootSessionId(events)
+  const lastIndex = events.findLastIndex((event) => event.type === 'session.step.ended' && event.data.sessionID === sessionID)
+  const compacted: V2Event = {
+    id: 'evt_compacted',
+    created: 0,
+    type: 'session.compaction.ended',
+    durable: { aggregateID: sessionID, seq: 0, version: 1 },
+    data: { sessionID, reason: 'auto', text: '## Objective', recent: '' },
+  }
+  const withCompaction = [...events.slice(0, lastIndex), compacted, ...events.slice(lastIndex)]
+  expect(effectLines(replay({ events: withCompaction }).effects).filter((line) => line.includes('compacted'))).toMatchInlineSnapshot(`
+    [
+      "\\n-# context compacted to 26k tokens (6%)",
+    ]
+  `)
+  // `/compact` alone: the execution ends with no step after it.
+  const end = events.findLastIndex((event) => event.type === 'session.execution.succeeded')
+  const manual = [...events.slice(0, end), compacted, ...events.slice(end)]
+  expect(effectLines(replay({ events: manual }).effects).filter((line) => line.includes('compacted'))).toMatchInlineSnapshot(`
+    [
+      "\\n-# context compacted",
+    ]
+  `)
+})
+
 test('prompts from other clients echo, except the expanded prompt of a command Kimaki ran', () => {
   const events = loadFixture('queue-plain.events.jsonl')
   const echoes = (before: ThreadEvent[]) => effectLines(replay({ events: [...before, ...events] }).effects).filter((line) => line.startsWith('»'))
