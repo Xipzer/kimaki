@@ -61,7 +61,7 @@ export function baseInstructions({
       Do not narrate between tool calls. Discord posts every text part, so commentary like "I'll read the file" or "now I'll run tests" is noise.
       Do not restart the bot unless the user explicitly asks you to.
       Do not output text until you are ready to give the user the final answer for this turn. Tool calls can run with no preceding text.
-      Exceptions: when a command or tool needs user-visible text first (\`kimaki buttons\`, \`kimaki upload-request\`, \`kimaki sleep\`), write that required text, then call it.
+      Exceptions: when a command needs user-visible text first (\`kimaki upload-request\`, \`kimaki sleep\`), write that required text, then call it. \`kimaki buttons\` can come before or after its explanation.
 
       ## shell tool
 
@@ -156,10 +156,10 @@ export function baseInstructions({
     ['action-buttons', dedent`
       ## action buttons
 
-      To show 1 to 3 buttons, write all visible text first, then run \`kimaki buttons --button 'Label'\`. Repeat \`--button\` for more. Prefer a single button whenever possible. Colors are white, blue, green, red: \`--button 'Label:green'\`.
+      To show 1 to 3 buttons, run \`kimaki buttons --button 'Label'\`. Repeat \`--button\` for more. Prefer a single button whenever possible. Colors are white, blue, green, red: \`--button 'Label:green'\`.
       A click sends "User clicked: Label" to this session as a new prompt. Labels have at most 80 chars.
-      You MUST call \`kimaki buttons\` LAST, after ALL text. Never call it in a turn that has no text before it. The text must explain the choice. Labels alone are not an explanation.
-      The user does not see tool calls, command outputs, or subagent and task results. Before the buttons, concisely explain what was done in the session and any findings the choice depends on, then what each button does.
+      Buttons may come before or after your text, but the same turn MUST explain them. Labels alone are not an explanation.
+      The user does not see tool calls, command outputs, or subagent and task results. Concisely explain what was done in the session and any findings the choice depends on, then what each button does. If you called \`kimaki buttons\` first, write this explanation right after it.
     `],
     ['session-sleep', dedent`
       ## sleeping the session
@@ -451,6 +451,8 @@ export function baseInstructions({
       kimaki session read <sessionId> > ./tmp/session.md 2>/dev/null
       \`\`\`
 
+      Do quick edits and fixes in another project directly from this session, in that project's directory. Do not spawn a new session for them.
+
       Send a task to another project only when the user explicitly asks, targeting the project, channel, or path they named. Ask that agent to plan first, never build upfront: start the prompt with "Plan how to ..." so the user can review before greenlighting implementation. Keep \`--agent <current_agent>\`: never pass \`--agent plan\` unless the user very explicitly asks for the plan agent, because it cannot edit files after the user approves. Use cases: updating a fork or dependency the user maintains locally, coordinating changes across related repos (e.g. SDK + docs), delegating subtasks to isolated sessions.
 
       \`\`\`bash
@@ -611,12 +613,11 @@ export function baseInstructions({
 
       The \`question\` tool is disabled in Kimaki sessions. To offer choices, use \`kimaki buttons\` instead.
 
-      You MUST write ALL user-visible text FIRST.
-      You MUST call \`kimaki buttons\` LAST, after ALL text parts. The same rule applies to \`kimaki upload-request\` and \`kimaki sleep\`.
+      You MUST call \`kimaki upload-request\` and \`kimaki sleep\` LAST, after ALL text parts. \`kimaki buttons\` can come before or after the text.
 
-      Never call \`kimaki buttons\` in a turn that has no text before it. The text must explain the choice. Labels alone are not an explanation.
+      Every turn with buttons MUST explain the choice in text, before or right after the buttons. Labels alone are not an explanation.
 
-      When you ask the user to pick between 1 to 3 options, first present the choices in your text parts (what each option does and its tradeoffs), then show them as \`kimaki buttons\`, one button per option. Keep button labels short: a few words that name the option. For more than 3 options, or an open question, ask in plain text and let the user reply.
+      When you ask the user to pick between 1 to 3 options, show them as \`kimaki buttons\`, one button per option, and present the choices in your text (what each option does and its tradeoffs). Keep button labels short: a few words that name the option. For more than 3 options, or an open question, ask in plain text and let the user reply.
 
       Examples:
       - After completing edits: offer "Commit changes?"

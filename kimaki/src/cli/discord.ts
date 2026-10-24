@@ -17,17 +17,16 @@ function agentShell() {
   return { fromShell: Boolean(process.env['OPENCODE_SESSION_ID']), toolCall: process.env['KIMAKI_TOOL_CALL'] }
 }
 
-// The model reads this after `kimaki buttons`: a reminder to explain the buttons if it did not.
+// The model reads this after `kimaki buttons`: buttons may come first, the explanation can follow.
 const BUTTONS_SHOWN = dedent`
 
   Buttons shown in Discord.
 
-  NB: never show only buttons with short labels.
   The user cannot see tool calls, command outputs, or subagent and task results. They only see your text.
-  Check the text you wrote before this call. It must explain:
+  If your text in this turn does not explain them yet, write it now:
   - what was done in this session, concisely, including any findings from tool or task outputs that the choice depends on
   - what each button does and its tradeoffs
-  If anything is missing, write it now. Be concise: a few short lines, no walls of text. Do not only repeat the button labels. Then stop and wait for the click.
+  Be concise: a few short lines, no walls of text. Do not only repeat the button labels. Then stop and wait for the click.
 
 `
 // buttons, upload-request
