@@ -1,7 +1,8 @@
 // Mainmast notes: when a thread session finishes a run, its mainmast learns
 // about it, so the coordinator always knows what happened in its project.
 //
-//   thread run ends ─▶ session started by a mainmast (--parent-session)? ─▶ note + wake that mainmast
+//   thread run ends ─▶ `kimaki send --wait` prompt, target still busy?   ─▶ no note: the wait prints the answer
+//                  ├─▶ session started by a mainmast (--parent-session)? ─▶ note + wake that mainmast
 //                  └─▶ else, the thread's channel has a mainmast?        ─▶ silent note (read at next prompt)
 //
 // The note is a synthetic inbox item, like OpenCode's own subagent completion
@@ -58,6 +59,27 @@ async function channelOfThread(bot: Bot, threadId: string): Promise<string | nul
   return channel?.isThread() ? channel.parentId : null
 }
 
+// The run's prompt came from `kimaki send --wait` and the target still runs:
+// it is waiting in that shell call, which prints the answer. A target that is
+// idle lost its wait (shell timeout, interrupt), so it gets the note.
+async function waitedFor(bot: Bot, { sessionId, target }: { sessionId: string; target: string }): Promise<boolean> {
+  const [prompts, active] = await Promise.all([
+    oc(bot, 'message.list', (client) => client.message.list({ sessionID: sessionId, order: 'desc', limit: 1, type: 'user' })),
+    oc(bot, 'session.active', (client) => client.session.active()),
+  ])
+  // On a failed check the note goes out: a duplicate is better than a lost result.
+  if (prompts instanceof Error) {
+    logger.warn(`wait check of ${sessionId}`, prompts)
+    return false
+  }
+  if (active instanceof Error) {
+    logger.warn(`wait check of ${sessionId}`, active)
+    return false
+  }
+  const latest = prompts.data[0]
+  return latest?.type === 'user' && latest.metadata?.['waited'] === true && target in active
+}
+
 async function noteRunEnded(bot: Bot, run: RunEnded): Promise<void> {
   const channelId = await channelOfThread(bot, run.threadId)
   // The mainmast's own runs, and threads outside any project channel.
@@ -72,6 +94,7 @@ async function noteRunEnded(bot: Bot, run: RunEnded): Promise<void> {
   const wake = Boolean(parentConversation && (await isMainmastChannel(bot, parentConversation)))
   const target = wake ? marker?.parentSessionId : bot.store.getState().roots[channelId]
   if (!target || target === run.sessionId) return
+  if (await waitedFor(bot, { sessionId: run.sessionId, target })) return
   const messages = await oc(bot, 'message.list', (client) => client.message.list({ sessionID: run.sessionId, order: 'desc', limit: ANSWER_MESSAGES }))
   if (messages instanceof Error) return logger.warn(`answer of ${run.sessionId}`, messages)
   const answer = run.error ?? finalAnswer([...messages.data].reverse()) ?? 'Finished without a text answer.'
@@ -82,7 +105,7 @@ async function noteRunEnded(bot: Bot, run: RunEnded): Promise<void> {
     `<session-finished sessionID="${run.sessionId}" threadID="${run.threadId}" state="${state}" title="${escapeAttribute(title)}"${routine} wake="${wake}">`,
     cut(answer, wake ? WAKE_ANSWER_CHARS : NOTE_ANSWER_CHARS),
     `More: kimaki session read ${run.sessionId}`,
-    ...(wake ? ['The user already sees in Discord that this session finished. Do not repeat it or its answer: reply only with what the user needs to know, else reply with nothing.'] : []),
+    ...(wake ? ['The user already sees in Discord that this session finished. Do not repeat it, its answer or its link: reply only with what the user needs to know, else reply with nothing.'] : []),
     '</session-finished>',
   ].join('\n')
   const sent = await oc(bot, 'session.synthetic', (client) =>

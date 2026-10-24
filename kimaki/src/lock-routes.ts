@@ -82,6 +82,8 @@ const sendFields = {
   // '' asks for an automatic name.
   worktree: z.string({ error: 'worktree must be a name or an empty string for an automatic name' }).optional(),
   notifyOnly: z.boolean({ error: 'notifyOnly must be boolean' }).optional(),
+  // The CLI waits for the run (`--wait`), so its end sends no mainmast note.
+  wait: z.boolean({ error: 'wait must be boolean' }).optional(),
   permissions: z.array(z.string(), { error: 'Permission rules must be strings' }).optional(),
   prompt: text('prompt'),
   files: z.array(z.object({ uri: z.string(), name: z.string() }), { error: 'files must contain uri and name strings' }).optional(),

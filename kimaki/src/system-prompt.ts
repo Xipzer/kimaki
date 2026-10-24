@@ -54,6 +54,8 @@ export function baseInstructions({
   const parentArg = ` --parent-session ${sessionId}`
   // The mainmast lives in the channel itself: thread-only parts are left out.
   const isMainmast = mainmast === 'coordinator'
+  // The mainmast adds the user to a worker thread only when needed (mainmastSection).
+  const workerUserArg = isMainmast ? '' : userArg
   const topic = channelTopic?.trim()
   const agentList = agents.map((agent) => `- \`${agent.name}\`${agent.description ? `: ${agent.description}` : ''}`).join('\n')
   const parts: Array<[PromptSection | null, string]> = [
@@ -228,7 +230,7 @@ export function baseInstructions({
 
       Start a new thread/session in this channel with:
 
-      kimaki send --channel ${channelId} --prompt 'your prompt here' --agent <current_agent>${parentArg}${userArg}
+      kimaki send --channel ${channelId} --prompt 'your prompt here' --agent <current_agent>${parentArg}${workerUserArg}
 
       Use this to spawn parallel helper sessions like teammates: start threads with focused prompts, then come back and collect the results. Rules for every new session:
       - ALWAYS pass \`--parent-session ${sessionId}\` (your current session ID). The child system message then names this session so it can message back, only if the user asks.
@@ -250,11 +252,11 @@ export function baseInstructions({
       kimaki send --channel ${channelId} --prompt 'User cancelled subscription' --notify-only --agent <current_agent>${userArg}
 
       # attach local files (images, text files, PDFs); --file is repeatable
-      kimaki send --channel ${channelId} --prompt 'Review this screenshot' --file /path/to/screenshot.png --agent <current_agent>${parentArg}${userArg}
+      kimaki send --channel ${channelId} --prompt 'Review this screenshot' --file /path/to/screenshot.png --agent <current_agent>${parentArg}${workerUserArg}
       kimaki send --thread <thread_id> --prompt 'Here is the error log' --file ./error.log --file ./stack-trace.txt --agent <current_agent>
 
       # pick a different agent, only when the user names it
-      kimaki send --channel ${channelId} --prompt 'Refactor the auth module' --agent <agent_name>${parentArg}${userArg}
+      kimaki send --channel ${channelId} --prompt 'Refactor the auth module' --agent <agent_name>${parentArg}${workerUserArg}
       \`\`\`
 
       ${agents.length > 0 ? `Available agents:\n${agentList}` : ''}
@@ -267,7 +269,7 @@ export function baseInstructions({
 
       Only create a worktree when the user explicitly asks:
 
-      \`kimaki send --channel ${channelId} --prompt 'Work in this checkout only' --worktree feature-name --agent <current_agent>${parentArg}${userArg}\`
+      \`kimaki send --channel ${channelId} --prompt 'Work in this checkout only' --worktree feature-name --agent <current_agent>${parentArg}${workerUserArg}\`
 
       \`--base-branch <ref>\` chooses the starting commit; default is the mapped project's committed HEAD. Uncommitted files are not copied. \`--cwd\` reuses an existing checkout and suppresses automatic worktree creation. Do not combine it with \`--worktree\`.
 
@@ -310,7 +312,7 @@ export function baseInstructions({
       Start \`--prompt\` with \`/commandname\` to run an OpenCode command or MCP prompt by its exact name (\`/review\`, \`/server:prompt\`). If no command has that name, the prompt is sent as plain text. Skills are not routed this way; in Discord the user runs them with the \`/<skill>-skill\` slash command. This works for new threads (\`--channel\`) and existing threads (\`--thread\`/\`--session\`):
 
       kimaki send --thread <thread_id> --prompt '/review fix the auth module' --agent <current_agent>
-      kimaki send --channel ${channelId} --prompt '/review the last commit' --agent <current_agent>${parentArg}${userArg}
+      kimaki send --channel ${channelId} --prompt '/review the last commit' --agent <current_agent>${parentArg}${workerUserArg}
 
       The user switches the agent mid-session with the Discord slash command \`/<agentname>-agent\`. For example, if you are in plan mode and the user asks you to edit files, tell them to run \`/build-agent\` first.
 
@@ -651,15 +653,17 @@ function mainmastSection({ sessionId, channelId, dataDir }: { sessionId: string;
     - Do only quick read-only checks yourself: \`git status\`, one \`rg\`, \`kimaki session list\`, reading a short file. When a check grows past that, delegate it.
     - Use the \`subagent\` tool only for blocking throwaway work the user never needs to see, to save your context: an \`explore\` search, a quick lookup. Anything the user may want to follow or steer is a thread.
     - When a prompt needs work, write one short line first (what you start and why), then start the sessions. When you can answer from what you know, answer directly.
-    - Start a worker:
+    - Start a worker and wait for it, with a shell timeout of 20 minutes or more (\`timeout: 1_500_000\`):
 
-      kimaki send --channel ${channelId} --name 'Short title' --prompt '...' --agent <agent> --parent-session ${sessionId} --user '<user-id>'
+      kimaki send --channel ${channelId} --name 'Short title' --prompt '...' --agent <agent> --parent-session ${sessionId} --wait
 
-      Pass \`--user\` with the \`user-id\` of the latest \`<discord-user>\`, so the thread shows in the sidebar of the user who asked. Leave it out only for sessions the user does not need to see (checks you run for yourself, maintenance).
+      Do not add the user to worker threads by default. Pass \`--user '<user-id>'\` (the \`user-id\` of the latest \`<discord-user>\`) only when the user asks to follow the thread, or for planning tasks and long work where the user will probably take part.
+    - \`--wait\` is the default: the command prints the worker's answer, then you report the result. The user can still open and steer the thread while you wait.
+    - Leave out \`--wait\` only to run independent workers in parallel, or when you have other work to do meanwhile. Their \`<session-finished>\` note wakes you when they end.
     - Other projects: \`--channel\` of that project (\`kimaki project list --json\`). Code changes that could conflict with other running sessions: \`--worktree <name>\`.
     - Run sessions in parallel only when their write scopes do not overlap. Otherwise use separate worktrees, or run them one after another.
-    - A follow-up for an existing worker: \`kimaki send --thread <thread_id> --prompt '...'\`, with \`. queue\` at the end when it may be busy. Prefer continuing a worker that has the context over re-explaining it to a new one.
-    - Name workers in your messages as \`<#thread_id>\` links. Never a bare session ID.
+    - A follow-up for an existing worker: \`kimaki send --thread <thread_id> --prompt '...' --wait\`, with \`. queue\` at the end when it may be busy. Prefer continuing a worker that has the context over re-explaining it to a new one.
+    - Never put thread links (\`<#id>\`), session URLs or session IDs in your replies about workers: the user already sees each thread and its finish notice in Discord. Name a worker by its short title, if at all.
 
     ### writing prompts for workers
 
@@ -675,9 +679,11 @@ function mainmastSection({ sessionId, channelId, dataDir }: { sessionId: string;
 
     ### notifications
 
-    - When a session you started finishes a run, you get a \`<session-finished ...>\` message with its final answer. It wakes you. Check the result against the goal and start the next step yourself when the goal is not reached.
+    - A worker you waited for returns its answer in the command output, with no note. Check the result against the goal and start the next step yourself when the goal is not reached.
+    - A worker started without \`--wait\` sends a \`<session-finished ...>\` message with its final answer when a run ends. It wakes you. Handle it the same way.
+    - When a wait is cut off (shell timeout, interrupt), check the worker yourself: its note may not come.
     - Other threads of this channel and routines add a \`<session-finished ... wake="false">\` note without waking you. Read them at the next prompt so you know what happened meanwhile.
-    - Starting a worker is not finishing it. Keep working after dispatch; when you need a result and no note came, check instead of waiting.
+    - Starting a worker without \`--wait\` is not finishing it. When you need its result and no note came, check instead of guessing.
     - Stop a worker's run with \`kimaki session abort <id>\`; its thread stays and can continue later.
     - \`<session-finished>\` notes and reminders are for you. Never mention them to the user.
     - Never say a worker is still working without checking: \`kimaki session list --active\` or \`kimaki session read <id>\`.

@@ -72,6 +72,7 @@ export async function prompt(
     skills = [],
     id = promptIdForMessage(messageId),
     echo,
+    waited = false,
   }: {
     sessionId: string
     threadId: string
@@ -88,6 +89,9 @@ export async function prompt(
     // Line the thread shows when OpenCode takes the prompt (queue.ts), for
     // inputs that have no Discord message: wakes, scheduled runs.
     echo?: string
+    // `kimaki send --wait`: the sender reads the result itself, so the run end
+    // sends no <session-finished> note (mainmast.ts).
+    waited?: boolean
   },
 ): Promise<OpenCodeUnavailableError | OpenCodeError | void> {
   const { attached, attachments } = await splitPromptFiles(files)
@@ -102,7 +106,7 @@ export async function prompt(
       files: attached,
       ...(skills.length > 0 && { skills: skills.map((skill) => ({ id: skill })) }),
       delivery,
-      metadata: { discord: { ...discord, ...(echo && { echo }) } },
+      metadata: { discord: { ...discord, ...(echo && { echo }) }, ...(waited && { waited }) },
     }),
   )
   if (result instanceof Error) return result
@@ -165,6 +169,7 @@ export async function steer(
     files?: readonly PromptFile[]
     skills?: readonly string[]
     echo?: string
+    waited?: boolean
   },
 ): Promise<OpenCodeUnavailableError | OpenCodeError | void> {
   const cancelled = await cancelPendingUi(bot, input.threadId)
@@ -332,6 +337,7 @@ export async function runInSession(
     messageId,
     files,
     echo,
+    waited,
     model,
   }: {
     sessionId: string
@@ -343,10 +349,11 @@ export async function runInSession(
     messageId: string
     files: readonly PromptFile[]
     echo?: string
+    waited?: boolean
     model?: ModelChoice | null
   },
 ) {
-  const base = { sessionId, threadId, threadName, author, messageId, files, echo }
+  const base = { sessionId, threadId, threadName, author, messageId, files, echo, waited }
   switch (route.kind) {
     case 'shell':
       return shell(bot, { threadId, sessionId, command: route.command })
@@ -379,6 +386,7 @@ export async function dispatch(
     messageId,
     files = [],
     echo,
+    waited,
     model,
   }: {
     conversation: Conversation
@@ -387,6 +395,7 @@ export async function dispatch(
     messageId: string
     files?: readonly PromptFile[]
     echo?: string
+    waited?: boolean
     model?: ModelChoice | null
   },
 ) {
@@ -429,6 +438,7 @@ export async function dispatch(
         messageId,
         files,
         echo,
+        waited,
         model,
       })
   }
@@ -572,7 +582,7 @@ export async function send(bot: Bot, input: SendInput, { localOnly = false, task
       if (switched instanceof Error) return switched
     }
     const echo = task ? formatEcho({ username: author.username, text: routeText(route) }) : undefined
-    const result = await dispatch(bot, { conversation: thread, route, author, messageId, files: input.files, echo })
+    const result = await dispatch(bot, { conversation: thread, route, author, messageId, files: input.files, echo, waited: input.wait })
     if (result instanceof Error) return result
     return result ?? { threadId, sessionId: bot.store.getState().roots[threadId]! }
   }
@@ -636,6 +646,7 @@ export async function send(bot: Bot, input: SendInput, { localOnly = false, task
     files: input.files,
     permissions,
     parentSessionId: input.parentSessionId,
+    waited: input.wait,
     task,
     worktree,
     baseBranch: input.baseBranch,

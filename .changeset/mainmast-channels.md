@@ -9,12 +9,13 @@ Add **mainmast** channels, the new default. A project channel is now a chat with
 #my-app
   you: fix the flaky login test
   Starting a worker for the login test.
-  -# Fix flaky login test finished: #fix-flaky-login-test
-  Fixed in #fix-flaky-login-test: the test now awaits the session cookie.
+  -# ┣ shell Fix flaky login test
+  Fixed: the test now awaits the session cookie.
 ```
 
-- Threads started with `kimaki send --parent-session <mainmast>` wake the mainmast with their final answer when a run ends. Other threads of the channel and routines leave a silent note for the next prompt.
-- The mainmast delegates every task that is more than trivial, so its context stays clean across many compactions. It writes short markdown prompts for workers and does not repeat a finished worker's answer, which you already see in Discord. Every worker is a visible thread you can talk to. The mainmast uses the `subagent` tool only for quick throwaway lookups.
+- By default the mainmast starts a worker with `kimaki send --wait` and reports the result when it ends, so the channel stays quiet. You can still open and steer the worker thread meanwhile. Worker threads do not join your sidebar unless you ask to follow one, or the work is planning or long work you will probably take part in.
+- Workers started without `--wait` (parallel work) wake the mainmast with their final answer when a run ends. A run whose prompt came from `kimaki send --wait` sends no note while its sender still runs, so the result is never reported twice. Other threads of the channel and routines leave a silent note for the next prompt.
+- The mainmast delegates every task that is more than trivial, so its context stays clean across many compactions. It writes short markdown prompts for workers and does not repeat a finished worker's answer or link its thread, which you already see in Discord. Every worker is a visible thread you can talk to. The mainmast uses the `subagent` tool only for quick throwaway lookups.
 - Workers read the mainmast session for project context. The mainmast keeps memory in a tracked `MEMORY.md`, read through its headings.
 - Halfway through the OpenCode `warming` window (30 minutes without warming) an idle mainmast is asked for useful work. With warming on, it is compacted when the window ends, while the cache is still warm.
 - `/new-mainmast` starts a fresh mainmast in the channel.

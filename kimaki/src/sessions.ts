@@ -356,6 +356,7 @@ export async function startSession(
     model: explicitModel,
     permissions,
     parentSessionId,
+    waited,
     task,
     worktree,
     baseBranch,
@@ -382,6 +383,8 @@ export async function startSession(
     model?: ModelChoice
     permissions?: PermissionRules
     parentSessionId?: string
+    // `kimaki send --wait`: see prompt().
+    waited?: boolean
     // A scheduled run (scheduler.ts): marks the session as started by this task.
     task?: ScheduledRun
     // undefined uses the channel default; false explicitly reuses an existing cwd.
@@ -491,7 +494,7 @@ export async function startSession(
     bot.effects.run(thread.id, [{ type: 'send', text: formatEcho({ username: author.username, text: shown }), echo: true }])
   }
 
-  const base = { sessionId: session.id, threadId: thread.id, threadName, author, messageId, files }
+  const base = { sessionId: session.id, threadId: thread.id, threadName, author, messageId, files, waited }
   // A new session has no run, question or permission to cancel: prompt directly instead of steer().
   const sent = route.kind === 'steer'
     ? await prompt(bot, { ...base, text: route.text, delivery: 'steer' })

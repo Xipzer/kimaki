@@ -49,6 +49,21 @@ beforeAll(async () => {
           }],
           finalText: 'Started a worker for it.',
         }),
+        // The default: the mainmast waits for the worker in the same shell call.
+        ...scriptedTurn({
+          marker: 'waitjob-marker',
+          steps: [{
+            id: 'call-send-wait',
+            tool: 'shell',
+            input: {
+              command: `kimaki send --channel ${twin.channelId} --name 'Waited task' --prompt 'waited-worker-marker do the job' --parent-session "$OPENCODE_SESSION_ID" --wait`,
+              description: 'Run the worker and wait',
+              hasSideEffect: true,
+            },
+          }],
+          finalText: 'The waited worker is done.',
+        }),
+        { id: 'waited-worker', priority: 100, when: { latestUserTextIncludes: 'waited-worker-marker' }, then: { parts: textParts('Waited job done.') } },
         // Slow enough that the delegating run ends first: the note then wakes an idle mainmast.
         { id: 'worker', priority: 100, when: { latestUserTextIncludes: 'worker-marker' }, then: { parts: textParts('Job done in the worker.'), defaultPartDelayMs: 300 } },
         { id: 'btw', priority: 100, when: { latestUserTextIncludes: 'btw-marker' }, then: { parts: textParts('Side answer.') } },
@@ -139,6 +154,39 @@ test('a worker started with --parent-session gets a thread and wakes the mainmas
     -# *project ⋅ main ⋅ Ns ⋅ N% ⋅ deterministic-v2*"
   `)
   expect(thread.name).toBe('Worker task')
+})
+
+test('a worker started with --wait answers through the wait, with no note', async () => {
+  const { discord, channelId } = twin
+  const footers = (await discord.channel(channelId).getMessages()).filter((message) => message.content.startsWith('-# *project'))
+  const threads = (await discord.channel(channelId).getThreads()).length
+  await discord.channel(channelId).user(TEST_USER_ID).sendMessage({ content: 'Fix it waitjob-marker' })
+  await waitForFooter({ discord, threadId: channelId, count: footers.length + 1 })
+  const thread = (await discord.channel(channelId).getThreads()).find((candidate) => candidate.name === 'Waited task')
+  if (!thread) throw new Error('no Waited task thread')
+  await waitForFooter({ discord, threadId: thread.id })
+  const root = bot.store.getState().roots[channelId]!
+  const client = await server.client()
+  // No note arrives: not in the inbox, no wake, no "finished" line.
+  for (let i = 0; i < 10; i++) {
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    const inbox = await client.session.inbox.list({ sessionID: root })
+    expect(inbox.filter((item) => item.type === 'synthetic' && item.payload.text.includes('Waited task'))).toHaveLength(0)
+  }
+
+  const text = (await discord.channel(channelId).text()).replaceAll(thread.id, 'worker-thread')
+  expect(text.slice(text.lastIndexOf('--- from: user'))).toMatchInlineSnapshot(`
+    "--- from: user (tommy)
+    Fix it waitjob-marker
+    --- from: assistant (TestBot)
+    -# ┣ shell _Run the worker and wait_
+
+    The waited worker is done.
+    -# *project ⋅ main ⋅ Ns ⋅ N% ⋅ deterministic-v2*"
+  `)
+  expect(await discord.channel(channelId).getThreads()).toHaveLength(threads + 1)
+  const messages = await client.message.list({ sessionID: root, order: 'desc', limit: 20 })
+  expect(messages.data.some((message) => message.type === 'synthetic' && JSON.stringify(message).includes('Waited task'))).toBe(false)
 })
 
 test('another thread of the channel leaves a silent note for the next prompt', async () => {

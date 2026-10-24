@@ -75,8 +75,8 @@ export async function resolveTarget(bot: Bot, channelId: string | null): Promise
   const row = await projectOf(bot, projectChannelId)
   if (row instanceof Error) return row
   if (!row) return new ConfigError({ reason: 'This channel is not configured with a project directory' })
-  // A mainmast channel is the conversation of its root session.
-  const conversation = thread ?? (channel?.type === ChannelType.GuildText && bot.store.getState().roots[channel.id] ? channel : null)
+  // A mainmast channel is the conversation of its root session. With --no-mainmast an old binding is ignored, like in ingress.
+  const conversation = thread ?? (bot.mainmast && channel?.type === ChannelType.GuildText && bot.store.getState().roots[channel.id] ? channel : null)
   const sessionId = conversation ? (bot.store.getState().roots[conversation.id] ?? null) : null
   const directory = sessionId ? await sessionDirectory(bot, sessionId) : row.directory
   if (directory instanceof Error) return directory
