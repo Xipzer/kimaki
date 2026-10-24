@@ -14,7 +14,7 @@
 //   cold thread      a bound thread without a view yet (bound in an earlier
 //                    bot run): read its project channel and directory once.
 
-import { DiscordAPIError, RESTJSONErrorCodes, type Client } from 'discord.js'
+import { ChannelType, DiscordAPIError, RESTJSONErrorCodes, type Client } from 'discord.js'
 
 import type { Analytics } from './analytics.ts'
 import { verbosityFromV1, type KimakiDb } from './db.ts'
@@ -184,7 +184,8 @@ export function createEventLoop({
       if (!sessionId) return null
       const thread = await discord.channels.fetch(threadId).catch((e) => e instanceof DiscordAPIError && e.code === RESTJSONErrorCodes.UnknownChannel ? null : new DiscordError({ operation: `fetch thread ${threadId}`, cause: e }))
       if (thread instanceof Error) return thread
-      const channelId = thread?.isThread() ? thread.parentId : null
+      // A mainmast channel is its own conversation.
+      const channelId = thread?.isThread() ? thread.parentId : thread?.type === ChannelType.GuildText ? thread.id : null
       if (!channelId) return null
       const project = await db.query.channel_directories.findFirst({ where: { channel_id: channelId } }).catch((e) => new DbError({ operation: 'read channel_directories', cause: e }))
       if (project instanceof Error) return project

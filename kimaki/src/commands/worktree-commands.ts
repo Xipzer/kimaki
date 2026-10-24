@@ -7,9 +7,9 @@
 //   /merge-worktree            ─▶ mergeWorktree, refused while a session runs there
 
 import crypto from 'node:crypto'
-import { ButtonStyle, ComponentType, SlashCommandBuilder, type ButtonInteraction, type ChatInputCommandInteraction, type ThreadChannel } from 'discord.js'
+import { ButtonStyle, ComponentType, SlashCommandBuilder, type ButtonInteraction, type ChatInputCommandInteraction } from 'discord.js'
 
-import { oc, projectOf, rootSession, sessionDirectory, type Author, type Bot } from '../bot.ts'
+import { oc, projectOf, rootSession, sessionDirectory, type Author, type Bot, type Conversation } from '../bot.ts'
 import { ConfigError, DbError } from '../errors.ts'
 import { canonicalPath } from '../file-edit-log.ts'
 import * as schema from '../schema.ts'
@@ -35,7 +35,7 @@ const identity = (tree: GitWorktree) => crypto.createHash('sha256').update(`${tr
 // A new session in a fresh checkout. In a thread the session is a fork, so it keeps the context.
 export async function newWorktree(
   bot: Bot,
-  { channelId, sourceThread, name, baseBranch, author }: { channelId: string; sourceThread?: ThreadChannel; name?: string; baseBranch?: string; author: Author },
+  { channelId, sourceThread, name, baseBranch, author }: { channelId: string; sourceThread?: Conversation; name?: string; baseBranch?: string; author: Author },
 ) {
   const slug = name || `session-${crypto.randomBytes(4).toString('hex')}`
   const valid = worktreeName(slug)
@@ -187,7 +187,8 @@ async function newWorktreeCommand(bot: Bot, interaction: ChatInputCommandInterac
   if (!target) return
   const result = await newWorktree(bot, {
     channelId: target.channelId,
-    sourceThread: target.thread ?? undefined,
+    // In a mainmast channel a new worktree is a fresh session, not a fork of the mainmast.
+    sourceThread: target.thread?.isThread() ? target.thread : undefined,
     name: interaction.options.getString('name') ?? undefined,
     baseBranch: interaction.options.getString('base-branch') ?? undefined,
     author: authorOf(interaction),

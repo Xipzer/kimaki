@@ -13,7 +13,7 @@ import * as orm from 'drizzle-orm'
 import { z } from 'zod'
 
 import { parseButton } from './agent-ui.ts'
-import { fetchThread, oc, parseModel, projectOf, type Bot } from './bot.ts'
+import { fetchConversation, oc, parseModel, projectOf, type Bot } from './bot.ts'
 import { credential, loginCli } from './commands/login-commands.ts'
 import { setChannelAgent, setChannelModel, setGlobalModel, setVerbosity } from './commands/preference-commands.ts'
 import { channelWorktrees, manageWorktree, newWorktree, setAutoWorktrees } from './commands/worktree-commands.ts'
@@ -493,7 +493,7 @@ export const lockRoutes = {
     run: async (bot, input) => {
       const target = localSession(bot, input)
       if (target instanceof Error) return target
-      const thread = await fetchThread(bot, target.threadId)
+      const thread = await fetchConversation(bot, target.threadId)
       if (thread instanceof Error) return thread
       return sessionCwd(bot, { thread, directory: input.directory })
     },
@@ -506,8 +506,10 @@ export const lockRoutes = {
       const title = input.text
       const renamed = await oc(bot, 'session.update', (client) => client.session.update({ sessionID: target.sessionId, title }))
       if (renamed instanceof Error) return renamed
-      const thread = await fetchThread(bot, target.threadId)
+      const thread = await fetchConversation(bot, target.threadId)
       if (thread instanceof Error) return thread
+      // A mainmast channel keeps its project name.
+      if (!thread.isThread()) return { title }
       const updated = await thread.setName(title.slice(0, 100)).catch((cause) => new DiscordError({ operation: 'rename thread', cause }))
       if (updated instanceof Error) return updated
       return { title }
@@ -518,8 +520,9 @@ export const lockRoutes = {
     run: async (bot, input) => {
       const target = localSession(bot, input)
       if (target instanceof Error) return target
-      const thread = await fetchThread(bot, target.threadId)
+      const thread = await fetchConversation(bot, target.threadId)
       if (thread instanceof Error) return thread
+      if (!thread.isThread()) return new ConfigError({ reason: 'A mainmast channel cannot be archived' })
       const archived = await thread.setArchived(true).catch((cause) => new DiscordError({ operation: 'archive thread', cause }))
       if (archived instanceof Error) return archived
       return { archived: true }
@@ -538,7 +541,7 @@ export const lockRoutes = {
     run: async (bot, input) => {
       const target = localSession(bot, input)
       if (target instanceof Error) return target
-      const thread = await fetchThread(bot, target.threadId)
+      const thread = await fetchConversation(bot, target.threadId)
       if (thread instanceof Error) return thread
       // A child session ID forks that child, not the root.
       return fork(bot, { sourceThread: thread, sessionId: input.sessionId ?? target.sessionId, before: input.before, name: input.name, author: cliAuthor(bot) })

@@ -16,10 +16,9 @@ import {
   type ModalSubmitInteraction,
   type RESTPostAPIChatInputApplicationCommandsJSONBody,
   type StringSelectMenuInteraction,
-  type ThreadChannel,
 } from 'discord.js'
 
-import { projectOf, sessionDirectory, type Author, type Bot } from './bot.ts'
+import { projectOf, sessionDirectory, type Author, type Bot, type Conversation } from './bot.ts'
 import { ConfigError, DiscordError } from './errors.ts'
 import { formatError, SILENT_MESSAGE_FLAGS } from './format-parts.ts'
 import { createLogger } from './logger.ts'
@@ -51,11 +50,11 @@ export type InteractionRoutes = {
 // --- Context
 
 // Where an interaction happens: the project channel and, in a session
-// thread, the thread and its root session.
+// thread or a mainmast channel, that conversation and its root session.
 export type InteractionTarget = {
   channelId: string
   directory: string
-  thread: ThreadChannel | null
+  thread: Conversation | null
   sessionId: string | null
   projectDirectory: string
 }
@@ -76,13 +75,15 @@ export async function resolveTarget(bot: Bot, channelId: string | null): Promise
   const row = await projectOf(bot, projectChannelId)
   if (row instanceof Error) return row
   if (!row) return new ConfigError({ reason: 'This channel is not configured with a project directory' })
-  const sessionId = thread ? (bot.store.getState().roots[thread.id] ?? null) : null
+  // A mainmast channel is the conversation of its root session.
+  const conversation = thread ?? (channel?.type === ChannelType.GuildText && bot.store.getState().roots[channel.id] ? channel : null)
+  const sessionId = conversation ? (bot.store.getState().roots[conversation.id] ?? null) : null
   const directory = sessionId ? await sessionDirectory(bot, sessionId) : row.directory
   if (directory instanceof Error) return directory
-  return { channelId: projectChannelId, directory, projectDirectory: row.directory, thread, sessionId }
+  return { channelId: projectChannelId, directory, projectDirectory: row.directory, thread: conversation, sessionId }
 }
 
-export type SessionTarget = InteractionTarget & { thread: ThreadChannel; sessionId: string }
+export type SessionTarget = InteractionTarget & { thread: Conversation; sessionId: string }
 
 // The session thread of a command, or null after a reply saying where it works.
 export async function sessionTarget(bot: Bot, interaction: ChatInputCommandInteraction): Promise<SessionTarget | null> {

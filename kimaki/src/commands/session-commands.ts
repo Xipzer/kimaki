@@ -82,7 +82,7 @@ async function newSession(bot: Bot, interaction: ChatInputCommandInteraction) {
 async function resumeCommand(bot: Bot, interaction: ChatInputCommandInteraction) {
   const target = await resolveTarget(bot, interaction.channelId)
   if (target instanceof Error) return replyError(interaction, target)
-  if (target.thread) {
+  if (target.thread?.isThread()) {
     return replyError(interaction, new ConfigError({ reason: 'This command can only be used in project channels, not threads' }))
   }
   await interaction.deferReply()

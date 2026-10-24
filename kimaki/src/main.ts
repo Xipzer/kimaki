@@ -8,17 +8,18 @@ import * as errore from 'errore'
 
 import { createAgentUi } from './agent-ui.ts'
 import type { Analytics } from './analytics.ts'
-import { oc, type Bot } from './bot.ts'
+import { oc, type Bot, type MainmastTimers } from './bot.ts'
 import type { PromptSection } from './builtin-skills.ts'
 import { openDb } from './db.ts'
 import { createEffectsRunner } from './effects.ts'
 import { DiscordError } from './errors.ts'
-import { createEventLoop } from './event-loop.ts'
+import { createEventLoop, type RunEnded } from './event-loop.ts'
 import { registerIngress } from './ingress.ts'
 import { runLockRoute } from './lock-routes.ts'
 import { installShim, type LockServer } from './lock-server.ts'
 import { createLogger } from './logger.ts'
-import { installPluginShim, watchOpencode, type OpencodeEndpoint } from './opencode-server.ts'
+import { createMainmastNotes } from './mainmast.ts'
+import { ensureWarming, installPluginShim, watchOpencode, type OpencodeEndpoint } from './opencode-server.ts'
 import { countUserProjects } from './project.ts'
 import { createScheduler, systemClock, type Clock } from './scheduler.ts'
 import { createEventRecorder, syncSessionTranscript } from './session-events.ts'
@@ -32,6 +33,8 @@ import { createVoiceCalls, type RealtimeBaseUrls } from './voice-call.ts'
 const logger = createLogger('MAIN')
 // The close handshake takes ~120ms to Discord and to gateway-proxy.
 const DISCORD_CLOSE_WAIT_MS = 500
+// Idle nudge of a mainmast when warming is off: half an hour after the last prompt.
+const DEFAULT_IDLE_WINDOW_MS = 60 * 60_000
 
 export type StartBotOptions = {
   dataDir: string
@@ -71,6 +74,10 @@ export type StartBotOptions = {
   disabledSkills?: readonly string[]
   // Static instruction parts left out of new sessions (system-prompt.ts).
   disabledPrompt?: readonly PromptSection[]
+  // Mainmast channels (ingress.ts). Default off, so tests opt in.
+  mainmast?: boolean
+  // Default: from the OpenCode warming window (ensureWarming). Tests pass short ones.
+  mainmastTimers?: MainmastTimers
 }
 
 export type BotHandle = Bot & {
@@ -149,12 +156,23 @@ export async function startBot(options: StartBotOptions): Promise<Error | BotHan
       if (result instanceof Error) logger.warn(`transcript of ${sessionId} not synced`, result)
     })
   }
-  const eventLoop = createEventLoop({ store, db, discord, effects, recorder, analytics: options.analytics, onRunEnded: voiceCalls.runEnded, onTranscriptDue })
+  const mainmastNotes = createMainmastNotes()
+  const onRunEnded = (run: RunEnded) => {
+    voiceCalls.runEnded(run)
+    mainmastNotes.runEnded(run)
+  }
+  const eventLoop = createEventLoop({ store, db, discord, effects, recorder, analytics: options.analytics, onRunEnded, onTranscriptDue })
   const loaded = await eventLoop.load()
   if (loaded instanceof Error) return loaded
   // Before the service is used, so a service started by ensure() loads it at once.
   const plugin = await installPluginShim({ configDir: options.opencodeConfigDir })
   if (plugin instanceof Error) return plugin
+  const mainmastTimers = options.mainmastTimers ?? (await (async (): Promise<MainmastTimers> => {
+    const warm = options.mainmast ? await ensureWarming({ configDir: options.opencodeConfigDir }) : null
+    if (warm instanceof Error) logger.warn(warm)
+    const window = typeof warm === 'number' ? warm : null
+    return { nudgeMs: (window ?? DEFAULT_IDLE_WINDOW_MS) / 2, compactMs: window }
+  })())
   const opencode = watchOpencode({
     serviceFile: options.opencodeServiceFile,
     ensure: options.ensureOpencode,
@@ -189,6 +207,8 @@ export async function startBot(options: StartBotOptions): Promise<Error | BotHan
     allowAllUsers: options.allowAllUsers ?? false,
     disabledSkills: options.disabledSkills ?? [],
     disabledPrompt: options.disabledPrompt ?? [],
+    mainmast: options.mainmast ?? false,
+    mainmastTimers,
     features: { withSleepLock: createSleepLock(), waitForPlugin: createPluginWait({ opencode }), agentUi, voiceCalls },
   }
   const scheduler = createScheduler({
@@ -201,6 +221,7 @@ export async function startBot(options: StartBotOptions): Promise<Error | BotHan
   // Before login: gateway-proxy replays missed messages right after READY.
   registerIngress(bot)
   voiceCalls.register(bot)
+  mainmastNotes.register(bot)
   // Before discord.destroy() (registered earlier, so disposed later): leaving voice needs the gateway.
   cleanup.defer(() => voiceCalls.stop(bot))
 

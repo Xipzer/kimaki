@@ -15,13 +15,14 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import crypto from 'node:crypto'
-import { Events, MessageFlags, type Message, type ThreadChannel } from 'discord.js'
+import { Events, MessageFlags, type Message } from 'discord.js'
 import * as errore from 'errore'
 
 import {
-  fetchThread,
+  fetchConversation,
   oc,
   parseModel,
+  projectChannelOf,
   projectOf,
   rootSession,
   routeText,
@@ -29,6 +30,7 @@ import {
   threadOfSession,
   type Author,
   type Bot,
+  type Conversation,
   type ModelChoice,
   type PromptFile,
 } from './bot.ts'
@@ -379,7 +381,7 @@ export async function dispatch(
     echo,
     model,
   }: {
-    thread: ThreadChannel
+    thread: Conversation
     route: Route
     author: Author
     messageId: string
@@ -539,7 +541,9 @@ export async function send(bot: Bot, input: SendInput, { localOnly = false, task
   const userIds = (input.user ?? []).map((user) => user.replace(/[<@!>]/g, ''))
   const author = { id: userIds[0] ?? bot.discord.user!.id, username: task ? `routine #${task.id}` : 'CLI' }
   // Every --user joins the thread; startSession adds the author of a new session itself.
-  const addMembers = async (thread: ThreadChannel, ids: readonly string[]) => {
+  const addMembers = async (thread: Conversation, ids: readonly string[]) => {
+    // A mainmast channel has no thread members to add.
+    if (!thread.isThread()) return
     for (const id of ids) await thread.members.add(id).catch((error: Error) => logger.warn(`add thread member ${id}`, error))
   }
   const messageId = crypto.randomUUID()
@@ -550,11 +554,12 @@ export async function send(bot: Bot, input: SendInput, { localOnly = false, task
   if (input.sessionId || input.threadId) {
     const threadId = input.threadId ?? threadOfSession(bot, input.sessionId!)
     if (!threadId) return new ConfigError({ reason: 'No local thread for this session. Use --thread on its owning machine.' })
-    const thread = await fetchThread(bot, threadId)
+    const thread = await fetchConversation(bot, threadId)
     if (thread instanceof Error) return thread
     const sessionId = bot.store.getState().roots[thread.id]
     if (!sessionId) {
-      const project = thread.parentId ? await projectOf(bot, thread.parentId) : null
+      const channelId = projectChannelOf(thread)
+      const project = channelId ? await projectOf(bot, channelId) : null
       if (project instanceof Error) return project
       return !project && !localOnly ? remoteSend(bot, input) : new ConfigError({ reason: 'No local session for this thread' })
     }
@@ -635,7 +640,7 @@ export async function send(bot: Bot, input: SendInput, { localOnly = false, task
     ...(model && { model: { ...model, variant: null } }),
   })
   if (started instanceof Error || userIds.length < 2) return started
-  const thread = await fetchThread(bot, started.threadId)
+  const thread = await fetchConversation(bot, started.threadId)
   if (thread instanceof Error) logger.warn(`add thread members`, thread)
   else await addMembers(thread, userIds.slice(1))
   return started

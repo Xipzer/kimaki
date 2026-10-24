@@ -9,7 +9,7 @@ import crypto from 'node:crypto'
 import * as orm from 'drizzle-orm'
 import dedent from 'string-dedent'
 
-import { fetchThread, threadOfSession, type Bot } from './bot.ts'
+import { fetchConversation, threadOfSession, type Bot } from './bot.ts'
 import { parseDuration } from './duration.ts'
 import { ConfigError, DbError } from './errors.ts'
 import { asSubtext } from './format-parts.ts'
@@ -184,7 +184,7 @@ async function wake(bot: Bot, row: SleepRow): Promise<Error | void> {
       return settle('failed')
     }
     const sent = await (async () => {
-      const thread = await fetchThread(bot, threadId)
+      const thread = await fetchConversation(bot, threadId)
       if (thread instanceof Error) return thread
       return prompt(bot, {
         sessionId,

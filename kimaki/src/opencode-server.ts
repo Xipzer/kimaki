@@ -27,7 +27,7 @@ import { promisify } from 'node:util'
 import { OpenCode, type OpenCodeClient, type V2Event } from '@opencode/client'
 import { Service } from '@opencode/client/service'
 import * as errore from 'errore'
-import { parse as parseJsonc } from 'jsonc-parser'
+import { applyEdits, modify, parse as parseJsonc } from 'jsonc-parser'
 
 import { ConfigError, OpenCodeError, OpenCodeMissingError, OpenCodeUnavailableError, OpenCodeV1Error, OpenCodeVersionError } from './errors.ts'
 import { createLogger } from './logger.ts'
@@ -259,6 +259,56 @@ export async function installPluginShim({ configDir }: { configDir: string }): P
   const failed = results.find((result) => result instanceof Error)
   if (failed instanceof Error) return failed
   return { written: results.some((result) => !(result instanceof Error) && result.written) }
+}
+
+// --- Prompt cache warming (OpenCode `warming` config, docs/warming.mdx).
+//
+// Mainmast turns warming on in the global config once, when no config file sets
+// the key: `"warming": { "duration": "1 hour" }`. A user value always wins,
+// including `false`. The mainmast plugin compacts its session when the window ends.
+// TODO: warm only mainmast sessions, and add a per-session on/off command, once
+// OpenCode has per-session warming. https://github.com/anomalyco/opencode/issues/58163
+
+const KIMAKI_WARMING = { duration: '1 hour' }
+// OpenCode defaults (core/src/plugin/warming.ts).
+const OPENCODE_WARMING_DURATION_MS = 30 * 60_000
+const DURATION_UNITS: Readonly<Record<string, number>> = { ms: 1, millis: 1, s: 1_000, second: 1_000, seconds: 1_000, m: 60_000, minute: 60_000, minutes: 60_000, h: 3_600_000, hour: 3_600_000, hours: 3_600_000 }
+
+// "1 hour", "30 minutes", "90s" -> ms; null when it is not a duration.
+export function parseDuration(value: string): number | null {
+  const match = /^\s*(\d+(?:\.\d+)?)\s*([a-z]+)\s*$/i.exec(value)
+  const unit = match?.[2] ? DURATION_UNITS[match[2].toLowerCase()] : undefined
+  if (!match?.[1] || !unit) return null
+  return Number(match[1]) * unit
+}
+
+// The warming window of the global config in ms; null when warming is off.
+function warmingWindow(value: unknown): number | null {
+  if (value === true) return OPENCODE_WARMING_DURATION_MS
+  if (!value || typeof value !== 'object') return null
+  const duration: unknown = Reflect.get(value, 'duration')
+  return typeof duration === 'string' ? parseDuration(duration) ?? OPENCODE_WARMING_DURATION_MS : OPENCODE_WARMING_DURATION_MS
+}
+
+// Returns the warming window that applies after the edit.
+export async function ensureWarming({ configDir }: { configDir: string }): Promise<ConfigError | number | null> {
+  const files = await Promise.all(['opencode.json', 'opencode.jsonc'].map(async (name) => {
+    const file = path.join(configDir, name)
+    const text = await fs.promises.readFile(file, 'utf8').catch(() => null)
+    const config: unknown = text === null ? null : parseJsonc(text, [], { allowTrailingComma: true })
+    return { file, text, config }
+  }))
+  // opencode.jsonc loads after opencode.json, so its value wins.
+  const set = files.findLast((entry) => entry.config && typeof entry.config === 'object' && Reflect.has(entry.config, 'warming'))
+  if (set) return warmingWindow(Reflect.get(Object(set.config), 'warming'))
+  const target = files.findLast((entry) => entry.text !== null) ?? files[1]!
+  const text = target.text ?? '{\n  "$schema": "https://opencode.ai/config.json"\n}\n'
+  const edited = applyEdits(text, modify(text, ['warming'], KIMAKI_WARMING, { formattingOptions: { insertSpaces: true, tabSize: 2 } }))
+  const written = await fs.promises.mkdir(configDir, { recursive: true }).then(() => fs.promises.writeFile(target.file, edited))
+    .catch((cause) => new ConfigError({ reason: `Cannot turn on prompt cache warming in ${target.file}`, cause }))
+  if (written instanceof Error) return written
+  logger.log(`turned on OpenCode prompt cache warming for 1 hour in ${target.file}`)
+  return warmingWindow(KIMAKI_WARMING)
 }
 
 export type OpencodeEndpoint = {

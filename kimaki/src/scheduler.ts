@@ -423,8 +423,10 @@ export async function createTask(bot: Bot, { send: input, options }: { send: Sen
     if (threadId) {
       const thread = await bot.discord.channels.fetch(threadId).catch((cause) => new DiscordError({ operation: `fetch thread ${threadId}`, cause }))
       if (thread instanceof Error) return thread
-      if (!thread?.isThread() || !thread.parentId) return null
-      return projectOf(bot, thread.parentId)
+      // A mainmast channel is its own project channel.
+      const channelId = thread?.isThread() ? thread.parentId : thread?.id
+      if (!channelId) return null
+      return projectOf(bot, channelId)
     }
     return bot.db.query.channel_directories
       .findFirst({ where: input.channelId ? { channel_id: input.channelId } : { directory: path.resolve(input.project!) } })

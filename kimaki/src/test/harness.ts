@@ -26,6 +26,7 @@ import {
 } from 'opencode-deterministic-provider'
 
 import { disabledAnalytics, type Analytics } from '../analytics.ts'
+import type { MainmastTimers } from '../bot.ts'
 import { GATEWAY_APP_ID, saveCredentials, type Credentials } from '../credentials.ts'
 import { openDb, verbosityToV1, type Verbosity } from '../db.ts'
 import type { ToolInput } from '../format-parts.ts'
@@ -499,6 +500,8 @@ export async function startTestBot({
   analytics,
   clock,
   schedulerIntervalMs,
+  mainmast,
+  mainmastTimers,
 }: {
   dataDir: string
   twin: TestTwin
@@ -519,6 +522,9 @@ export async function startTestBot({
   // Scheduling tests pass manualClock() and null, then call bot.scheduler.runDueTasks().
   clock?: Clock
   schedulerIntervalMs?: number | null
+  // Default off, like before mainmast existed; mainmast tests pass short timers.
+  mainmast?: boolean
+  mainmastTimers?: MainmastTimers
 }): Promise<BotHandle> {
   // What credential resolution saves in production; `kimaki project add` reads it.
   const credentials: Credentials = twin.discord.botToken.includes(':')
@@ -548,6 +554,8 @@ export async function startTestBot({
     ...(clock && { clock }),
     ...(schedulerIntervalMs !== undefined && { schedulerIntervalMs }),
     ...(realtimeBaseUrls && { realtimeBaseUrls }),
+    ...(mainmast && { mainmast }),
+    ...(mainmastTimers && { mainmastTimers }),
     transcriptionBaseUrls: {
       ...(geminiBaseUrl && { gemini: geminiBaseUrl }),
       ...(openaiBaseUrl && { openai: openaiBaseUrl }),

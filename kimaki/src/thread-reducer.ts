@@ -52,6 +52,7 @@ import {
   type ToolInput,
   type UiMessage,
 } from './format-parts.ts'
+import { IDLE_NUDGE_SOURCE } from './plugin/mainmast.ts'
 import { closePermission, hydratePermissions, showPermission, STATUS, type PendingPermission } from './permissions.ts'
 import { closeForm, formatAnswer, hydrateForms, showForm, withAnswer, type PendingForm } from './questions.ts'
 import { cancelQueued, deliverQueued, enqueueInput, hydrateQueue, promoteQueued, queuedItems, type PendingInput } from './queue.ts'
@@ -117,6 +118,8 @@ export type ThreadView = {
   // Kimaki runs an OpenCode command (kimaki.command): the next root user item
   // without Discord metadata is its expanded prompt, shown as the typed command.
   commandPending: { text: string; username: string } | null
+  // The plugin asked the idle mainmast for work (plugin/mainmast.ts): a turn that posts nothing ends without a footer.
+  idleNudge: boolean
   // Questions and permission requests waiting for the user (root and children).
   forms: Readonly<Record<string, PendingForm>>
   permissions: Readonly<Record<string, PendingPermission>>
@@ -218,6 +221,7 @@ export function emptyView({
     cached: null,
     inbox: [],
     commandPending: null,
+    idleNudge: false,
     forms: {},
     permissions: {},
   }
@@ -320,7 +324,12 @@ function applyOpencode({ draft, event, prefs, emit }: Context & { event: V2Event
   // Questions and permissions of subagents show in this thread too.
   const label = child?.agent ?? null
   if (event.type === 'session.inbox.enqueued' && event.data.item.type === 'synthetic' && !child?.background) {
-    return showShellFinished({ draft, prefs, emit, metadata: event.data.item.payload.metadata ?? {}, label })
+    const metadata = event.data.item.payload.metadata ?? {}
+    if (!child && metadata['source'] === IDLE_NUDGE_SOURCE) {
+      draft.idleNudge = true
+      return
+    }
+    return showShellFinished({ draft, prefs, emit, metadata, label })
   }
   switch (event.type) {
     case 'form.created':
@@ -406,21 +415,26 @@ function applyRoot(context: Context & { event: V2Event }) {
       return toolLine(context, formatError(`compaction failed: ${event.data.error.message}`))
     case 'session.execution.succeeded': {
       const turn = draft.turn
+      // An idle nudge answered with nothing: no footer, nothing in Discord.
+      const silent = draft.idleNudge && draft.lastKind === null
       draft.turn = null
       draft.lastKind = null
-      if (turn) emitFooter({ ...context, turn, at: event.created, notify: !turn.slept })
+      draft.idleNudge = false
+      if (turn && !silent) emitFooter({ ...context, turn, at: event.created, notify: !turn.slept })
       emit({ type: 'viewed', sessionId: draft.sessionId, idle: event.created })
       return
     }
     case 'session.execution.failed':
       draft.turn = null
       draft.lastKind = null
+      draft.idleNudge = false
       emit({ type: 'send', text: formatError(event.data.error.message), notify: true })
       emit({ type: 'viewed', sessionId: draft.sessionId, idle: event.created })
       return
     case 'session.execution.interrupted':
       draft.turn = null
       draft.lastKind = null
+      draft.idleNudge = false
       // A shutdown does not make the session idle in OpenCode.
       if (event.data.reason !== 'shutdown') emit({ type: 'viewed', sessionId: draft.sessionId, idle: event.created })
       return
@@ -557,6 +571,14 @@ function showShellFinished({
   ...context
 }: Context & { metadata: Readonly<Record<string, unknown>>; label: string | null }) {
   const { shellID, jobID, state, exit } = metadata
+  // A session the mainmast started finished (mainmast.ts): its thread link wakes the coordinator.
+  if (metadata['source'] === 'kimaki-session') {
+    const { threadID, title, wake } = metadata
+    if (wake !== true || typeof threadID !== 'string') return
+    const name = typeof title === 'string' ? title : 'session'
+    toolLine(context, asSubtext(state === 'error' ? `⬦ ${name} failed: <#${threadID}>` : `⬦ ${name} finished: <#${threadID}>`))
+    return
+  }
   if (metadata['source'] !== 'shell' || typeof shellID !== 'string' || typeof jobID !== 'string') return
   const description = context.draft.shells[shellID] ?? null
   delete context.draft.shells[shellID]
