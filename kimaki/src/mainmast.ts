@@ -82,6 +82,7 @@ async function noteRunEnded(bot: Bot, run: RunEnded): Promise<void> {
     `<session-finished sessionID="${run.sessionId}" threadID="${run.threadId}" state="${state}" title="${escapeAttribute(title)}"${routine} wake="${wake}">`,
     cut(answer, wake ? WAKE_ANSWER_CHARS : NOTE_ANSWER_CHARS),
     `More: kimaki session read ${run.sessionId}`,
+    ...(wake ? ['The user already sees in Discord that this session finished. Do not repeat it or its answer: reply only with what the user needs to know, else reply with nothing.'] : []),
     '</session-finished>',
   ].join('\n')
   const sent = await oc(bot, 'session.synthetic', (client) =>
