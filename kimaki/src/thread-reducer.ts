@@ -139,8 +139,8 @@ export type Effect =
   | { type: 'markdown'; text: string; blankLineBefore: boolean }
   | { type: 'typing'; on: boolean }
   // Files from `kimaki upload-to-discord` (never from the reducer). `settle`
-  // answers the waiting CLI call: null once posted, or why not.
-  | { type: 'attachments'; files: readonly UploadFile[]; settle: (error: Error | null) => void }
+  // answers the waiting CLI call: the Discord URL of each file once posted, or why not.
+  | { type: 'attachments'; files: readonly UploadFile[]; settle: (result: Error | string[]) => void }
   // The executor adds folder and git branch of `directory` when it posts.
   | { type: 'footer'; directory: string; durationMs: number; contextPercent: number | null; model: ModelRef; agent: string | null; notify: boolean }
   // Posts the messages in order; the first replies to `replyTo` when set.

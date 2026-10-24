@@ -674,7 +674,8 @@ export async function upload(bot: Bot, { id, files }: { id: string; files: Array
     if (!stat?.isFile()) return new ConfigError({ reason: `File not found: ${file.path}` })
     sized.push({ ...file, size: stat.size })
   }
-  const error = await new Promise<Error | null>((settle) => bot.effects.run(threadId, [{ type: 'attachments', files: sized, settle }]))
-  if (error) return error
-  return { uploaded: files.map((file) => file.name) }
+  const urls = await new Promise<Error | string[]>((settle) => bot.effects.run(threadId, [{ type: 'attachments', files: sized, settle }]))
+  if (urls instanceof Error) return urls
+  // Discord keeps attachments in upload order. The URLs let a mainmast repost the files.
+  return { uploaded: files.map((file, index) => ({ name: file.name, url: urls[index] ?? null })) }
 }

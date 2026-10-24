@@ -177,8 +177,9 @@ export function createEffectsRunner({ discord, markViewed }: { discord: Client; 
   }
 
   // Unlike post(), the error goes back to the agent that uploaded.
-  async function postFiles(threadId: string, files: readonly UploadFile[]): Promise<Error | null> {
+  async function postFiles(threadId: string, files: readonly UploadFile[]): Promise<Error | string[]> {
     let first = 1
+    const urls: string[] = []
     for (const batch of uploadBatches(files)) {
       if (lifecycle.closed) return new DiscordError({ operation: 'upload (bot stopped)' })
       const channel = await sendableChannel(threadId)
@@ -187,9 +188,10 @@ export function createEffectsRunner({ discord, markViewed }: { discord: Client; 
         .send({ ...uploadMessage({ files: batch, first, numbered: files.length > 1 }), allowedMentions: { parse: [] } })
         .catch((cause: Error) => new DiscordError({ operation: `upload of ${batch.map((file) => file.name).join(', ')} (${cause.message})`, cause }))
       if (sent instanceof Error) return sent
+      urls.push(...sent.attachments.map((attachment) => attachment.url))
       first += batch.length
     }
-    return null
+    return urls
   }
 
   async function edit({ channel, messageId, message }: { channel: SendableChannels; messageId: string; message: UiMessage }) {
