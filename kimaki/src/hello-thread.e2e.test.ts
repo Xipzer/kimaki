@@ -29,6 +29,8 @@ let bot: BotHandle
 let dataDir: string
 let helloThreadId: string
 
+const MEDIA_URL = 'https://cdn.discordapp.com/attachments/1012345678900020080/1234567891233211234/shot.png?ex=65d903de&is=65c68ede&hm=2481f30d&'
+
 beforeAll(async () => {
   dataDir = tempDataDir()
   ;[server, twin] = await Promise.all([
@@ -56,6 +58,19 @@ beforeAll(async () => {
               { type: 'text-start', id: 't2' },
               { type: 'text-delta', id: 't2', delta: 'Second answer, same session.' },
               { type: 'text-end', id: 't2' },
+              { type: 'finish', finishReason: 'stop', usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 } },
+            ],
+          },
+        },
+        {
+          id: 'media',
+          priority: 10,
+          when: { latestUserTextIncludes: 'media-marker' },
+          then: {
+            parts: [
+              { type: 'text-start', id: 't3' },
+              { type: 'text-delta', id: 't3', delta: `Here is the screenshot: ${MEDIA_URL}` },
+              { type: 'text-end', id: 't3' },
               { type: 'finish', finishReason: 'stop', usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 } },
             ],
           },
@@ -168,6 +183,45 @@ test('channel message creates a thread with reply and footer, follow-up continue
     },
   })
   expect(session.time.idle).toBeGreaterThan(0)
+})
+
+test('a reply with a Discord media URL keeps its embed, other lines stay suppressed', async () => {
+  const { discord, channelId } = twin
+  await discord.channel(channelId).user(TEST_USER_ID).sendMessage({ content: 'Show the shot media-marker' })
+  const thread = await discord.channel(channelId).waitForThread({ predicate: (thread) => thread.name?.startsWith('Show the shot') ?? false })
+  await waitForFooter({ discord, threadId: thread.id })
+  expect(await discord.thread(thread.id).text()).toMatchInlineSnapshot(`
+    "--- from: user (tommy)
+    Show the shot media-marker
+    --- from: assistant (TestBot)
+    -# *using deterministic-provider/deterministic-v2 ⋅ build*
+    Here is the screenshot: https://cdn.discordapp.com/attachments/1012345678900020080/1234567891233211234/shot.png?ex=65d903de&is=65c68ede&hm=2481f30d&
+    -# *project ⋅ main ⋅ Ns ⋅ N% ⋅ deterministic-v2*"
+  `)
+
+  const messages = await discord.thread(thread.id).getMessages()
+  const flags = messages
+    .filter((message) => message.author.bot)
+    .map((message) => ({
+      text: message.content.slice(0, 20),
+      suppressEmbeds: Boolean((message.flags ?? 0) & MessageFlags.SuppressEmbeds),
+    }))
+  expect(flags).toMatchInlineSnapshot(`
+    [
+      {
+        "suppressEmbeds": true,
+        "text": "-# *using determinis",
+      },
+      {
+        "suppressEmbeds": false,
+        "text": "Here is the screensh",
+      },
+      {
+        "suppressEmbeds": true,
+        "text": "-# *project ⋅ main ⋅",
+      },
+    ]
+  `)
 })
 
 test('message from a user without permission creates no thread', async () => {

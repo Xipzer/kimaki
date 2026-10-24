@@ -17,10 +17,21 @@ import { z } from 'zod'
 
 import type { Verbosity } from './db.ts'
 
-// Bot messages never show link previews. Only messages that need the user
+// Bot messages hide link previews (session output: see embedFlags). Only messages that need the user
 // (errors, prompts, the end of a turn) skip SuppressNotifications.
 export const SILENT_MESSAGE_FLAGS = MessageFlags.SuppressEmbeds | MessageFlags.SuppressNotifications
 export const NOTIFY_MESSAGE_FLAGS = MessageFlags.SuppressEmbeds
+
+// Discord CDN links (attachments from other threads, avatars, emojis) only
+// show the media through their embed. Signed attachment URLs (?ex=&is=&hm=)
+// are refreshed by the Discord client, so old ones still render.
+// https://docs.discord.com/developers/reference#signed-attachment-cdn-urls
+export const DISCORD_MEDIA_URL = /https:\/\/(?:cdn\.discordapp\.com|media\.discordapp\.net)\/\S/
+
+// Session output hides link previews, except in messages with Discord media.
+export function embedFlags(content: string | undefined): MessageFlags.SuppressEmbeds | 0 {
+  return content && DISCORD_MEDIA_URL.test(content) ? 0 : MessageFlags.SuppressEmbeds
+}
 
 export function asSubtext(text: string): string {
   return `-# ${text}`

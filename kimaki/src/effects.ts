@@ -25,7 +25,7 @@ import {
   type SendableChannels,
 } from 'discord.js'
 
-import { formatFooter, NOTIFY_MESSAGE_FLAGS, SILENT_MESSAGE_FLAGS, type UiMessage } from './format-parts.ts'
+import { DISCORD_MEDIA_URL, embedFlags, formatFooter, SILENT_MESSAGE_FLAGS, type UiMessage } from './format-parts.ts'
 import { createLogger } from './logger.ts'
 import { markdownPayloads, segmentPayloads, type DiscordPayload } from './markdown/components.ts'
 import { DISCORD_TEXT_LIMIT, renderMarkdown } from './markdown/render-markdown.ts'
@@ -169,7 +169,7 @@ export function createEffectsRunner({ discord, markViewed }: { discord: Client; 
     if (lifecycle.closed) return null
     const channel = await sendableChannel(threadId)
     if (!channel || lifecycle.closed) return null
-    const flags = (options.flags ?? 0) | (notify ? NOTIFY_MESSAGE_FLAGS : SILENT_MESSAGE_FLAGS)
+    const flags = (options.flags ?? 0) | embedFlags(options.content) | (notify ? 0 : MessageFlags.SuppressNotifications)
     const sent = await channel.send({ ...options, flags, allowedMentions: { parse: mentions ? ['users'] : [] } }).catch((e: Error) => e)
     if (!(sent instanceof Error)) return sent.id
     logger.error(`send failed in ${threadId}`, sent)
@@ -194,7 +194,7 @@ export function createEffectsRunner({ discord, markViewed }: { discord: Client; 
 
   async function edit({ channel, messageId, message }: { channel: SendableChannels; messageId: string; message: UiMessage }) {
     const edited = await channel.messages
-      .edit(messageId, { content: message.content, components: [...message.components] })
+      .edit(messageId, { content: message.content, components: [...message.components], flags: DISCORD_MEDIA_URL.test(message.content) ? [] : MessageFlags.SuppressEmbeds })
       .catch((e: Error) => e)
     if (edited instanceof Error) logger.warn(`edit of ${messageId} failed`, edited)
   }
@@ -273,7 +273,9 @@ export function createEffectsRunner({ discord, markViewed }: { discord: Client; 
     const live = () => thread.generation === generation
     // A merged message notifies when any of its lines does. Echoes and
     // bot lines never merge, so an echo never pings and a bot line can.
-    let lines: { text: string; notify: boolean; mentions: boolean } | null = null
+    // Lines with Discord media only merge with each other: their message
+    // shows embeds, so other links merged in would unfurl too.
+    let lines: { text: string; notify: boolean; mentions: boolean; media: boolean } | null = null
     const flush = async () => {
       const pending = lines
       lines = null
@@ -302,13 +304,14 @@ export function createEffectsRunner({ discord, markViewed }: { discord: Client; 
         await refreshTyping(threadId)
         continue
       }
+      const media = DISCORD_MEDIA_URL.test(text)
       const joined: string | null = lines === null ? null : `${lines.text}\n${text}`
-      if (lines !== null && joined !== null && lines.mentions === mentions && joined.length <= DISCORD_TEXT_LIMIT) {
-        lines = { text: joined, notify: lines.notify || notify, mentions }
+      if (lines !== null && joined !== null && lines.mentions === mentions && lines.media === media && joined.length <= DISCORD_TEXT_LIMIT) {
+        lines = { text: joined, notify: lines.notify || notify, mentions, media }
         continue
       }
       await flush()
-      lines = { text, notify, mentions }
+      lines = { text, notify, mentions, media }
     }
     await flush()
   }
