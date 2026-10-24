@@ -307,10 +307,10 @@ export function allMessages({ client, sessionId, type }: { client: OpenCodeClien
   })
 }
 
-export function allSessions({ client, directory }: { client: OpenCodeClient; directory?: string }) {
+export function allSessions({ client, project }: { client: OpenCodeClient; project?: string }) {
   return collectPages({
     operation: 'session.list',
-    page: (cursor) => client.session.list({ directory, limit: 200, ...(cursor ? { cursor } : { order: 'desc' as const }) }),
+    page: (cursor) => client.session.list({ project, limit: 200, ...(cursor ? { cursor } : { order: 'desc' as const }) }),
   })
 }
 

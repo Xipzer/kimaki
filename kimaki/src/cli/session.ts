@@ -44,8 +44,11 @@ export function registerSessionQueryCommands(cli: Goke) {
       const errorCode = options.active ? 64 : 1
       const client = await readClient(errorCode)
       const directory = options.all ? undefined : await projectDirectory({ project: options.project, channel: undefined, dataDir: options.dataDir })
+      // By project ID, not directory: sessions in linked worktrees of the same clone belong to the project too.
+      const location = directory ? await client.location.get({ location: { directory } }).catch((error: Error) => error) : undefined
+      if (location instanceof Error) fail(location, errorCode)
       const [sessions, active, forms, permissions] = await Promise.all([
-        allSessions({ client, directory }),
+        allSessions({ client, project: location?.project.id }),
         client.session.active().catch((error: Error) => error),
         client.form.list().catch((error: Error) => error),
         client.permission.request.list().catch((error: Error) => error),
