@@ -28,7 +28,7 @@
     "@opencode/plugin": "2.0.29",
     "@opentunnel/client": "0.6.0",
     "@resvg/resvg-js": "^2.6.2",
-    "@strada.sh/sdk": "^0.8.0",
+    "@strada.sh/sdk": "^0.10.0",
     "cron-parser": "^5.5.0",
     "discord-api-types": "^0.38.40",
     "discord.js": "^14.26.3",

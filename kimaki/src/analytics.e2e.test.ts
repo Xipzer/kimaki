@@ -42,7 +42,7 @@ beforeAll(async () => {
     const chunks: Buffer[] = []
     request.on('data', (chunk: Buffer) => chunks.push(chunk))
     request.on('end', () => {
-      if (request.url === '/v1/logs') {
+      if (request.url === '/v1/batch') {
         const body = JSON.parse(Buffer.concat(chunks).toString('utf8')) as OtlpLogs
         for (const record of body.resourceLogs.flatMap((logs) => logs.scopeLogs.flatMap((scope) => scope.logRecords))) {
           received.push(Object.fromEntries(record.attributes.map(({ key, value }) => [key, value.stringValue ?? value.boolValue ?? value.doubleValue ?? Number(value.intValue)])))
