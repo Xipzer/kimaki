@@ -18,9 +18,8 @@ import type { Draft } from 'immer'
 import type { Bot } from './bot.ts'
 import { asSubtext, textOnly } from './format-parts.ts'
 import { stripTurnContext } from './system-prompt.ts'
+import { DISCORD_TEXT_LIMIT } from './markdown/render-markdown.ts'
 import type { Emit, ThreadView } from './thread-reducer.ts'
-
-const ECHO_LIMIT = 1_900
 
 // A root inbox user item not delivered yet, in inbox order.
 export type PendingInput = {
@@ -66,9 +65,15 @@ function inputFields(payload: { text: string; metadata?: { readonly [key: string
   }
 }
 
+// The full prompt. A long one becomes several messages (effects.ts).
 export function formatEcho({ username, text }: { username: string | null; text: string }): string {
-  const body = text.length > ECHO_LIMIT ? `${text.slice(0, ECHO_LIMIT - 1)}…` : text
-  return `» **${username ?? 'queued'}:** ${body}`
+  return `» **${username ?? 'queued'}:** ${text}`
+}
+
+// A reply that stands in for the user message is one Discord message: long text is cut.
+export function formatEchoReply(input: { username: string | null; text: string }): string {
+  const echo = formatEcho(input)
+  return echo.length > DISCORD_TEXT_LIMIT ? `${echo.slice(0, DISCORD_TEXT_LIMIT - 1)}…` : echo
 }
 
 type Slice = { draft: Draft<ThreadView>; emit: Emit }
@@ -101,7 +106,7 @@ export function enqueueInput(
   draft.inbox.push({ inboxID, delivery: item.delivery, ...meta, acked })
   if (item.delivery !== 'queue') {
     if (!meta.echo) return
-    emit({ type: 'send', text: meta.echo })
+    emit({ type: 'send', text: meta.echo, echo: true })
     draft.lastKind = null
     return
   }
@@ -115,7 +120,7 @@ export function deliverQueued(slice: Slice & { inboxID: string }) {
   const item = takeQueued(slice, slice.inboxID)
   if (!item || (!item.acked && !item.echo)) return
   closeAck(slice, item, 'Queued message sent')
-  slice.emit({ type: 'send', text: item.echo ?? formatEcho(item) })
+  slice.emit({ type: 'send', text: item.echo ?? formatEcho(item), echo: true })
   slice.draft.lastKind = null
 }
 

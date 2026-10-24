@@ -133,7 +133,8 @@ export type UploadFile = { path: string; name: string; size: number }
 export type Effect =
   // Bot-formatted Discord content (tool lines, banner, errors).
   // Effects are silent unless `notify` is set (format-parts.ts message flags).
-  | { type: 'send'; text: string; notify?: boolean }
+  // `echo`: user text (a prompt echo), posted with mentions disabled.
+  | { type: 'send'; text: string; notify?: boolean; echo?: boolean }
   // Model markdown, rendered and split by the executor.
   | { type: 'markdown'; text: string; blankLineBefore: boolean }
   | { type: 'typing'; on: boolean }

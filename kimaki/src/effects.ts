@@ -27,7 +27,7 @@ import {
 
 import { formatFooter, NOTIFY_MESSAGE_FLAGS, SILENT_MESSAGE_FLAGS, type UiMessage } from './format-parts.ts'
 import { createLogger } from './logger.ts'
-import { segmentPayloads, type DiscordPayload } from './markdown/components.ts'
+import { markdownPayloads, segmentPayloads, type DiscordPayload } from './markdown/components.ts'
 import { DISCORD_TEXT_LIMIT, renderMarkdown } from './markdown/render-markdown.ts'
 import { DiscordError } from './errors.ts'
 import type { Effect, UploadFile } from './thread-reducer.ts'
@@ -164,12 +164,13 @@ export function createEffectsRunner({ discord, markViewed }: { discord: Client; 
     thread.typing = null
   }
 
-  async function post({ threadId, options, notify }: { threadId: string; options: PostOptions; notify: boolean }) {
+  // `mentions: false` for user text (prompt echoes): it must never ping.
+  async function post({ threadId, options, notify, mentions = true }: { threadId: string; options: PostOptions; notify: boolean; mentions?: boolean }) {
     if (lifecycle.closed) return null
     const channel = await sendableChannel(threadId)
     if (!channel || lifecycle.closed) return null
     const flags = (options.flags ?? 0) | (notify ? NOTIFY_MESSAGE_FLAGS : SILENT_MESSAGE_FLAGS)
-    const sent = await channel.send({ ...options, flags, allowedMentions: { parse: ['users'] } }).catch((e: Error) => e)
+    const sent = await channel.send({ ...options, flags, allowedMentions: { parse: mentions ? ['users'] : [] } }).catch((e: Error) => e)
     if (!(sent instanceof Error)) return sent.id
     logger.error(`send failed in ${threadId}`, sent)
     return null
@@ -270,13 +271,14 @@ export function createEffectsRunner({ discord, markViewed }: { discord: Client; 
     const thread = worker(threadId)
     const generation = thread.generation
     const live = () => thread.generation === generation
-    // A merged message notifies when any of its lines does.
-    let lines: { text: string; notify: boolean } | null = null
+    // A merged message notifies when any of its lines does. Echoes and
+    // bot lines never merge, so an echo never pings and a bot line can.
+    let lines: { text: string; notify: boolean; mentions: boolean } | null = null
     const flush = async () => {
       const pending = lines
       lines = null
       if (pending === null || !live()) return
-      await post({ threadId, options: { content: pending.text }, notify: pending.notify })
+      await post({ threadId, options: { content: pending.text }, notify: pending.notify, mentions: pending.mentions })
       await refreshTyping(threadId)
     }
     for (const [index, effect] of batch.entries()) {
@@ -289,13 +291,24 @@ export function createEffectsRunner({ discord, markViewed }: { discord: Client; 
       }
       const text = effect.type === 'send' ? effect.text : await footerText(effect)
       const notify = effect.notify === true
+      const mentions = !(effect.type === 'send' && effect.echo)
+      // A line over the limit (a long prompt echo) is split like model markdown.
+      if (text.length > DISCORD_TEXT_LIMIT) {
+        await flush()
+        for (const payload of markdownPayloads(text)) {
+          if (!live()) return drop(batch.slice(index + 1))
+          await post({ threadId, options: payload, notify, mentions })
+        }
+        await refreshTyping(threadId)
+        continue
+      }
       const joined: string | null = lines === null ? null : `${lines.text}\n${text}`
-      if (lines !== null && joined !== null && joined.length <= DISCORD_TEXT_LIMIT) {
-        lines = { text: joined, notify: lines.notify || notify }
+      if (lines !== null && joined !== null && lines.mentions === mentions && joined.length <= DISCORD_TEXT_LIMIT) {
+        lines = { text: joined, notify: lines.notify || notify, mentions }
         continue
       }
       await flush()
-      lines = { text, notify }
+      lines = { text, notify, mentions }
     }
     await flush()
   }

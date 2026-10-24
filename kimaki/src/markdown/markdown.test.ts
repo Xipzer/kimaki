@@ -344,10 +344,10 @@ test('long paragraph splits by sentences, tight paragraph-list spacing is kept',
   const text = `Steps:\n- one\n- two\n\n${sentence.repeat(30)}`
   expect(renderMarkdown(text, { limit: 500 }).map((segment) => segment.kind === 'text' && segment.markdown.length)).toMatchInlineSnapshot(`
     [
-      499,
-      479,
-      479,
-      479,
+      500,
+      480,
+      480,
+      480,
       480,
     ]
   `)

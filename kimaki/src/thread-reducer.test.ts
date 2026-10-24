@@ -13,6 +13,7 @@ test('text-only turn: banner, text, typing, footer with context percent', () => 
   expect(effects).toMatchInlineSnapshot(`
     [
       {
+        "echo": true,
         "text": "» **user:** Do these steps with tools, one by one: 1) run \`ls cli/src | head -5\` with bash, 2) write a file tmp-events/hello.txt containing "hello", 3) edit that file to replace hello with "hello world", 4) glob for **/*.txt under tmp-events, 5) read the file. Then reply with one short line.",
         "type": "send",
       },
@@ -107,6 +108,7 @@ test('execution failure shows the error and no footer, interrupt shows nothing',
   expect(replay({ events, view }).effects).toMatchInlineSnapshot(`
     [
       {
+        "echo": true,
         "text": "» **user:** Run \`sleep 30 && echo never\` with bash, then summarize.",
         "type": "send",
       },
@@ -128,6 +130,7 @@ test('execution failure shows the error and no footer, interrupt shows nothing',
         "type": "viewed",
       },
       {
+        "echo": true,
         "text": "» **user:** Say only: resumed after abort.",
         "type": "send",
       },
