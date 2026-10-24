@@ -10,7 +10,7 @@ import { setTimeout as sleep } from 'node:timers/promises'
 import dedent from 'string-dedent'
 import { wrapJsonSchema, type Goke } from 'goke'
 
-import { distCliEntry, writeAutostartScript } from '../autostart.ts'
+import { distCliEntry, stableNodePath, writeAutostartScript } from '../autostart.ts'
 import { parseDisabledPromptSections, parseDisabledSkills, PROMPT_SECTIONS } from '../builtin-skills.ts'
 import { callBot, DEFAULT_LOCK_PORT, RESTART_EXIT_CODE, startLockServer } from '../lock-server.ts'
 import { parseDuration } from '../duration.ts'
@@ -59,8 +59,10 @@ async function supervise(): Promise<never> {
   for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) {
     process.on(signal, () => state.child?.kill('SIGTERM'))
   }
+  // Resolved before any Node upgrade: `kimaki restart` must not spawn the deleted binary.
+  const node = stableNodePath()
   while (true) {
-    const child = spawn(process.execPath, [...process.execArgv, ...process.argv.slice(1)], {
+    const child = spawn(node, [...process.execArgv, ...process.argv.slice(1)], {
       stdio: ['inherit', 'inherit', 'inherit', 'ipc'],
       env: { ...process.env, KIMAKI_SUPERVISED: '1' },
     })
@@ -201,10 +203,11 @@ export function registerStartCommand(cli: Goke) {
       // The agent calls this same install. Prefer the built dist entry, so agent
       // commands skip the tsx loader also when the bot runs from src.
       const distCli = distCliEntry()
+      const node = stableNodePath()
       const kimaki = kimakiShellCommand({
         command: fs.existsSync(distCli)
-          ? [process.execPath, distCli]
-          : [process.execPath, ...process.execArgv, process.argv[1] ?? 'kimaki'],
+          ? [node, distCli]
+          : [node, ...process.execArgv, process.argv[1] ?? 'kimaki'],
       })
 
       const bot = await startBot({
