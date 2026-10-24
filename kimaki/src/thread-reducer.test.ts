@@ -56,6 +56,26 @@ test('text-only turn: banner, text, typing, footer with context percent', () => 
   expect(view.turn).toBe(null)
 })
 
+test('a turn that posts nothing visible ends without a footer', () => {
+  const events = loadFixture('tools.events.jsonl')
+  // Read-only tools are hidden at the default verbosity.
+  const hiddenTools = new Set(events.flatMap((event) => (event.type === 'session.tool.input.started' && ['read', 'glob'].includes(event.data.name) ? [event.data.id] : [])))
+  const quiet = events.filter((event) => {
+    if (event.type.startsWith('session.text.')) return false
+    if (!event.type.startsWith('session.tool.')) return true
+    const data: { readonly [key: string]: JsonValue | undefined } = event.data
+    return typeof data['id'] === 'string' && hiddenTools.has(data['id'])
+  })
+  const footers = (input: ThreadEvent[]) => replay({ events: input }).effects.filter((effect) => effect.type === 'footer').length
+  expect(hiddenTools.size).toBe(2)
+  expect({ quiet: footers(quiet), normal: footers(events) }).toMatchInlineSnapshot(`
+    {
+      "normal": 1,
+      "quiet": 0,
+    }
+  `)
+})
+
 test('kimaki sleep in a turn makes its footer silent, the next turn notifies again', () => {
   const turn = loadFixture('tools.events.jsonl').filter((event) => !event.type.startsWith('session.tool.'))
   const end = turn.findIndex((event) => event.type === 'session.execution.succeeded')

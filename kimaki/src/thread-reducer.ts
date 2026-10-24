@@ -109,7 +109,7 @@ export type ThreadView = {
   children: Readonly<Record<string, Child>>
   // Background shells started by tool calls: shell ID -> label, until their job ends.
   shells: Readonly<Record<string, string>>
-  // Blank line between text and tool blocks.
+  // Blank line between text and tool blocks. null: the current answer posted nothing yet (no footer).
   lastKind: 'text' | 'tool' | null
   lastRetryAt: number | null
   // Prompt tokens the provider holds in cache after the last root step, and when that step ended.
@@ -121,7 +121,7 @@ export type ThreadView = {
   // Kimaki runs an OpenCode command (kimaki.command): the next root user item
   // without Discord metadata is its expanded prompt, shown as the typed command.
   commandPending: { text: string; username: string } | null
-  // The plugin asked the idle mainmast for work (plugin/mainmast.ts): a turn that posts nothing ends without a footer.
+  // The plugin asked the idle mainmast for work (plugin/mainmast.ts): its IDLE_REPLY text is hidden.
   idleNudge: boolean
   // Questions and permission requests waiting for the user (root and children).
   forms: Readonly<Record<string, PendingForm>>
@@ -297,6 +297,8 @@ function contextPercent({ tokens, model, prefs }: { tokens: number; model: Model
 function emitFooter({ draft, prefs, emit, turn, at, notify }: Context & { turn: Draft<Turn>; at: number; notify: boolean }) {
   // No model step ran (a compaction-only execution): nothing to summarize.
   if (!turn.model) return
+  // The answer posted no text or tool line (e.g. an idle nudge's IDLE_REPLY, only hidden tools).
+  if (draft.lastKind === null) return
   // A child still runs: the answer comes later.
   if (Object.values(draft.children).some((child) => child.running)) return
   emit({
@@ -433,13 +435,10 @@ function applyRoot(context: Context & { event: V2Event }) {
     case 'session.execution.succeeded': {
       // `/compact` alone: no step reads the new context in this execution.
       if (draft.compacted) showCompacted(context, { tokens: null, percent: null })
-      const turn = draft.turn
-      // An idle nudge that posted nothing: no footer either.
-      const silent = draft.idleNudge && draft.lastKind === null
+      if (draft.turn) emitFooter({ ...context, turn: draft.turn, at: event.created, notify: !draft.turn.slept })
       draft.turn = null
       draft.lastKind = null
       draft.idleNudge = false
-      if (turn && !silent) emitFooter({ ...context, turn, at: event.created, notify: !turn.slept })
       emit({ type: 'viewed', sessionId: draft.sessionId, idle: event.created })
       return
     }
