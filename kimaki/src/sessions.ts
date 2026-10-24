@@ -347,6 +347,7 @@ export async function startSession(
     directory: requestedDirectory,
     route,
     author,
+    members = [],
     messageId,
     startMessageId = messageId,
     showInput = startMessageId === null,
@@ -365,6 +366,8 @@ export async function startSession(
     // The first input: a prompt, a shell command or an OpenCode command.
     route: Exclude<Route, { kind: 'btw' | 'new-session' | 'queue' }>
     author: Author
+    // More Discord users to add to the thread, next to the author (`kimaki send --user`).
+    members?: readonly string[]
     // The Discord message this input came from; it keys the prompt id.
     messageId: string
     // The thread starts from this message; null for a thread without one.
@@ -407,8 +410,11 @@ export async function startSession(
       .create({ name: threadName, autoArchiveDuration: 1440, ...(startMessageId && { startMessage: startMessageId }) })
       .catch((cause) => new DiscordError({ operation: 'create thread', cause }))
     if (thread instanceof Error) return thread
-    // Discord only adds the thread creator (the bot); the user must be added to see it in the sidebar.
-    if (author.id !== bot.discord.user?.id) await thread.members.add(author.id).catch((e: Error) => logger.warn(`add member`, e))
+    // Discord only adds the thread creator (the bot); users must be added to see it in the sidebar.
+    // Not awaited: the session does not need them, and each add is a Discord round trip.
+    for (const id of new Set([author.id, ...members])) {
+      if (id !== bot.discord.user?.id) void thread.members.add(id).catch((e: Error) => logger.warn(`add member ${id}`, e))
+    }
     return { channel, thread }
   })()
   const setup = await (async () => {
@@ -480,23 +486,16 @@ export async function startSession(
   if (showInput) {
     const names = files.map((file) => file.name).join(', ')
     const shown = names ? `${text}\nFiles: ${names}` : text
-    const echo = await thread
-      .send({ content: formatEcho({ username: author.username, text: shown }), allowedMentions: { parse: [] }, flags: SILENT_MESSAGE_FLAGS })
-      .catch((cause) => new DiscordError({ operation: 'send first input', cause }))
-    if (echo instanceof Error) return echo
+    // Through the thread's effect queue, so the prompt does not wait for Discord,
+    // the echo comes before the session output and a long prompt is split.
+    bot.effects.run(thread.id, [{ type: 'send', text: formatEcho({ username: author.username, text: shown }), echo: true }])
   }
 
-  const first = route.kind === 'steer' ? { kind: 'steer' as const, text: route.text } : route
-  const sent = await runInSession(bot, {
-    sessionId: session.id,
-    threadId: thread.id,
-    threadName,
-    directory,
-    route: first,
-    author,
-    messageId,
-    files,
-  })
+  const base = { sessionId: session.id, threadId: thread.id, threadName, author, messageId, files }
+  // A new session has no run, question or permission to cancel: prompt directly instead of steer().
+  const sent = route.kind === 'steer'
+    ? await prompt(bot, { ...base, text: route.text, delivery: 'steer' })
+    : await runInSession(bot, { ...base, directory, route })
   if (sent instanceof Error) return sent
   return { threadId: thread.id, sessionId: session.id }
 }
