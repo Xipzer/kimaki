@@ -135,24 +135,67 @@ function renderMessage(message: Message, options: { thinking?: boolean; verbose?
   return `${header}\n\n${parts.join('\n\n')}${finish}`
 }
 
+// The text of the last assistant message that has text, like OpenCode's
+// subagent completion (session/subagent-completion.ts). Oldest-first input.
+export function finalAnswer(messages: readonly Message[]): string | null {
+  for (const message of [...messages].reverse()) {
+    if (message.type === 'user') return null
+    if (message.type !== 'assistant') continue
+    const text = message.content.flatMap((part) => (part.type === 'text' && part.text.trim() ? [part.text.trim()] : [])).join('\n\n')
+    if (text) return text
+  }
+  return null
+}
+
+// Inputs and the final answer of each turn, no tool calls: what agents read most often.
+function renderAnswers({ session, messages }: { session: Pick<Session, 'id' | 'title' | 'location'>; messages: Message[] }): string {
+  const title = `# ${session.title} (${session.id})\n\ndirectory: ${session.location.directory}`
+  const blocks: string[] = []
+  let turn: Message[] = []
+  const flush = () => {
+    const answer = finalAnswer(turn)
+    const last = turn.findLast((message) => message.type === 'assistant')
+    if (answer && last?.type === 'assistant') blocks.push(`## assistant ${new Date(last.time.created).toISOString()} (${last.agent}, ${last.model.providerID}/${last.model.id})\n\n${answer}`)
+    turn = []
+  }
+  for (const message of messages) {
+    if (message.type === 'assistant') {
+      turn.push(message)
+      continue
+    }
+    flush()
+    if (message.type === 'user' || message.type === 'synthetic') blocks.push(`## ${message.type} ${new Date(message.time.created).toISOString()}\n\n${message.text}`)
+    if (message.type === 'compaction' && message.status !== 'failed') blocks.push(`## compaction ${new Date(message.time.created).toISOString()}\n\n${message.summary}`)
+  }
+  // A turn without an answer yet (running, or waiting on a question): show its tool calls.
+  if (turn.length > 0 && !finalAnswer(turn)) blocks.push(...turn.map((message) => renderMessage(message, {})))
+  else flush()
+  const more = `Only prompts and final answers are shown. Every tool call: kimaki session read ${session.id} --full`
+  return [title, ...blocks, more].join('\n\n')
+}
+
 // Oldest first, as markdown. OpenCode returns the newest first.
+// Default: prompts and final answers. `full`: every message with tool calls.
 export async function readSessionMarkdown({
   client,
   sessionId,
+  full,
   thinking,
   verbose,
 }: {
   client: OpenCodeClient
   sessionId: string
+  full?: boolean
   thinking?: boolean
   verbose?: boolean
 }): Promise<OpenCodeError | string> {
-  const session = await client.session
-    .get({ sessionID: sessionId })
-    .catch((e) => new OpenCodeError({ operation: 'session.get', cause: e }))
+  const [session, messages] = await Promise.all([
+    client.session.get({ sessionID: sessionId }).catch((e) => new OpenCodeError({ operation: 'session.get', cause: e })),
+    allMessages({ client, sessionId }),
+  ])
   if (session instanceof Error) return session
-  const messages = await allMessages({ client, sessionId })
   if (messages instanceof Error) return messages
+  if (!full && !thinking && !verbose) return renderAnswers({ session, messages })
   return renderSession({ session, messages, thinking, verbose })
 }
 

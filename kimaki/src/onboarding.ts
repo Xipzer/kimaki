@@ -26,7 +26,7 @@ import { NOTIFY_MESSAGE_FLAGS } from './format-parts.ts'
 import { createLogger } from './logger.ts'
 import { checkOpencode, findOpencodeBinary, installedOpencodeBinary, OPENCODE_INSTALL_COMMAND } from './opencode-server.ts'
 import type { Bot } from './bot.ts'
-import { startSession } from './sessions.ts'
+import { startMainmast, startSession } from './sessions.ts'
 import { addProjectChannel, defaultChannelName, defaultProjectDirectory } from './project.ts'
 
 const logger = createLogger('ONBOARD')
@@ -269,8 +269,8 @@ export async function runOnboarding({
   const welcome = await textChannel
     .send({
       content: dedent`
-        **Kimaki** lets you code from Discord. Each project channel is linked to a folder on your computer. A message there starts an AI coding session in that folder.
-        Reply in the thread below to add channels for your projects. <@${owner.id}>
+        **Kimaki** lets you code from Discord. Each project channel is linked to a folder on your computer. ${bot.mainmast ? 'Write in the channel: one long session answers there and starts threads for the work.' : 'A message there starts an AI coding session in that folder.'}
+        Reply ${bot.mainmast ? 'here' : 'in the thread below'} to add channels for your projects. <@${owner.id}>
       `,
       allowedMentions: { users: [owner.id] },
       flags: NOTIFY_MESSAGE_FLAGS,
@@ -278,15 +278,11 @@ export async function runOnboarding({
     .catch((e) => new DiscordError({ operation: 'send welcome message', cause: e }))
   if (welcome instanceof Error) return welcome
 
-  const session = await startSession(bot, {
-    channelId: channel.channelId,
-    directory,
-    route: { kind: 'steer', text: onboardingPrompt({ kimaki }) },
-    author: { id: owner.id, username: owner.user.username },
-    messageId: welcome.id,
-    threadName: 'Kimaki onboarding',
-    worktree: false,
-  })
+  const author = { id: owner.id, username: owner.user.username }
+  const route = { kind: 'steer' as const, text: onboardingPrompt({ kimaki }) }
+  const session = bot.mainmast
+    ? await startMainmast(bot, { channel: textChannel, route, author, messageId: welcome.id })
+    : await startSession(bot, { channelId: channel.channelId, directory, route, author, messageId: welcome.id, threadName: 'Kimaki onboarding', worktree: false })
   if (session instanceof Error) {
     // Leaves the channel empty, so the next start onboards again.
     await welcome.delete().catch((e) => logger.warn('delete welcome message', e))

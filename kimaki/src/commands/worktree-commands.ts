@@ -7,9 +7,9 @@
 //   /merge-worktree            ─▶ mergeWorktree, refused while a session runs there
 
 import crypto from 'node:crypto'
-import { ButtonStyle, ComponentType, SlashCommandBuilder, type ButtonInteraction, type ChatInputCommandInteraction, type ThreadChannel } from 'discord.js'
+import { ButtonStyle, ComponentType, SlashCommandBuilder, type ButtonInteraction, type ChatInputCommandInteraction } from 'discord.js'
 
-import { oc, projectOf, rootSession, sessionDirectory, type Author, type Bot } from '../bot.ts'
+import { oc, projectOf, rootSession, sessionDirectory, type Author, type Bot, type Conversation } from '../bot.ts'
 import { ConfigError, DbError } from '../errors.ts'
 import { canonicalPath } from '../file-edit-log.ts'
 import * as schema from '../schema.ts'
@@ -35,15 +35,15 @@ const identity = (tree: GitWorktree) => crypto.createHash('sha256').update(`${tr
 // A new session in a fresh checkout. In a thread the session is a fork, so it keeps the context.
 export async function newWorktree(
   bot: Bot,
-  { channelId, sourceThread, name, baseBranch, author }: { channelId: string; sourceThread?: ThreadChannel; name?: string; baseBranch?: string; author: Author },
+  { channelId, source, name, baseBranch, author }: { channelId: string; source?: Conversation; name?: string; baseBranch?: string; author: Author },
 ) {
   const slug = name || `session-${crypto.randomBytes(4).toString('hex')}`
   const valid = worktreeName(slug)
   if (valid instanceof Error) return valid
-  if (sourceThread) {
-    const sessionId = rootSession(bot, sourceThread.id)
+  if (source) {
+    const sessionId = rootSession(bot, source.id)
     if (sessionId instanceof Error) return sessionId
-    return fork(bot, { sourceThread, sessionId, author, name: slug, worktree: { name: slug, baseBranch } })
+    return fork(bot, { source, sessionId, author, name: slug, worktree: { name: slug, baseBranch } })
   }
   const project = await projectOf(bot, channelId)
   if (project instanceof Error) return project
@@ -167,8 +167,8 @@ async function deferredTarget(bot: Bot, interaction: ChatInputCommandInteraction
 async function cwdCommand(bot: Bot, interaction: ChatInputCommandInteraction) {
   const target = await deferredTarget(bot, interaction)
   if (!target) return
-  if (!target.thread || !target.sessionId) return replyError(interaction, new ConfigError({ reason: 'Use /cwd in a session thread.' }))
-  const result = await sessionCwd(bot, { thread: target.thread, directory: interaction.options.getString('path') ?? undefined })
+  if (!target.conversation || !target.sessionId) return replyError(interaction, new ConfigError({ reason: 'Use /cwd in a session thread.' }))
+  const result = await sessionCwd(bot, { conversation: target.conversation, directory: interaction.options.getString('path') ?? undefined })
   if (result instanceof Error) return replyError(interaction, result)
   const content = result.requestedDirectory ? `Directory change requested: \`${result.requestedDirectory}\`` : `Working directory: \`${result.directory}\``
   return interaction.editReply({ content })
@@ -187,7 +187,8 @@ async function newWorktreeCommand(bot: Bot, interaction: ChatInputCommandInterac
   if (!target) return
   const result = await newWorktree(bot, {
     channelId: target.channelId,
-    sourceThread: target.thread ?? undefined,
+    // In a mainmast channel a new worktree is a fresh session, not a fork of the mainmast.
+    source: target.conversation?.isThread() ? target.conversation : undefined,
     name: interaction.options.getString('name') ?? undefined,
     baseBranch: interaction.options.getString('base-branch') ?? undefined,
     author: authorOf(interaction),

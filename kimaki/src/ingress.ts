@@ -17,6 +17,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 import {
+  ChannelType,
   Events,
   GuildMember,
   MessageFlags,
@@ -35,7 +36,7 @@ import { cancelQueuedPrompt, dispatch, requeueEdited, send } from './prompt.ts'
 import { REMOTE_PROMPT_FILE, REMOTE_RESULT_PREFIX, REMOTE_SEND_PREFIX } from './remote-send.ts'
 import { formatEcho, queuedItemFor } from './queue.ts'
 import { parseTextMessage, type Route } from './routes.ts'
-import { primaryAgents, startSession } from './sessions.ts'
+import { primaryAgents, startMainmast, startSession } from './sessions.ts'
 import { isVoiceAttachment, parseVoiceMessage, transcribe, voiceMediaType, type AttachmentLike } from './voice.ts'
 
 const logger = createLogger('INGRESS')
@@ -232,7 +233,8 @@ async function handleMessage(bot: Bot, message: Message) {
     logger.log(`ignoring ${message.author.username}: no Kimaki permission`)
     return
   }
-  const sessionId = thread ? bot.store.getState().roots[thread.id] : undefined
+  // A mainmast channel has its root session under the channel ID.
+  const sessionId = bot.store.getState().roots[thread?.id ?? (bot.mainmast ? channelId : '')]
   if (thread && !sessionId) return
   const author = { id: message.author.id, username: message.author.username }
   const reportError = async (error: Error) => {
@@ -259,8 +261,29 @@ async function handleMessage(bot: Bot, message: Message) {
   const attached = files.length > 0 ? `, ${files.length} file(s)` : ''
   logger.log(`${route.kind}${detail} from ${author.username} in ${thread ? `thread ${thread.id}` : `channel ${channelId}`}${attached}`)
   // The transcription is not visible anywhere else.
-  if (voice && thread && route.kind !== 'shell' && route.kind !== 'command' && route.kind !== 'skill') {
+  if (voice && (thread || bot.mainmast) && route.kind !== 'shell' && route.kind !== 'command' && route.kind !== 'skill') {
     await message.reply({ content: formatEcho({ username: author.username, text: route.text }), allowedMentions: { parse: [] }, flags: SILENT_MESSAGE_FLAGS })
+  }
+
+  // Mainmast: the channel is the conversation of one long session.
+  if (!thread && bot.mainmast && channel.type === ChannelType.GuildText) {
+    const result = bot.store.getState().roots[channel.id]
+      ? await dispatch(bot, { conversation: channel, route, author, messageId: message.id, files })
+      : route.kind === 'new-session'
+        ? await startSession(bot, { channelId, directory: project.directory, route: { kind: 'steer', text: route.text, ...(route.agent && { agent: route.agent }) }, author, messageId: message.id, startMessageId: null, files })
+        : await startMainmast(bot, {
+            channel,
+            // Queue and btw need a session to wait for or fork from: the first input is a plain prompt.
+            route: route.kind === 'shell' || route.kind === 'command' || route.kind === 'skill' || route.kind === 'steer' ? route : { kind: 'steer', text: route.text },
+            author,
+            messageId: message.id,
+            files,
+          })
+    if (result instanceof Error) return reportError(result)
+    if (!result || result.threadId === channel.id) return
+    const note = route.kind === 'btw' ? `Session forked! Continue in <#${result.threadId}>` : `Started a new session in <#${result.threadId}>`
+    await message.reply({ content: note, allowedMentions: { repliedUser: false }, flags: SILENT_MESSAGE_FLAGS }).catch(() => undefined)
+    return
   }
 
   if (!thread) {
@@ -280,7 +303,7 @@ async function handleMessage(bot: Bot, message: Message) {
     return
   }
 
-  const result = await dispatch(bot, { thread, route, author, messageId: message.id, files })
+  const result = await dispatch(bot, { conversation: thread, route, author, messageId: message.id, files })
   if (result instanceof Error) return reportError(result)
   if (!result) return
   const note =

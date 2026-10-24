@@ -15,13 +15,14 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import crypto from 'node:crypto'
-import { Events, MessageFlags, type Message, type ThreadChannel } from 'discord.js'
+import { Events, MessageFlags, type Message } from 'discord.js'
 import * as errore from 'errore'
 
 import {
-  fetchThread,
+  fetchConversation,
   oc,
   parseModel,
+  projectChannelOf,
   projectOf,
   rootSession,
   routeText,
@@ -29,6 +30,7 @@ import {
   threadOfSession,
   type Author,
   type Bot,
+  type Conversation,
   type ModelChoice,
   type PromptFile,
 } from './bot.ts'
@@ -41,7 +43,7 @@ import { formatEcho } from './queue.ts'
 import { noAnswerError, parseRemoteResult, remoteEnvelope, promptFilePath, REMOTE_TIMEOUT_MS, type RemoteResult } from './remote-send.ts'
 import { parseTextMessage, type Route } from './routes.ts'
 import { allMessages } from './session-events.ts'
-import { ensureSessionMarker, forkBtw, startSession, switchAgent, threadProject } from './sessions.ts'
+import { ensureSessionMarker, forkBtw, startSession, switchAgent, conversationProject } from './sessions.ts'
 import { cancelSleep } from './sleeps.ts'
 import type { ScheduledRun } from './system-prompt.ts'
 import { attachmentsBlock, type PromptAttachment, type TurnContext } from './system-prompt.ts'
@@ -371,7 +373,7 @@ export async function runInSession(
 export async function dispatch(
   bot: Bot,
   {
-    thread,
+    conversation,
     route,
     author,
     messageId,
@@ -379,7 +381,7 @@ export async function dispatch(
     echo,
     model,
   }: {
-    thread: ThreadChannel
+    conversation: Conversation
     route: Route
     author: Author
     messageId: string
@@ -388,15 +390,15 @@ export async function dispatch(
     model?: ModelChoice | null
   },
 ) {
-  const sessionId = rootSession(bot, thread.id)
+  const sessionId = rootSession(bot, conversation.id)
   if (sessionId instanceof Error) return sessionId
   // New input supersedes a pending `kimaki sleep` of this session.
   await cancelSleep(bot, sessionId)
-  const project = await threadProject(bot, thread)
+  const project = await conversationProject(bot, conversation)
   if (project instanceof Error) return project
   const marked = await ensureSessionMarker(bot, {
     sessionId,
-    thread,
+    conversation,
     channelId: project.channelId,
     directory: project.directory,
     userId: author.id,
@@ -404,9 +406,9 @@ export async function dispatch(
   if (marked instanceof Error) return marked
   switch (route.kind) {
     case 'btw':
-      return forkBtw(bot, { sourceThread: thread, text: route.text, author, messageId, files, agent: route.agent })
+      return forkBtw(bot, { source: conversation, text: route.text, author, messageId, files, agent: route.agent })
     case 'new-session':
-      // A fresh thread in the same channel, with no history.
+      // A fresh conversation in the same channel, with no history.
       return startSession(bot, {
         channelId: project.channelId,
         directory: project.directory,
@@ -419,8 +421,8 @@ export async function dispatch(
     default:
       return runInSession(bot, {
         sessionId,
-        threadId: thread.id,
-        threadName: thread.name,
+        threadId: conversation.id,
+        threadName: conversation.name,
         directory: project.directory,
         route,
         author,
@@ -539,7 +541,9 @@ export async function send(bot: Bot, input: SendInput, { localOnly = false, task
   const userIds = (input.user ?? []).map((user) => user.replace(/[<@!>]/g, ''))
   const author = { id: userIds[0] ?? bot.discord.user!.id, username: task ? `routine #${task.id}` : 'CLI' }
   // Every --user joins the thread; startSession adds the author of a new session itself.
-  const addMembers = async (thread: ThreadChannel, ids: readonly string[]) => {
+  const addMembers = async (thread: Conversation, ids: readonly string[]) => {
+    // A mainmast channel has no thread members to add.
+    if (!thread.isThread()) return
     for (const id of ids) await thread.members.add(id).catch((error: Error) => logger.warn(`add thread member ${id}`, error))
   }
   const messageId = crypto.randomUUID()
@@ -550,11 +554,12 @@ export async function send(bot: Bot, input: SendInput, { localOnly = false, task
   if (input.sessionId || input.threadId) {
     const threadId = input.threadId ?? threadOfSession(bot, input.sessionId!)
     if (!threadId) return new ConfigError({ reason: 'No local thread for this session. Use --thread on its owning machine.' })
-    const thread = await fetchThread(bot, threadId)
+    const thread = await fetchConversation(bot, threadId)
     if (thread instanceof Error) return thread
     const sessionId = bot.store.getState().roots[thread.id]
     if (!sessionId) {
-      const project = thread.parentId ? await projectOf(bot, thread.parentId) : null
+      const channelId = projectChannelOf(thread)
+      const project = channelId ? await projectOf(bot, channelId) : null
       if (project instanceof Error) return project
       return !project && !localOnly ? remoteSend(bot, input) : new ConfigError({ reason: 'No local session for this thread' })
     }
@@ -566,7 +571,7 @@ export async function send(bot: Bot, input: SendInput, { localOnly = false, task
       if (switched instanceof Error) return switched
     }
     const echo = task ? formatEcho({ username: author.username, text: routeText(route) }) : undefined
-    const result = await dispatch(bot, { thread, route, author, messageId, files: input.files, echo })
+    const result = await dispatch(bot, { conversation: thread, route, author, messageId, files: input.files, echo })
     if (result instanceof Error) return result
     return result ?? { threadId, sessionId: bot.store.getState().roots[threadId]! }
   }
@@ -635,7 +640,7 @@ export async function send(bot: Bot, input: SendInput, { localOnly = false, task
     ...(model && { model: { ...model, variant: null } }),
   })
   if (started instanceof Error || userIds.length < 2) return started
-  const thread = await fetchThread(bot, started.threadId)
+  const thread = await fetchConversation(bot, started.threadId)
   if (thread instanceof Error) logger.warn(`add thread members`, thread)
   else await addMembers(thread, userIds.slice(1))
   return started

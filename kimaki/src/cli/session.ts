@@ -224,10 +224,11 @@ export function registerSessionHistoryCommands(cli: Goke) {
       await pipeline(fs.createReadStream(file), process.stdout)
     })
 
-  cli.command('session read <id>', 'Print the messages of a session from OpenCode as markdown')
+  cli.command('session read <id>', 'Print the prompts and final answers of a session as markdown')
     .option('--data-dir <path>', DATA_DIR_HELP)
-    .option('--thinking', 'Include reasoning')
-    .option('--verbose', 'Include full tool inputs and outputs')
+    .option('--full', 'Every message with tool calls')
+    .option('--thinking', 'Full output with reasoning')
+    .option('--verbose', 'Full output with tool inputs and outputs')
     .option('--json', 'Print raw OpenCode messages')
     .action(async (id, options) => {
       // Subagent sessions are not in SQLite: resolveTarget keeps their ID.
@@ -238,7 +239,7 @@ export function registerSessionHistoryCommands(cli: Goke) {
         if (messages instanceof Error) fail(messages)
         return printJson(messages)
       }
-      const markdown = await readSessionMarkdown({ client, sessionId, thinking: options.thinking, verbose: options.verbose })
+      const markdown = await readSessionMarkdown({ client, sessionId, full: options.full, thinking: options.thinking, verbose: options.verbose })
       if (markdown instanceof Error) fail(markdown)
       process.stdout.write(`${markdown}\n`)
     })

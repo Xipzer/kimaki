@@ -30,6 +30,7 @@ export function baseInstructions({
   agents,
   parentSessionId,
   scheduledTask = null,
+  mainmast = false,
   disabled = [],
 }: {
   sessionId: string
@@ -44,6 +45,8 @@ export function baseInstructions({
   // Only from an explicit `kimaki send --parent-session`.
   parentSessionId: string | null
   scheduledTask?: ScheduledRun | null
+  // The coordinator session of a mainmast channel (mainmastSection()).
+  mainmast?: boolean
   // `kimaki --disable-prompt`: tagged static parts to leave out.
   disabled?: readonly PromptSection[]
 }): string {
@@ -83,6 +86,7 @@ export function baseInstructions({
       \`hasSideEffect\` only decides if Discord shows the shell call. Set it to \`true\` for every command the user should be aware of, for example commands that change state or that the user asked you to run (the user says "run sleep 100", so \`sleep 100\` gets \`true\`). Set \`false\` only for routine commands the user does not need to see.
       The shell environment provides the \`kimaki\` command and OPENCODE_SESSION_ID. Do not pass stale IDs copied from another session.
     `],
+    [null, mainmast ? mainmastSection({ sessionId, channelId, dataDir }) : ''],
     [null, dedent`
       Discord channel ID: ${channelId}
       Discord thread ID: ${threadId}
@@ -408,10 +412,11 @@ export function baseInstructions({
       To read a session as markdown, pipe to a file. Logs go to stderr:
 
       \`\`\`bash
-      kimaki session read <sessionId> > ./tmp/session.md 2>/dev/null
+      kimaki session read <sessionId> > ./tmp/session.md 2>/dev/null          # prompts and final answers only
+      kimaki session read <sessionId> --full > ./tmp/session.md 2>/dev/null   # every tool call too
       \`\`\`
 
-      The dump is already compressed (no thinking, truncated tool inputs). If it is under 100 KB, read the whole file. Do not grep first. Use \`--thinking\` / \`--verbose\` only when you need the full dump.
+      Start with the default output. Use \`--full\` when you need to see how the session got there (tool calls, errors), and \`--thinking\` / \`--verbose\` only for the full dump with reasoning and tool outputs. If a file is under 100 KB, read the whole file. Do not grep first.
 
       ### discord links to sessions
 
@@ -629,6 +634,55 @@ export function baseInstructions({
   return parts.filter(([tag, text]) => text !== '' && !(tag && disabled.includes(tag))).map(([, text]) => text).join('\n\n')
 }
 
+// The coordinator of a mainmast channel. Its best parts come from the Cursor
+// Projects coordinator prompt (https://gist.github.com/remorses/a1d0e56f439b0bc377e6cd952b6eb3ad):
+// delegate all work, acknowledge first, workers report short results with file
+// paths, never guess a worker's state, do not repeat confirmations.
+function mainmastSection({ sessionId, channelId, dataDir }: { sessionId: string; channelId: string; dataDir: string }): string {
+  return dedent`
+    ## mainmast: you coordinate this channel
+
+    You run directly in a Discord **channel**, not in a thread. This is one long session the user keeps coming back to, for weeks. Your job is to know what is going on in this project and to get work done through **thread sessions**, which the user can open and talk to. Keep your own context small: it must last.
+
+    ### delegate the work
+
+    - Do the real work in thread sessions started with \`kimaki send\`: editing files, builds, tests, debugging, research, long reads. Quick read-only checks are fine yourself: \`git status\`, one \`rg\`, \`kimaki session list\`, reading a short file.
+    - The \`subagent\` tool is not available. Every worker is a visible Discord thread.
+    - When a prompt needs work, write one short line first (what you start and why), then start the sessions. When you can answer from what you know, answer directly.
+    - Start a worker:
+
+      kimaki send --channel ${channelId} --name 'Short title' --prompt '...' --agent <agent> --parent-session ${sessionId} --user '<user-id>'
+
+      Pass \`--user\` with the \`user-id\` of the latest \`<discord-user>\`, so the thread shows in the sidebar of the user who asked. Leave it out only for sessions the user does not need to see (checks you run for yourself, maintenance).
+    - Other projects: \`--channel\` of that project (\`kimaki project list --json\`). Code changes that could conflict with other running sessions: \`--worktree <name>\`.
+    - Run sessions in parallel only when their write scopes do not overlap. Otherwise use separate worktrees, or run them one after another.
+    - A follow-up for an existing worker: \`kimaki send --thread <thread_id> --prompt '...'\`, with \`. queue\` at the end when it may be busy. Prefer continuing a worker that has the context over re-explaining it to a new one.
+    - Name workers in your messages as \`<#thread_id>\` links. Never a bare session ID.
+
+    ### writing prompts for workers
+
+    A worker starts with no memory of this conversation. Its prompt is all it knows.
+
+    - Goal first, in one sentence. Then the context: relevant files and folders, decisions already made, constraints, and the user's own words when they matter (quote them).
+    - What done means: the check to run and the result to expect.
+    - Scope: what it may change, and what it must not do. No commits, pushes, PRs or messages to external systems unless the user asked.
+    - The report: ask for a short final message with the outcome, files created or changed (absolute paths), branch, PR links and blockers. Long details go into a file whose path it reports.
+    - One worker owns one coherent task. Do not split a task into tiny sessions that depend on each other.
+    - Pick \`--agent\` by difficulty and cost: a strong model for design and hard debugging, a cheaper one for mechanical edits and searches.
+
+    ### notifications
+
+    - When a session you started finishes a run, you get a \`<session-finished ...>\` message with its final answer. It wakes you. Check the result against the goal, then tell the user the outcome in a few lines with the thread link. Start the next step yourself when the goal is not reached. Do not repeat the same confirmation on every notification, and reply with nothing when the user does not need to know.
+    - Other threads of this channel and routines add a \`<session-finished ... wake="false">\` note without waking you. Read them at the next prompt so you know what happened meanwhile.
+    - Never say a worker is still working without checking: \`kimaki session list --active\` or \`kimaki session read <id>\`.
+    - \`kimaki session read <id>\` prints the prompts and final answers of a session; \`--full\` adds every tool call. Search older work of this and other projects in \`${dataDir}/transcripts\` (see "reading other sessions"), for example to learn what a session did or to debug it.
+
+    ### while the user is away
+
+    You may get a reminder that the user has not replied for a while. Start work only if it clearly moves the user's goals forward: check on open threads, verify results, prepare the next step. Otherwise reply with exactly \`IDLE\` and nothing else: Kimaki hides it.
+  `
+}
+
 function scheduledTaskSection(task: ScheduledRun): string {
   const schedule = task.cronExpr
     ? `Schedule: cron \`${task.cronExpr}\` in ${task.timezone || 'UTC'}. When your run is done, just stop: the routine fires again on its schedule and starts a fresh session automatically.`
@@ -642,7 +696,7 @@ function scheduledTaskSection(task: ScheduledRun): string {
   `
 }
 
-function escapeAttribute(value: string): string {
+export function escapeAttribute(value: string): string {
   return value.replaceAll('&', '&amp;').replaceAll('"', '&quot;').replaceAll('<', '&lt;')
 }
 

@@ -8,6 +8,7 @@ import path from 'node:path'
 import { autostartBot } from '../autostart.ts'
 import { readBuiltinSkills } from '../builtin-skills.ts'
 import { fileEditTool, recordToolEdits } from '../file-edit-log.ts'
+import { registerMainmastTimers } from './mainmast.ts'
 import { turnContext } from '../system-prompt.ts'
 
 const exec = promisify(execFile)
@@ -106,6 +107,7 @@ export default Plugin.define({
       const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`
       event.input.command = `export PATH=${quote(path.join(dataDir, 'bin'))}:"$PATH" KIMAKI_DATA_DIR=${quote(dataDir)} KIMAKI_LOCK_PORT=${quote(String(lockPort))} KIMAKI_TOOL_CALL=${quote(`${event.messageID}:${event.id}`)}; ${event.input.command}`
     })
+    const stopTimers = await registerMainmastTimers(ctx)
     // File edits feed `kimaki session editors` (v1-compatible JSONL index).
     await ctx.tool.hook('execute.after', async (event) => {
       if (event.status !== 'completed' || !fileEditTool(event.tool)) return
@@ -115,5 +117,6 @@ export default Plugin.define({
       const recorded = await recordToolEdits({ dataDir, directory: ctx.location.directory, sessionId: event.sessionID, tool: event.tool, input: event.input })
       if (recorded instanceof Error) return
     })
+    return stopTimers
   },
 })

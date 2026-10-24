@@ -322,18 +322,18 @@ async function sendInput(
   const target = await resolveTarget(bot, interaction.channelId)
   if (target instanceof Error) return replyError(interaction, target)
   const author = authorOf(interaction)
-  if (target.thread && target.sessionId) {
+  if (target.conversation && target.sessionId) {
     const reply = await replyWithEcho(interaction, { author, text: echo })
     if (reply instanceof Error) return replyError(interaction, reply)
     if (model && !(route.kind === 'steer' && route.agent)) {
       const switched = await switchModel(bot, { sessionId: target.sessionId, model })
       if (switched instanceof Error) return replyError(interaction, switched)
     }
-    const result = await dispatch(bot, { thread: target.thread, route, author, messageId: reply.id, model })
+    const result = await dispatch(bot, { conversation: target.conversation, route, author, messageId: reply.id, model })
     if (result instanceof Error) return replyError(interaction, result)
     return
   }
-  if (target.thread) {
+  if (target.conversation) {
     await interaction.reply({ content: 'Use this command in a thread with a Kimaki session', flags: MessageFlags.Ephemeral })
     return
   }

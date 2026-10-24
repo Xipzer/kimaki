@@ -1,0 +1,60 @@
+---
+title: Mainmast channels
+description: Chat with one long session directly in a project channel. It delegates the work to threads and keeps track of everything.
+icon: lucide:ship
+---
+
+**Mainmast** turns a project channel into a chat with one long session. You write in the channel, the agent answers in the channel, and every piece of work runs in its own **thread**.
+
+```
+#my-app
+  you: fix the flaky login test
+  Starting a worker for the login test.
+  -# ┣ shell _Start the worker thread_
+  -# *my-app ⋅ main ⋅ 9s ⋅ 4% ⋅ claude-opus*
+  -# Fix flaky login test finished: #fix-flaky-login-test
+  Fixed in #fix-flaky-login-test: the test now awaits the session cookie.
+```
+
+Mainmast is on by default. Start Kimaki with `--no-mainmast` to go back to one new thread per channel message.
+
+## How it works
+
+```diagram
+  channel message ──▶ mainmast session (lives in the channel, never ends)
+                            │ kimaki send --parent-session
+                            ▼
+                      worker thread ──▶ does the work, you can talk to it
+                            │ run ends
+                            ▼
+              <session-finished> note ──▶ wakes the mainmast ──▶ reply in the channel
+```
+
+- The mainmast **delegates**: edits, builds, tests and research run in visible threads, never in hidden subagents. Its own context stays small, so the session can last for weeks.
+- When a thread it started finishes, the mainmast **wakes up** with the final answer and tells you the outcome with a link.
+- Other threads of the channel and routines leave a **silent note**. The mainmast reads it at your next message, so it always knows what happened.
+- Write in a worker thread to steer that worker directly, like any Kimaki thread.
+
+## Commands
+
+| Action | How |
+| --- | --- |
+| New thread without the mainmast | `/new-session` |
+| Side question in a fork | `question. btw` |
+| Stop the mainmast | `/abort` in the channel |
+| Change its model or agent | `/model`, `/agent` in the channel |
+| Start a fresh mainmast | `/new-mainmast` in the channel |
+
+## While you are away
+
+Halfway through the OpenCode [prompt cache warming](https://opencode.ai/v2/docs/warming) window (30 minutes without warming), the mainmast gets a reminder to start useful work while you are away. When it has none it answers `IDLE`, which Kimaki hides.
+
+With warming on, the mainmast is compacted when the window ends, while its cache is still warm, so the next message starts from a short summary. Turn it on in your `opencode.json`:
+
+```json
+{ "warming": { "duration": "1 hour" } }
+```
+
+## Reading what a session did
+
+`kimaki session read <id>` prints the prompts and final answers of a session. Add `--full` to see every tool call.

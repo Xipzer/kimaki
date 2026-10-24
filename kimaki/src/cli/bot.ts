@@ -95,6 +95,7 @@ export function registerStartCommand(cli: Goke) {
     .option('--disable-skills <list>', 'Built-in Kimaki skills to turn off: "all" or a comma separated list (kimaki-debug,kimaki-tunnel)')
     .option('--disable-prompt <section>', wrapJsonSchema<string[]>({ type: 'array', items: { type: 'string' }, description: `System prompt section to remove from new sessions (repeatable): ${PROMPT_SECTIONS.join(', ')}` }))
     .option('--no-analytics', 'Disable anonymous usage analytics (same as KIMAKI_STRADA_ENABLED=0)')
+    .option('--no-mainmast', 'Channel messages start a new thread each, instead of going to one long session in the channel')
     .option('--if-not-running', 'Start only if no bot runs; never stop the running one (used by autostart)')
     .action(async (options) => {
       // The IPC check ignores a KIMAKI_SUPERVISED leaked into a shell by an older bot.
@@ -226,6 +227,7 @@ export function registerStartCommand(cli: Goke) {
         allowAllUsers: Boolean(options.allowAllUsers),
         disabledSkills,
         disabledPrompt,
+        mainmast: !options.noMainmast,
       })
       if (bot instanceof Error) failStartup(bot)
       // exit() keeps process.exitCode: the restart route sets RESTART_EXIT_CODE before its SIGTERM.
@@ -245,7 +247,7 @@ export function registerStartCommand(cli: Goke) {
         if (!process.stdin.isTTY) emitEvent({ type: 'error', message: `Onboarding failed: ${onboarded.message}. The bot is running; restart kimaki to retry.` })
         return
       }
-      if (onboarded) process.stderr.write(`Onboarding thread: https://discord.com/channels/${onboarded.guildId}/${onboarded.threadId}\n`)
+      if (onboarded) process.stderr.write(`Onboarding: https://discord.com/channels/${onboarded.guildId}/${onboarded.threadId}\n`)
       const voiceChannels = await ensureVoiceChannels(bot, { machine })
       if (voiceChannels instanceof Error) logger.warn('cannot create the Kimaki voice channel', voiceChannels)
       // Only the default port: the plugin checks that one. Runtime flags only;
@@ -257,6 +259,7 @@ export function registerStartCommand(cli: Goke) {
           ...(options.disableSkills ? ['--disable-skills', options.disableSkills] : []),
           ...disabledPrompt.flatMap((section) => ['--disable-prompt', section]),
           ...(options.noAnalytics ? ['--no-analytics'] : []),
+          ...(options.noMainmast ? ['--no-mainmast'] : []),
           ...(options.machineName ? ['--machine-name', options.machineName] : []),
         ] })
         if (autostart instanceof Error) logger.warn('cannot write the autostart script', autostart)

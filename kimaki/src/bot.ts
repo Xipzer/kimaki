@@ -30,6 +30,10 @@ export type Author = { id: string; username: string }
 
 export type PromptFile = { uri: string; name: string }
 
+// When the plugin acts on an idle mainmast (plugin/mainmast.ts): ask for work nudgeMs
+// after its last request, compact compactMs after it (end of warming; null: never).
+export type MainmastTimers = { nudgeMs: number; compactMs: number | null }
+
 export type ModelChoice = { providerID: string; id: string; variant: string | null }
 
 // Operations of feature-owned state that non-interaction code needs. Wizard
@@ -72,6 +76,11 @@ export type Bot = {
   disabledSkills: readonly string[]
   // `kimaki --disable-prompt`: static instruction parts left out of new sessions.
   disabledPrompt: readonly PromptSection[]
+  // Project channel messages go to one long coordinator session in the channel
+  // (mainmast); off with `kimaki --no-mainmast`.
+  mainmast: boolean
+  // Fixed mainmast timers (tests); null reads them from OpenCode's warming config.
+  mainmastTimers: MainmastTimers | null
   features: BotFeatures
 }
 
@@ -113,13 +122,22 @@ export function threadOfSession(bot: Bot, sessionId: string): string | null {
   return threadId && roots[threadId] === sessionId ? threadId : null
 }
 
-export async function fetchThread(bot: Bot, threadId: string): Promise<DiscordError | ConfigError | ThreadChannel> {
+// Where a root session talks to the user: its thread, or a mainmast project
+// channel (the channel itself is the conversation, roots[channelId]).
+export type Conversation = ThreadChannel | TextChannel
+
+// The project channel of a conversation.
+export function projectChannelOf(conversation: Conversation): string | null {
+  return conversation.isThread() ? conversation.parentId : conversation.id
+}
+
+export async function fetchConversation(bot: Bot, id: string): Promise<DiscordError | ConfigError | Conversation> {
   const channel = await bot.discord.channels
-    .fetch(threadId)
-    .catch((cause) => new DiscordError({ operation: `fetch thread ${threadId}`, cause }))
+    .fetch(id)
+    .catch((cause) => new DiscordError({ operation: `fetch conversation ${id}`, cause }))
   if (channel instanceof Error) return channel
-  if (!channel?.isThread()) return new ConfigError({ reason: 'Target is not a thread' })
-  return channel
+  if (channel?.isThread() || channel?.type === ChannelType.GuildText) return channel
+  return new ConfigError({ reason: 'Target is not a thread or a text channel' })
 }
 
 export async function textChannel(bot: Bot, channelId: string): Promise<DiscordError | TextChannel> {

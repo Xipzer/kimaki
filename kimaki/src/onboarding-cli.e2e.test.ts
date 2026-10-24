@@ -161,12 +161,12 @@ test('kimaki --gateway without a TTY installs, onboards and reports ready on std
   `)
 
   const kimakiChannel = channels.find((channel) => channel.name === 'kimaki')!
-  const thread = await twin.discord.channel(kimakiChannel.id).waitForThread({ timeout: 8_000 })
-  await waitForFooter({ discord: twin.discord, threadId: thread.id })
-  expect(await twin.discord.thread(thread.id).text()).toMatchInlineSnapshot(`
+  // Mainmast is the default: onboarding answers in the channel itself.
+  await waitForFooter({ discord: twin.discord, threadId: kimakiChannel.id })
+  expect(await twin.discord.channel(kimakiChannel.id).text()).toMatchInlineSnapshot(`
     "--- from: assistant (TestBot)
-    **Kimaki** lets you code from Discord. Each project channel is linked to a folder on your computer. A message there starts an AI coding session in that folder.
-    Reply in the thread below to add channels for your projects. <@200000000000000001>
+    **Kimaki** lets you code from Discord. Each project channel is linked to a folder on your computer. Write in the channel: one long session answers there and starts threads for the work.
+    Reply here to add channels for your projects. <@200000000000000001>
     -# *using deterministic-provider/deterministic-v2 ⋅ build*
     Want channels for your projects?
     -# *kimaki ⋅ main ⋅ Ns ⋅ N% ⋅ deterministic-v2*"

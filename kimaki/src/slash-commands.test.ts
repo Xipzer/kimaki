@@ -47,6 +47,7 @@ test('catalog names are sanitized, keep their suffix, skip collisions and MCP pr
       "fork-subagent",
       "btw",
       "abort",
+      "new-mainmast",
       "queue",
       "clear-queue",
       "queue-command",
