@@ -214,6 +214,19 @@ async function putInstructions(
     client.session.instructions.entry.put({ sessionID: sessionId, key: INSTRUCTION_KEY, value }),
   )
   if (put instanceof Error) return put
+  writtenInstructions(bot).add(sessionId)
+}
+
+// Sessions whose instructions entry this bot run already wrote. Other
+// sessions (older Kimaki, older prompt code, V1) get it rebuilt on their
+// next input (ensureSessionMarker).
+const instructionsWritten = new WeakMap<Bot, Set<string>>()
+function writtenInstructions(bot: Bot) {
+  const existing = instructionsWritten.get(bot)
+  if (existing) return existing
+  const created = new Set<string>()
+  instructionsWritten.set(bot, created)
+  return created
 }
 
 export type PluginWait = (directory: string) => Promise<ConfigError | OpenCodeUnavailableError | OpenCodeError | void>
@@ -255,9 +268,9 @@ export function createPluginWait(bot: Pick<Bot, 'opencode'>): PluginWait {
 
 // The plugin and the agent's `kimaki` calls read metadata.kimaki. Sessions
 // from V1 (imported thread_sessions) have no marker and no instructions
-// entry; sessions of an older bot run point at its old lock port. Checked
-// on each input instead of for every binding at startup (a V1 install has
-// thousands of bindings).
+// entry; sessions of an older bot run point at its old lock port and may
+// carry instructions of older prompt code. Checked on each input instead of
+// for every binding at startup (a V1 install has thousands of bindings).
 export async function ensureSessionMarker(
   bot: Bot,
   {
@@ -279,15 +292,25 @@ export async function ensureSessionMarker(
   const info = await oc(bot, `get session ${sessionId}`, (client) => client.session.get({ sessionID: sessionId }))
   if (info instanceof Error) return info
   const marker = readMarker(info.metadata)
-  if (marker && marker.dataDir === bot.dataDir && marker.lockPort === bot.lockPort) return
+  // Once per bot run. OpenCode stores an identical value as a no-op and sends a
+  // changed one as a delta after the history, so the prompt cache stays warm.
   // Instructions first: the marker means "set up", so a failure here is retried on the next input.
-  if (!marker) {
-    logger.log(`adopting legacy session ${sessionId} of conversation ${conversation.id}`)
+  if (!writtenInstructions(bot).has(sessionId)) {
+    if (!marker) logger.log(`adopting legacy session ${sessionId} of conversation ${conversation.id}`)
     const channel = await textChannel(bot, channelId)
     if (channel instanceof Error) return channel
-    const instructions = await putInstructions(bot, { sessionId, conversation, channel, directory, userId })
+    const instructions = await putInstructions(bot, {
+      sessionId,
+      conversation,
+      channel,
+      directory,
+      userId,
+      parentSessionId: marker?.parentSessionId ?? null,
+      scheduledTask: marker?.task ?? null,
+    })
     if (instructions instanceof Error) return instructions
   }
+  if (marker && marker.dataDir === bot.dataDir && marker.lockPort === bot.lockPort) return
   const kimaki = { ...marker?.fields, source: 'discord', ...cliContext(bot), threadId: conversation.id, channelId }
   const updated = await oc(bot, 'session.update', (client) =>
     client.session.update({ sessionID: sessionId, metadata: { ...info.metadata, kimaki } }),
