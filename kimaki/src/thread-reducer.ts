@@ -12,7 +12,7 @@
 //
 //   root   text, tool lines, banner, footer, retries, errors
 //   child  foreground: tool lines labelled "┣ general ⋅ glob ..."
-//          background: no tool lines, one "⬦ general finished: ..." line
+//          background: no tool lines, one "general finished: ..." line
 //          never text, banner or footer
 //
 // busy = root execution running OR any child running (29.2 #3). Typing
@@ -600,7 +600,7 @@ function showAgentPrompt({ draft, emit, prompt }: Pick<Context, 'draft' | 'emit'
 function dismissAgentPrompts({ draft, emit, ids, result = 'dismissed' }: Pick<Context, 'draft' | 'emit'> & { ids: readonly string[]; result?: string }) {
   if (ids.length === 0) return
   draft.agentUi = draft.agentUi.filter((prompt) => !ids.includes(prompt.id))
-  for (const id of ids) emit({ type: 'edit', key: `agent:${id}`, messages: [textOnly(asSubtext(`⬦ ${result}`))] })
+  for (const id of ids) emit({ type: 'edit', key: `agent:${id}`, messages: [textOnly(asSubtext(result))] })
 }
 
 function applyKimaki({ draft, event, prefs, emit }: Context & { event: KimakiEvent }) {

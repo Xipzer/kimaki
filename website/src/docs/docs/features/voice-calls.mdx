@@ -65,7 +65,7 @@ Other slow commands like `kimaki session wait` also run in the background.
 When a thread of **any** project finishes or fails during a call, Kimaki posts a line in the text chat with the title, the thread link and the session ID:
 
 ```text
-⬦ thread finished: Fix signup link ⋅ https://discord.com/channels/<guild>/<thread> ⋅ ses_abc123
+thread finished: Fix signup link ⋅ https://discord.com/channels/<guild>/<thread> ⋅ ses_abc123
 ```
 
 The model gets the same notice, so it never needs to poll `kimaki session list`:
@@ -95,7 +95,7 @@ Everyone in the call is heard at once: GPT-Live gets one mix of all speakers. On
 
 ## Choose the voice
 
-The default voice is **`cove`**. The first line of a call shows it: `⬦ voice call started ⋅ gpt-live ⋅ cove`. The other voices are `arbor`, `breeze`, `ember`, `juniper`, `maple`, `sol`, `spruce` and `vale`.
+The default voice is **`cove`**. The first line of a call shows it: `voice call started ⋅ gpt-live ⋅ cove`. The other voices are `arbor`, `breeze`, `ember`, `juniper`, `maple`, `sol`, `spruce` and `vale`.
 
 Pass **`--voice`** when you start Kimaki:
 

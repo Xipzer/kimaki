@@ -368,7 +368,7 @@ export async function startSession(
   const useWorktree = typeof worktree === 'string' || (worktree !== false && channelWorktrees)
   const textSlug = text.toLowerCase().replace(/[^a-z0-9]+/g, '-').slice(0, 40).replace(/^-|-$/g, '') || 'session'
   const slug = typeof worktree === 'string' && worktree ? worktree : `${textSlug}-${crypto.randomBytes(4).toString('hex')}`
-  const threadName = explicitName ?? (useWorktree ? `⬦ ${slug}` : text.replace(/\s+/g, ' ').slice(0, 80) || 'Kimaki session')
+  const threadName = explicitName ?? (useWorktree ? slug : text.replace(/\s+/g, ' ').slice(0, 80) || 'Kimaki session')
 
   // The thread shows in Discord while the checkout, plugin, agent and model are resolved.
   const creating = (async () => {

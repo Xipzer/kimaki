@@ -162,7 +162,7 @@ export function formatError(message: string): string {
 // The provider error is the whole point: "retrying" alone says nothing.
 export function formatRetry({ attempt, delayMs, message }: { attempt: number; delayMs: number; message: string }): string {
   const seconds = Math.max(1, Math.ceil(delayMs / 1_000))
-  return asSubtext(`⬦ retrying in ${seconds}s (attempt ${attempt}): ${inline(message, 200)}`)
+  return asSubtext(`retrying in ${seconds}s (attempt ${attempt}): ${inline(message, 200)}`)
 }
 
 function k(tokens: number): string {
@@ -176,7 +176,7 @@ export function formatCompacted({ tokens, percent }: { tokens: number | null; pe
 }
 
 export function formatCacheMiss({ read, expected, idleMs }: { read: number; expected: number; idleMs: number }): string {
-  return asSubtext(`⬦ prompt cache miss: ${k(read)} of ${k(expected)} tokens cached, ${formatDuration(idleMs)} after the last request`)
+  return asSubtext(`prompt cache miss: ${k(read)} of ${k(expected)} tokens cached, ${formatDuration(idleMs)} after the last request`)
 }
 
 // One line, no markdown control characters, so `_x_` and `*x*` stay intact.
@@ -359,7 +359,7 @@ export function formatToolFailed({ name, message, label }: { name: string; messa
 }
 
 export function formatSubagentFinished({ agent, description }: { agent: string; description: string }): string {
-  return asSubtext(`⬦ ${inline(agent)} finished: ${inline(description)}`)
+  return asSubtext(`${inline(agent)} finished: ${inline(description)}`)
 }
 
 // `state` is OpenCode's job state; any value other than "completed" is shown.
@@ -379,7 +379,7 @@ export function formatShellFinished({
     state && state !== 'completed' ? inline(state) : null,
     exit !== null && exit !== 0 ? `exit ${exit}` : null,
   ].filter((note) => note !== null)
-  return asSubtext(`⬦ ${prefix}background shell finished${description ? `: _${inline(description)}_` : ''}${notes.length > 0 ? ` (${notes.join(', ')})` : ''}`)
+  return asSubtext(`${prefix}background shell finished${description ? `: _${inline(description)}_` : ''}${notes.length > 0 ? ` (${notes.join(', ')})` : ''}`)
 }
 
 const SHELL_OUTPUT_LIMIT = 1_800

@@ -263,8 +263,8 @@ test('retry notices are throttled to one per 10s', () => {
   const { effects } = replay({ events: [retry(1_000, 1), retry(6_000, 2), retry(12_000, 3)], view })
   expect(effectLines(effects)).toMatchInlineSnapshot(`
     [
-      "-# ⬦ retrying in 5s (attempt 1): rate limited",
-      "-# ⬦ retrying in 5s (attempt 3): rate limited",
+      "-# retrying in 5s (attempt 1): rate limited",
+      "-# retrying in 5s (attempt 3): rate limited",
     ]
   `)
 })
@@ -282,7 +282,7 @@ test('cache miss notice when the cached prefix shrinks, e.g. after the cache TTL
   )
   expect(effectLines(replay({ events: missed }).effects).filter((line) => line.includes('cache'))).toMatchInlineSnapshot(`
     [
-      "\\n-# ⬦ prompt cache miss: 0 of 25k tokens cached, 10m 1s after the last request",
+      "\\n-# prompt cache miss: 0 of 25k tokens cached, 10m 1s after the last request",
     ]
   `)
   expect(effectLines(replay({ events }).effects).filter((line) => line.includes('cache'))).toEqual([])

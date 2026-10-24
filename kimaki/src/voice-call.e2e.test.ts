@@ -136,12 +136,12 @@ test('a user joins and speaks, the backend runs kimaki commands and the model sa
   // Thread IDs are snowflakes: replace them for a stable snapshot.
   expect((await twin.discord.channel(voiceChannelId).text()).replace(/<#\d+>/g, '<#thread>')).toMatchInlineSnapshot(`
     "--- from: assistant (TestBot)
-    -# ⬦ voice call started ⋅ gpt-live ⋅ cove
+    -# voice call started ⋅ gpt-live ⋅ cove
     Hello tommy.
     » **tommy:** Which projects do I have?
     -# ┣ shell _seq 1 2000; kimaki project list_
     -# ┣ shell _kimaki send --channel 200000000000000100 --prompt 'Voice call note' --notify-on…_
-    -# ⬦ session started in <#thread>
+    -# session started in <#thread>
     -#  ⨯  post\\_message _text must not be empty_
     You have one project."
   `)
@@ -205,12 +205,12 @@ test('chat messages reach the backend, and end_call leaves after the goodbye whi
   expect(botPackets() - packetsBefore).toBeGreaterThanOrEqual(30)
   expect(live.backendInputs.at(-1)).toBe(`<chat-message from="tommy" user-id="${TEST_USER_ID}">\nplease hang up\n</chat-message>`)
   expect(await chatSince(before)).toMatchInlineSnapshot(`
-    "TestBot: -# ⬦ voice call started ⋅ gpt-live ⋅ cove
+    "TestBot: -# voice call started ⋅ gpt-live ⋅ cove
     TestBot: Hi again.
     tommy: please hang up
     TestBot: -# ┣ end\\_call
     TestBot: Bye.
-    TestBot: -# ⬦ voice call ended: the assistant hung up"
+    TestBot: -# voice call ended: the assistant hung up"
   `)
   await twin.discord.channel(voiceChannelId).user(TEST_USER_ID).leaveVoice()
 })
@@ -244,15 +244,15 @@ test('finished threads of any project are announced in the call; the model answe
   live.replies.length = 0
 
   expect(await chatSince(before)).toMatchInlineSnapshot(`
-    "TestBot: -# ⬦ voice call started ⋅ gpt-live ⋅ cove
+    "TestBot: -# voice call started ⋅ gpt-live ⋅ cove
     TestBot: Hi.
     tommy: start a thread
     TestBot: -# ┣ shell _kimaki send --channel <id> --prompt 'call-thread-marker' --user '…_
-    TestBot: -# ⬦ session started in <#<id>>
+    TestBot: -# session started in <#<id>>
     TestBot: Started.
-    TestBot: -# ⬦ thread finished: call-thread-marker ⋅ https://discord.com/channels/<id>/<id> ⋅ <ses>
+    TestBot: -# thread finished: call-thread-marker ⋅ https://discord.com/channels/<id>/<id> ⋅ <ses>
     TestBot: Your thread finished.
-    TestBot: -# ⬦ thread finished: other-thread-marker ⋅ https://discord.com/channels/<id>/<id> ⋅ <ses>"
+    TestBot: -# thread finished: other-thread-marker ⋅ https://discord.com/channels/<id>/<id> ⋅ <ses>"
   `)
   const notices = live.appends.filter((append) => append.text.startsWith('<system>Thread finished'))
   expect(notices.map((notice) => ({ ...notice, text: notice.text.replace(/\d{17,20}/g, '<id>').replace(/ses_\w+/g, '<ses>') }))).toMatchInlineSnapshot(`

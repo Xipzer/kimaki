@@ -505,7 +505,7 @@ export function createVoiceCalls({ opencodeConfigDir }: { opencodeConfigDir: str
                 sent.push(threadId)
                 current.started.add(threadId)
                 if (waits) current.waiting.add(threadId)
-                post(bot, { channelId: current.channelId, text: asSubtext(`⬦ ${started} <#${threadId}>`) })
+                post(bot, { channelId: current.channelId, text: asSubtext(`${started} <#${threadId}>`) })
               }
             : undefined
           const run = runShell(bot, { call: current, command: input.command, timeoutMs, onLine }).then((result) => {
@@ -668,8 +668,8 @@ export function createVoiceCalls({ opencodeConfigDir }: { opencodeConfigDir: str
     }
     listen(bot, call)
     logger.info(`voice call started in ${channelId}, voice ${settings.voice}`)
-    post(bot, { channelId, text: `-# ⬦ voice call started ⋅ gpt-live ⋅ ${settings.voice}` })
-    if (settings.voiceNotice) post(bot, { channelId, text: asSubtext(`⬦ ${settings.voiceNotice}`) })
+    post(bot, { channelId, text: `-# voice call started ⋅ gpt-live ⋅ ${settings.voice}` })
+    if (settings.voiceNotice) post(bot, { channelId, text: asSubtext(settings.voiceNotice) })
     live.append({ text: 'The call started. Greet the users by name in one short sentence.', channel: 'speakable' })
   }
 
@@ -684,7 +684,7 @@ export function createVoiceCalls({ opencodeConfigDir }: { opencodeConfigDir: str
     call.speaker.stop()
     if (call.connection.state.status !== VoiceConnectionStatus.Destroyed) call.connection.destroy()
     logger.info(`voice call ended in ${call.channelId}${reason ? `: ${reason}` : ''}`)
-    post(bot, { channelId: call.channelId, text: `-# ⬦ voice call ended${reason ? `: ${reason}` : ''}` })
+    post(bot, { channelId: call.channelId, text: `-# voice call ended${reason ? `: ${reason}` : ''}` })
   }
 
   async function onVoiceState(bot: Bot, { before, after }: { before: VoiceState; after: VoiceState }) {
@@ -727,7 +727,7 @@ export function createVoiceCalls({ opencodeConfigDir }: { opencodeConfigDir: str
     if (!call || call.ending) return
     const url = `https://discord.com/channels/${thread.guildId}/${threadId}`
     const state = error === null ? 'finished' : 'failed'
-    post(bot, { channelId: call.channelId, text: asSubtext(`⬦ thread ${state}: ${thread.name} ⋅ ${url} ⋅ ${sessionId}`) })
+    post(bot, { channelId: call.channelId, text: asSubtext(`thread ${state}: ${thread.name} ⋅ ${url} ⋅ ${sessionId}`) })
     const failure = error === null ? '' : ` Error: ${error}`
     const notice = `<system>Thread ${state}: "${thread.name}". Thread ID ${threadId}, session ID ${sessionId}, URL ${url}.${failure}</system>`
     // Answer only for threads started in this call. A pending kimaki send --wait brings the transcript next.

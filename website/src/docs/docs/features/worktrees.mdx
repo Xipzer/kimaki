@@ -13,7 +13,7 @@ icon: lucide:git-branch
        │ /new-worktree name:redesign
        ▼
   ┌────────────────────────────┐     work in worktree
-  │ thread: ⬦ redesign         │──────▶ commits accumulate
+  │ thread: redesign           │──────▶ commits accumulate
   │ branch: opencode/kimaki-   │
   │         redesign           │
   └────┬───────────────────────┘
@@ -31,7 +31,7 @@ Run **`/new-worktree`**. Both options are optional:
 - **`name`**: lowercase letters, digits, and hyphens, at most 64 characters. Without a name, Kimaki uses `session-<random>`.
 - **`base-branch`**: the git ref to start from. The default is the project's current `HEAD`, so you can branch from unpushed commits.
 
-Kimaki creates the branch `opencode/kimaki-<name>` in a new folder under `worktrees/` in the Kimaki data directory (default `~/.kimaki/worktrees/`). The new thread is named `⬦ <name>`.
+Kimaki creates the branch `opencode/kimaki-<name>` in a new folder under `worktrees/` in the Kimaki data directory (default `~/.kimaki/worktrees/`). The new thread is named `<name>`.
 
 Where you run it changes what happens:
 

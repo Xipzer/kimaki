@@ -203,7 +203,7 @@ export function baseInstructions({
 
       Current Discord title is in \`<discord-user thread-name="..." />\`. Discord follows the OpenCode title.
       Do not retitle every turn. Discord rate-limits thread renames.
-      Keep titles short. No emoji. No ⬦, btw:, or Fork: prefixes.
+      Keep titles short. No emoji. No btw: or Fork: prefixes.
 
       ## discord user mentions
 
@@ -855,7 +855,7 @@ function voiceCallReference({
 
     ## the text chat
 
-    The text chat of this voice channel shows the call: your spoken replies as text, a line for each shell command, and Kimaki status lines that start with ⬦.
+    The text chat of this voice channel shows the call: your spoken replies as text, a line for each shell command, and Kimaki status lines in small text.
     - A message a user types there reaches you as <chat-message from="username" user-id="ID">text</chat-message>. Treat it like speech. You can read it, so never say you cannot see the chat.
     - post_message text is shown to the users as is. Write only the content: a link, an ID, a list. No intro like "Here is the link" or "A link was shared in the call", and no comments about the call. Give a link a short label: [Signup fix thread](https://discord.com/channels/...).
     - Never post what the chat already shows: Kimaki posts new threads, finished threads and finished background commands by itself.
