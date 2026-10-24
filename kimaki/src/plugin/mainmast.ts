@@ -51,7 +51,14 @@ export async function registerMainmastTimers(ctx: Plugin.Context): Promise<() =>
   function timers(sessionID: string): Promise<Timers | null> {
     const cached = known.get(sessionID)
     if (cached) return cached
-    const found = ctx.session.get({ sessionID }).then((session) => (session.parentID ? null : readTimers(session.metadata)), () => null)
+    // A failed read is not cached: it would turn the timers off until the plugin reloads.
+    const found = ctx.session.get({ sessionID }).then(
+      (session) => (session.parentID ? null : readTimers(session.metadata)),
+      () => {
+        known.delete(sessionID)
+        return null
+      },
+    )
     known.set(sessionID, found)
     return found
   }
