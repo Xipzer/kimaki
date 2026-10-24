@@ -3,11 +3,13 @@
 // worker wakes it with a <session-finished> note.
 
 import fs from 'node:fs'
+import path from 'node:path'
 import { afterAll, beforeAll, expect, test } from 'vitest'
 
 import type { BotHandle } from './main.ts'
 import { mainmastTimers } from './mainmast.ts'
 import { send } from './prompt.ts'
+import { readSessionMarkdown } from './session-events.ts'
 import {
   TEST_USER_ID,
   scriptedTurn,
@@ -69,6 +71,14 @@ beforeAll(async () => {
         { id: 'waited-worker', priority: 100, when: { latestUserTextIncludes: 'waited-worker-marker' }, then: { parts: textParts('Waited job done.') } },
         // Slow enough that the delegating run ends first: the note then wakes an idle mainmast.
         { id: 'worker', priority: 100, when: { latestUserTextIncludes: 'worker-marker' }, then: { parts: textParts('Job done in the worker.'), defaultPartDelayMs: 300 } },
+        // A worker that uploads a screenshot; its note carries the URL for the coordinator.
+        ...scriptedTurn({
+          marker: 'upload-marker',
+          steps: [{ id: 'call-upload', tool: 'shell', input: { command: 'kimaki upload-to-discord shot.png', description: 'Upload the screenshot', hasSideEffect: true } }],
+          finalText: 'Took the screenshot.',
+        }),
+        { id: 'woken-with-media', priority: 320, when: { latestUserTextIncludes: 'Media uploaded to Discord' }, then: { parts: textParts('Here is the screenshot.') } },
+        { id: 'user-steer', priority: 100, when: { latestUserTextIncludes: 'user-steer-marker' }, then: { parts: textParts('Steered job done.') } },
         { id: 'fork', priority: 100, when: { latestUserTextIncludes: 'fork-marker' }, then: { parts: textParts('Fork job done.') } },
         { id: 'woken-by-fork', priority: 310, when: { latestUserTextIncludes: '<session-finished', rawPromptIncludes: 'Fork job done.' }, then: { parts: textParts('The fork finished the job.') } },
         { id: 'btw', priority: 100, when: { latestUserTextIncludes: 'btw-marker' }, then: { parts: textParts('Side answer.') } },
@@ -203,6 +213,64 @@ test('a btw fork of a worker sent with --parent-session wakes the mainmast when 
   const fork = await (await server.client()).session.get({ sessionID: forked.sessionId! })
   expect(Reflect.get(Object(fork.metadata?.['kimaki']), 'parentSessionId')).toBe(root)
   expect((await roleTexts(fork.id)).at(-1)).toContain('## worker of a mainmast')
+})
+
+test('the note of a worker that uploaded a file lists its Discord URL; so does session read', async () => {
+  const { discord, channelId } = twin
+  const root = bot.store.getState().roots[channelId]!
+  fs.writeFileSync(path.join(server.projectDirectory, 'shot.png'), 'png')
+  const footers = (await discord.channel(channelId).getMessages()).filter((message) => message.content.startsWith('-# *project')).length
+  const started = await send(bot, { channelId, name: 'Screenshot task', prompt: 'upload-marker take a screenshot', parentSessionId: root })
+  if (started instanceof Error) throw started
+  await waitForFooter({ discord, threadId: started.threadId })
+  await waitForFooter({ discord, threadId: channelId, count: footers + 1 })
+
+  const text = await discord.channel(channelId).text()
+  expect(text.slice(text.lastIndexOf('-# *project', text.lastIndexOf('-# *project') - 1))).toMatchInlineSnapshot(`
+    "-# *project ⋅ main ⋅ Ns ⋅ N% ⋅ deterministic-v2*
+    Here is the screenshot.
+    -# *project ⋅ main ⋅ Ns ⋅ N% ⋅ deterministic-v2*"
+  `)
+  const client = await server.client()
+  const messages = await client.message.list({ sessionID: root, order: 'desc', limit: 10 })
+  const note = messages.data.find((message) => message.type === 'synthetic' && message.text.includes('Screenshot task'))
+  expect(note?.type === 'synthetic' && note.text.replaceAll(started.sessionId!, 'ses_worker').replaceAll(started.threadId, 'worker-thread')).toMatchInlineSnapshot(`
+    "<session-finished sessionID="ses_worker" threadID="worker-thread" state="completed" title="Screenshot task" wake="true">
+    Took the screenshot.
+    Media uploaded to Discord:
+    - data:application/octet-stream;base64,cG5n
+    More: kimaki session read ses_worker
+    The user sees nothing else about this. Tell them the outcome in a few short lines, with the thread link <#worker-thread> once and the media URLs above.
+    </session-finished>"
+  `)
+  const read = await readSessionMarkdown({ client, sessionId: started.sessionId! })
+  expect(read instanceof Error ? read : read.slice(read.indexOf('Took the screenshot.'), read.indexOf('Only prompts'))).toMatchInlineSnapshot(`
+    "Took the screenshot.
+
+    Media uploaded to Discord:
+    - data:application/octet-stream;base64,cG5n
+
+    "
+  `)
+})
+
+test('a prompt the user writes in a worker thread is in the note', async () => {
+  const { discord, channelId } = twin
+  const root = bot.store.getState().roots[channelId]!
+  const worker = (await discord.channel(channelId).getThreads()).find((candidate) => candidate.name === 'Worker task')
+  if (!worker) throw new Error('no Worker task thread')
+  const footers = (await discord.channel(channelId).getMessages()).filter((message) => message.content.startsWith('-# *project')).length
+  await discord.thread(worker.id).user(TEST_USER_ID).sendMessage({ content: 'Also check the logs user-steer-marker' })
+  await waitForFooter({ discord, threadId: channelId, count: footers + 1 })
+
+  const messages = await (await server.client()).message.list({ sessionID: root, order: 'desc', limit: 10 })
+  const note = messages.data.find((message) => message.type === 'synthetic' && message.text.includes('Steered job done.'))
+  expect(note?.type === 'synthetic' && note.text.split('\n').slice(1, 5).join('\n')).toMatchInlineSnapshot(`
+    "<user-prompt username="tommy">
+    Also check the logs user-steer-marker
+    </user-prompt>
+    Steered job done."
+  `)
 })
 
 test('a worker started with --wait answers through the wait, with no note', async () => {

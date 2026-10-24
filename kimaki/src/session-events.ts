@@ -107,7 +107,7 @@ export async function resolveSession({
   return { threadId: row.thread_id, sessionId: row.session_id }
 }
 
-type Message = Awaited<ReturnType<OpenCodeClient['message']['list']>>['data'][number]
+export type Message = Awaited<ReturnType<OpenCodeClient['message']['list']>>['data'][number]
 type Session = Awaited<ReturnType<OpenCodeClient['session']['get']>>
 
 // Long enough for most edits, commands and subagent prompts; huge writes stay short.
@@ -147,6 +147,29 @@ export function finalAnswer(messages: readonly Message[]): string | null {
   return null
 }
 
+const UPLOAD_RESULT_PREFIX = '{"uploaded":'
+// `"url":"..."` of each file in that JSON line (upload in prompt.ts). A regex, not zod:
+// this module loads on every CLI start. Discord URLs have no quotes or backslashes.
+const UPLOAD_URL = /"url":"([^"\\]+)"/g
+
+// Discord URLs of the files the last turn posted with `kimaki upload-to-discord`,
+// from the result line that command printed into its shell output. The session
+// history holds them, so this needs no Discord read and survives restarts.
+// Oldest-first input.
+export function uploadedMedia(messages: readonly Message[]): string[] {
+  const turn = messages.slice(messages.findLastIndex((message) => message.type === 'user') + 1)
+  const lines = turn.flatMap((message) => (message.type === 'assistant' ? message.content : []))
+    .flatMap((part) => (part.type === 'tool' && part.state.status === 'completed' ? part.state.content : []))
+    .flatMap((content) => (content.type === 'text' ? content.text.split('\n') : []))
+    .filter((line) => line.startsWith(UPLOAD_RESULT_PREFIX))
+  return lines.flatMap((line) => [...line.matchAll(UPLOAD_URL)].map((match) => match[1]!))
+}
+
+// The block a coordinator reposts: the files already show in the worker thread.
+export function mediaBlock(urls: readonly string[]): string {
+  return urls.length === 0 ? '' : `Media uploaded to Discord:\n${urls.map((url) => `- ${url}`).join('\n')}`
+}
+
 // Inputs and the final answer of each turn, no tool calls: what agents read most often.
 function renderAnswers({ session, messages }: { session: Pick<Session, 'id' | 'title' | 'location'>; messages: Message[] }): string {
   const title = `# ${session.title} (${session.id})\n\ndirectory: ${session.location.directory}`
@@ -155,7 +178,8 @@ function renderAnswers({ session, messages }: { session: Pick<Session, 'id' | 't
   const flush = () => {
     const answer = finalAnswer(turn)
     const last = turn.findLast((message) => message.type === 'assistant')
-    if (answer && last?.type === 'assistant') blocks.push(`## assistant ${new Date(last.time.created).toISOString()} (${last.agent}, ${last.model.providerID}/${last.model.id})\n\n${answer}`)
+    const media = mediaBlock(uploadedMedia(turn))
+    if (answer && last?.type === 'assistant') blocks.push(`## assistant ${new Date(last.time.created).toISOString()} (${last.agent}, ${last.model.providerID}/${last.model.id})\n\n${answer}${media && `\n\n${media}`}`)
     turn = []
   }
   for (const message of messages) {

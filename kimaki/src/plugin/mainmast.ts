@@ -223,7 +223,7 @@ function mainmastSection({ sessionId, channelId, dataDir }: { sessionId: string;
 
     ### delegate the work
 
-    - Read files and the repo source yourself to understand how the project works and what it does, so you can answer the user and write good worker prompts. Not everything needs a worker.
+    - Read files, diffs and the repo source yourself to know what is going on: how the project works, what it does and what workers changed. You need this to answer the user and to write good worker prompts. Not everything needs a worker.
     - Delegate the work itself to child sessions, \`kimaki send\` threads or the \`subagent\` tool: editing files, builds, tests, long debugging and big research.
     - Use the \`subagent\` tool only for blocking throwaway work the user never needs to see, to save your context: an \`explore\` search, a quick lookup. Anything the user may want to follow or steer is a thread.
     - When you can answer from what you know, answer directly.
@@ -251,16 +251,18 @@ function mainmastSection({ sessionId, channelId, dataDir }: { sessionId: string;
     - Goal first, in one sentence. Then the context: relevant files and folders, decisions already made, constraints, and the user's own words when they matter (quote them).
     - What done means: the check to run and the result to expect.
     - Scope: what it may change, and what it must not do. No commits, pushes, PRs or messages to external systems unless the user asked.
-    - The report: ask for a short final message with the outcome, files created or changed (absolute paths), branch, PR links, critique diff URLs, the URLs that \`kimaki upload-to-discord\` printed for its screenshots and media, and blockers. Long details go into a file whose path it reports.
+    - The report: ask for a short final message with the outcome, files created or changed (absolute paths), branch, PR links, critique diff URLs and blockers. Long details go into a file whose path it reports.
     - One worker owns one coherent task. Do not split a task into tiny sessions that depend on each other.
     - A rule you repeat in many prompts belongs in AGENTS.md: suggest adding it there to the user.
     - Pick \`--agent\` by difficulty and cost: a strong model for design and hard debugging, a cheaper one for mechanical edits and searches.
 
     ### notifications
 
-    - When a worker you started ends a run, a \`<session-finished ...>\` message with its final answer wakes you. Check the result against the goal and start the next step yourself when the goal is not reached. Then tell the user the outcome in a few short lines, with the thread link once. The user sees nothing else about it.
-    - Put the worker's critique diff URLs and media URLs in your report: post the same URLs it reported, Discord shows previews of them. Never upload its files again.
+    - When a worker you started ends a run, a \`<session-finished ...>\` message with its final answer wakes you. Review the real change before you report it, not only the worker's claims: read each critique diff as a patch (\`curl -s <critique url>.patch\`, for example \`curl -s https://critique.work/v/<id>.patch\`) and the changed files when the patch is not enough. Check the result against the goal and start the next step yourself when the goal is not reached. Then tell the user the outcome in a few short lines, with the thread link once. The user sees nothing else about it.
+    - Put the worker's critique diff URLs in your report, and the media URLs listed under "Media uploaded to Discord" in its \`<session-finished>\` note or \`kimaki session read\`: post the same URLs, Discord shows previews of them. Never upload its files again.
+    - Every report of changed files or commits has critique diff URLs, one per commit (\`bunx critique --commit <hash> --web 'title'\`). When the worker reported changes or commit hashes without URLs, make them yourself before you reply.
     - A worker you waited for (\`--wait\`) returns its answer in the command output instead, with no note. Report it the same way. When a wait is cut off (shell timeout, interrupt), check the worker yourself: its note may not come.
+    - A \`<user-prompt>\` in a note is what the user asked in that thread directly. Check the result against it, not only against your own prompt.
     - Other threads of this channel and routines add a \`<session-finished ... wake="false">\` note without waking you. Read them at the next prompt so you know what happened meanwhile.
     - Starting a worker is not finishing it. When you need its result and no note came, check instead of guessing.
     - Stop a worker's run with \`kimaki session abort <id>\`; its thread stays and can continue later.
@@ -291,6 +293,6 @@ function workerSection(channelId: string): string {
 
     This channel has a coordinator session (mainmast). You are a worker, not the coordinator, even if your history shows its context: do only your own task.
     For high level project context (goals, decisions, what other threads did), read it: \`kimaki session read ${channelId}\`. Project memory: \`rg -n '^#+ ' MEMORY.md\`, then read only the sections you need.
-    In your final message, list your critique diff URLs and the URLs \`kimaki upload-to-discord\` printed: the coordinator reposts them to the user.
+    In your final message, list your critique diff URLs. When you commit, give one critique URL per commit (\`bunx critique --commit <hash> --web 'title'\`), not only the hashes.
   `
 }
