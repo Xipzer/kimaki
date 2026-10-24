@@ -206,8 +206,8 @@ async function putInstructions(
     agents,
     parentSessionId,
     scheduledTask,
-    // A conversation that is its project channel is the mainmast; other threads there are its workers.
-    mainmastSessionId: conversation.id === channel.id ? sessionId : (bot.store.getState().roots[channel.id] ?? null),
+    // Derived from the mode and where the session lives, never from bindings that can be stale.
+    mainmast: !bot.mainmast ? null : conversation.id === channel.id ? 'coordinator' : 'worker',
     disabled: bot.disabledPrompt,
   })
   const put = await oc(bot, 'instructions.entry.put', (client) =>

@@ -30,7 +30,7 @@ export function baseInstructions({
   agents,
   parentSessionId,
   scheduledTask = null,
-  mainmastSessionId = null,
+  mainmast = null,
   disabled = [],
 }: {
   sessionId: string
@@ -45,15 +45,15 @@ export function baseInstructions({
   // Only from an explicit `kimaki send --parent-session`.
   parentSessionId: string | null
   scheduledTask?: ScheduledRun | null
-  // The coordinator session of this channel: mainmastSection() when it is this session, workerSection() otherwise.
-  mainmastSessionId?: string | null
+  // Role in a mainmast channel: the coordinator itself, or one of its thread workers.
+  mainmast?: 'coordinator' | 'worker' | null
   // `kimaki --disable-prompt`: tagged static parts to leave out.
   disabled?: readonly PromptSection[]
 }): string {
   const userArg = ` --user '${userId}'`
   const parentArg = ` --parent-session ${sessionId}`
   // The mainmast lives in the channel itself: thread-only parts are left out.
-  const isMainmast = mainmastSessionId === sessionId
+  const isMainmast = mainmast === 'coordinator'
   const topic = channelTopic?.trim()
   const agentList = agents.map((agent) => `- \`${agent.name}\`${agent.description ? `: ${agent.description}` : ''}`).join('\n')
   const parts: Array<[PromptSection | null, string]> = [
@@ -88,7 +88,7 @@ export function baseInstructions({
       \`hasSideEffect\` only decides if Discord shows the shell call. Set it to \`true\` for every command the user should be aware of, for example commands that change state or that the user asked you to run (the user says "run sleep 100", so \`sleep 100\` gets \`true\`). Set \`false\` only for routine commands the user does not need to see.
       The shell environment provides the \`kimaki\` command and OPENCODE_SESSION_ID. Do not pass stale IDs copied from another session.
     `],
-    [null, !mainmastSessionId ? '' : isMainmast ? mainmastSection({ sessionId, channelId, dataDir }) : workerSection(mainmastSessionId)],
+    [null, isMainmast ? mainmastSection({ sessionId, channelId, dataDir }) : mainmast === 'worker' ? workerSection(channelId) : ''],
     [null, dedent`
       Discord channel ID: ${channelId}
       ${isMainmast ? 'You run in this channel, not in a thread.' : `Discord thread ID: ${threadId}`}
@@ -700,12 +700,13 @@ const handoffThread = 'When you are approaching the **context window limit**, or
 const handoffMainmast = 'You never hand off: Kimaki compacts your context when it grows. Keep what must survive in MEMORY.md. When the user wants a fresh coordinator, tell them to run `/new-mainmast` in this channel.'
 
 // A thread of a mainmast channel. A btw fork carries the coordinator's history: it must not take its role.
-function workerSection(mainmastSessionId: string): string {
+// The channel ID always resolves to the current mainmast, also after /new-mainmast.
+function workerSection(channelId: string): string {
   return dedent`
     ## worker of a mainmast
 
-    This channel has a coordinator session (mainmast): \`${mainmastSessionId}\`. You are a worker, not the coordinator, even if your history shows its context: do only your own task.
-    For high level project context (goals, decisions, what other threads did), read it: \`kimaki session read ${mainmastSessionId}\`. Project memory: \`rg -n '^#+ ' MEMORY.md\`, then read only the sections you need.
+    This channel has a coordinator session (mainmast). You are a worker, not the coordinator, even if your history shows its context: do only your own task.
+    For high level project context (goals, decisions, what other threads did), read it: \`kimaki session read ${channelId}\`. Project memory: \`rg -n '^#+ ' MEMORY.md\`, then read only the sections you need.
   `
 }
 
