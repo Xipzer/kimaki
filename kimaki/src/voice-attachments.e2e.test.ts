@@ -51,6 +51,10 @@ const matchers: DeterministicMatcher[] = [
   reply('voice-btw', 'voice btw ok'),
   reply('voice-new', 'voice new session ok'),
   reply('voice-plan', 'voice plan ok'),
+  reply('order-start', 'order start ok'),
+  // Above order-start: the thread name in <discord-user> repeats that marker.
+  { ...reply('order-voice', 'order voice ok'), priority: 600 },
+  { ...reply('order-text', 'order text ok'), priority: 600 },
 ]
 
 let server: OpencodeTestServer
@@ -163,6 +167,40 @@ test('voice in a channel starts a session with the transcription and the spoken 
   `)
 })
 
+test('a text sent while a voice message is transcribed waits for it', async () => {
+  const thread = await newThread(() => twin.discord.channel(twin.channelId).user(TEST_USER_ID).sendMessage({ content: 'Start order-start' }))
+  await waitForFooter({ discord: twin.discord, threadId: thread.id })
+  const user = twin.discord.thread(thread.id).user(TEST_USER_ID)
+  await user.sendVoiceMessage({ url: voiceUrl({ transcription: 'Spoken first order-voice', route: 'queue', delayMs: 500 }) })
+  await user.sendMessage({ content: 'Typed second order-text' })
+  await waitForBotMessageContaining({ discord: twin.discord, threadId: thread.id, text: 'order text ok' })
+  await waitForFooter({ discord: twin.discord, threadId: thread.id, count: 2 })
+  expect(await twin.discord.thread(thread.id).text()).toMatchInlineSnapshot(`
+    "--- from: user (tommy)
+    Start order-start
+    --- from: assistant (TestBot)
+    -# *using deterministic-provider/deterministic-v2 ⋅ build*
+    order start ok
+    -# *project ⋅ main ⋅ Ns ⋅ N% ⋅ deterministic-v2*
+    --- from: user (tommy)
+    [attachment: voice-message.ogg]
+    Typed second order-text
+    --- from: assistant (TestBot)
+    -# » **tommy:** Spoken first order-voice
+    order text ok
+    -# *project ⋅ main ⋅ Ns ⋅ N% ⋅ deterministic-v2*"
+  `)
+  const sessionId = bot.store.getState().roots[thread.id]!
+  const messages = await (await server.client()).message.list({ sessionID: sessionId, order: 'asc' })
+  expect(messages.data.flatMap((message) => (message.type === 'user' ? [message.text] : []))).toMatchInlineSnapshot(`
+    [
+      "Start order-start",
+      "Spoken first order-voice",
+      "Typed second order-text",
+    ]
+  `)
+})
+
 // https://github.com/remorses/kimaki/issues/235
 test('uploaded audio files with odd Discord media types are transcribed', async () => {
   const user = twin.discord.channel(twin.channelId).user(TEST_USER_ID)
@@ -268,6 +306,12 @@ test('voice in a busy thread: queue waits, btw forks, new-session starts a threa
     [
       [
         "steer",
+        "new-session",
+      ],
+      [
+        "steer",
+        "queue",
+        "btw",
         "new-session",
       ],
       [

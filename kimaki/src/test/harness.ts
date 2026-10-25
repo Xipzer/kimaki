@@ -628,7 +628,8 @@ export function schedulingKit({ suite, dataDir, clock }: {
   }
 }
 
-export type FakeTranscription = { transcription: string; route?: string; agent?: string }
+// delayMs: how long the fake Gemini waits before it answers (not sent back as a tool argument).
+export type FakeTranscription = { transcription: string; route?: string; agent?: string; delayMs?: number }
 
 // A voice message whose audio bytes are the transcription the fake returns.
 export function voiceUrl(result: FakeTranscription): string {
@@ -658,13 +659,15 @@ export async function startFakeGemini(): Promise<FakeGemini> {
       const declaration = body.tools[0]!.functionDeclarations[0]!
       const audio = body.contents[0]!.parts.find((part) => part.inlineData)!.inlineData!
       requests.push({ routes: declaration.parameters.properties.route?.enum ?? null, mimeType: audio.mimeType })
-      const args = JSON.parse(Buffer.from(audio.data, 'base64').toString('utf8')) as FakeTranscription
-      response.setHeader('content-type', 'application/json')
-      response.end(
-        JSON.stringify({
-          candidates: [{ finishReason: 'STOP', content: { parts: [{ functionCall: { name: declaration.name, args } }] } }],
-        }),
-      )
+      const { delayMs = 0, ...args } = JSON.parse(Buffer.from(audio.data, 'base64').toString('utf8')) as FakeTranscription
+      setTimeout(() => {
+        response.setHeader('content-type', 'application/json')
+        response.end(
+          JSON.stringify({
+            candidates: [{ finishReason: 'STOP', content: { parts: [{ functionCall: { name: declaration.name, args } }] } }],
+          }),
+        )
+      }, delayMs)
     })
   })
   const port = await freePort()

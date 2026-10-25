@@ -47,6 +47,8 @@ const GEMINI_MODEL = 'gemini-flash-latest'
 const TOOL_NAME = 'transcriptionResult'
 const MAX_ATTEMPTS = 3
 const RETRY_DELAY_MS = 500
+// Later messages of the conversation wait for the transcription (ingress.ts): cap all providers and retries.
+const TRANSCRIPTION_TIMEOUT_MS = 2 * 60_000
 
 export class TranscriptionError extends errore.createTaggedError({
   name: 'TranscriptionError',
@@ -376,11 +378,12 @@ async function openAIAudio({ audio, mediaType }: { audio: Buffer; mediaType: str
 
 // --- requests
 
-async function postJson({ url, headers, body }: { url: string; headers: Record<string, string>; body: unknown }) {
+async function postJson({ url, headers, body, signal }: { url: string; headers: Record<string, string>; body: unknown; signal: AbortSignal }) {
   const response = await fetch(url, {
     method: 'POST',
     headers: { 'content-type': 'application/json', ...headers },
     body: JSON.stringify(body),
+    signal,
   }).catch((cause) => new TranscriptionError({ reason: `request to ${url} failed`, cause }))
   if (response instanceof Error) return response
   const text = await response.text().catch((cause) => new TranscriptionError({ reason: 'reading the response failed', cause }))
@@ -391,8 +394,9 @@ async function postJson({ url, headers, body }: { url: string; headers: Record<s
 
 type Tool = ReturnType<typeof buildTranscriptionTool>
 
-async function requestGemini({ apiKey, baseUrl, prompt, audio, mediaType, tool }: ProviderRequest) {
+async function requestGemini({ apiKey, baseUrl, prompt, audio, mediaType, tool, signal }: ProviderRequest) {
   const raw = await postJson({
+    signal,
     url: `${baseUrl}/models/${GEMINI_MODEL}:generateContent`,
     headers: { 'x-goog-api-key': apiKey },
     body: {
@@ -408,10 +412,11 @@ async function requestGemini({ apiKey, baseUrl, prompt, audio, mediaType, tool }
 
 // TODO: use the ChatGPT subscription token here once OpenAI allows it. Today chat/completions
 // rejects it (missing model.request scope), so the subscription only gets dictation without routing.
-async function requestOpenAI({ apiKey, baseUrl, prompt, audio, mediaType, tool }: ProviderRequest) {
+async function requestOpenAI({ apiKey, baseUrl, prompt, audio, mediaType, tool, signal }: ProviderRequest) {
   const input = await openAIAudio({ audio, mediaType })
   if (input instanceof Error) return input
   const raw = await postJson({
+    signal,
     url: `${baseUrl}/chat/completions`,
     headers: { authorization: `Bearer ${apiKey}` },
     body: {
@@ -435,7 +440,7 @@ async function requestOpenAI({ apiKey, baseUrl, prompt, audio, mediaType, tool }
   return parseOpenAIResponse(raw)
 }
 
-type ProviderRequest = { apiKey: string; baseUrl: string; prompt: string; audio: Buffer; mediaType: string; tool: Tool }
+type ProviderRequest = { apiKey: string; baseUrl: string; prompt: string; audio: Buffer; mediaType: string; tool: Tool; signal: AbortSignal }
 
 // Retries transient failures: network, 408/409/429/5xx, bad bodies. Never
 // bad keys, refusals or an empty transcription.
@@ -446,11 +451,11 @@ function isRetryable(error: TranscriptionFailure): boolean {
   return status === 408 || status === 409 || status === 429 || status >= 500
 }
 
-async function withRetries(attempt: () => Promise<TranscriptionFailure | TranscriptionResult>) {
+async function withRetries({ signal, attempt }: { signal: AbortSignal; attempt: () => Promise<TranscriptionFailure | TranscriptionResult> }) {
   for (let number = 1; ; number++) {
     const result = await attempt()
     if (!(result instanceof Error)) return result
-    const retry = number < MAX_ATTEMPTS && isRetryable(result)
+    const retry = number < MAX_ATTEMPTS && !signal.aborted && isRetryable(result)
     logger.warn(`transcription attempt ${number}/${MAX_ATTEMPTS} failed${retry ? ', retrying' : ''}`, result)
     if (!retry) return result
     await new Promise((resolve) => setTimeout(resolve, RETRY_DELAY_MS * number))
@@ -459,16 +464,18 @@ async function withRetries(attempt: () => Promise<TranscriptionFailure | Transcr
 
 // Free Whisper through kimaki.dev, authenticated with the gateway client
 // credentials (website POST /api/transcribe). No routing: always steer.
-async function transcribeViaGateway({ audio, mediaType, clientId, clientSecret }: {
+async function transcribeViaGateway({ audio, mediaType, clientId, clientSecret, signal }: {
   audio: Buffer
   mediaType: string
   clientId: string
   clientSecret: string
+  signal: AbortSignal
 }): Promise<TranscriptionFailure | TranscriptionResult> {
   const response = await fetch(new URL('/api/transcribe', gatewayUrlsFromEnv().website), {
     method: 'POST',
     headers: { authorization: `Bearer ${clientId}:${clientSecret}`, 'content-type': mediaType },
     body: new Uint8Array(audio),
+    signal,
   }).catch((cause) => new TranscriptionError({ reason: 'kimaki.dev transcription not reachable', cause }))
   if (response instanceof Error) return response
   const body = await response.text().catch(() => '')
@@ -524,11 +531,12 @@ export async function chatGPTCredential({ dbFile, now = Date.now() }: { dbFile: 
   return null
 }
 
-async function transcribeViaChatGPT({ credential, baseUrl, audio, mediaType }: {
+async function transcribeViaChatGPT({ credential, baseUrl, audio, mediaType, signal }: {
   credential: ChatGPTCredential
   baseUrl: string
   audio: Buffer
   mediaType: string
+  signal: AbortSignal
 }): Promise<TranscriptionFailure | TranscriptionResult> {
   const form = new FormData()
   form.append('file', new File([new Uint8Array(audio)], `voice.${CHATGPT_EXTENSIONS[mediaType] ?? 'ogg'}`, { type: mediaType }))
@@ -539,6 +547,7 @@ async function transcribeViaChatGPT({ credential, baseUrl, audio, mediaType }: {
       ...(credential.accountId && { 'chatgpt-account-id': credential.accountId }),
     },
     body: form,
+    signal,
   }).catch((cause) => new TranscriptionError({ reason: 'ChatGPT transcription not reachable', cause }))
   if (response instanceof Error) return response
   const body = await response.text().catch(() => '')
@@ -637,15 +646,19 @@ export async function transcribe({
   const prompt = list.some((entry) => entry.kind === 'openai' || entry.kind === 'gemini')
     ? transcriptionPrompt({ fileTree: await projectFileTree(directory), agents })
     : ''
+  const signal = AbortSignal.timeout(TRANSCRIPTION_TIMEOUT_MS)
   const run = (entry: Transcriber) => {
-    if (entry.kind === 'gateway') return transcribeViaGateway({ audio, mediaType, ...entry })
-    if (entry.kind === 'chatgpt') return withRetries(() => transcribeViaChatGPT({ credential: entry.credential, baseUrl: baseUrls.chatgpt ?? CHATGPT_BASE_URL, audio, mediaType }))
-    const request = { apiKey: entry.apiKey, prompt, audio, mediaType, tool }
-    if (entry.kind === 'openai') return withRetries(() => requestOpenAI({ ...request, baseUrl: baseUrls.openai ?? OPENAI_BASE_URL }))
-    return withRetries(() => requestGemini({ ...request, baseUrl: baseUrls.gemini ?? GEMINI_BASE_URL }))
+    if (entry.kind === 'gateway') return transcribeViaGateway({ audio, mediaType, ...entry, signal })
+    if (entry.kind === 'chatgpt') {
+      return withRetries({ signal, attempt: () => transcribeViaChatGPT({ credential: entry.credential, baseUrl: baseUrls.chatgpt ?? CHATGPT_BASE_URL, audio, mediaType, signal }) })
+    }
+    const request = { apiKey: entry.apiKey, prompt, audio, mediaType, tool, signal }
+    if (entry.kind === 'openai') return withRetries({ signal, attempt: () => requestOpenAI({ ...request, baseUrl: baseUrls.openai ?? OPENAI_BASE_URL }) })
+    return withRetries({ signal, attempt: () => requestGemini({ ...request, baseUrl: baseUrls.gemini ?? GEMINI_BASE_URL }) })
   }
   let last: TranscriptionFailure | NoTranscriptionKeyError = new NoTranscriptionKeyError()
   for (const entry of list) {
+    if (signal.aborted) return new TranscriptionError({ reason: `no answer within ${TRANSCRIPTION_TIMEOUT_MS / 60_000} minutes` })
     const result = await run(entry)
     if (!(result instanceof Error) || result instanceof EmptyTranscriptionError) return result
     logger.warn(`${entry.kind} transcription failed${entry === list.at(-1) ? '' : ', trying the next provider'}`, result)

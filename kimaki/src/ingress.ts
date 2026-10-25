@@ -40,6 +40,8 @@ import { primaryAgents, startMainmast, startSession } from './sessions.ts'
 import { isVoiceAttachment, parseVoiceMessage, transcribe, voiceMediaType, type AttachmentLike } from './voice.ts'
 
 const logger = createLogger('INGRESS')
+// Later messages of the channel wait for downloads (registerIngress).
+const DOWNLOAD_TIMEOUT_MS = 60_000
 
 // Owner, Administrator, Manage Server, or a role named "Kimaki"; with
 // --allow-all-users every member. A role named "no-kimaki" always denies.
@@ -115,14 +117,14 @@ class AttachmentError extends errore.createTaggedError({
 }) {}
 
 async function remotePromptText(url: string) {
-  const response = await fetch(url).catch((cause) => new AttachmentError({ file: REMOTE_PROMPT_FILE, cause }))
+  const response = await fetch(url, { signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS) }).catch((cause) => new AttachmentError({ file: REMOTE_PROMPT_FILE, cause }))
   if (response instanceof Error) return response
   if (!response.ok) return new AttachmentError({ file: REMOTE_PROMPT_FILE, cause: new Error(`HTTP ${response.status}`) })
   return response.text().catch((cause) => new AttachmentError({ file: REMOTE_PROMPT_FILE, cause }))
 }
 
 async function download(url: string): Promise<AttachmentError | Buffer> {
-  const response = await fetch(url).catch((e) => new AttachmentError({ file: url, cause: e }))
+  const response = await fetch(url, { signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS) }).catch((e) => new AttachmentError({ file: url, cause: e }))
   if (response instanceof Error) return response
   if (!response.ok) return new AttachmentError({ file: `${url} (HTTP ${response.status})` })
   const body = await response.arrayBuffer().catch((e) => new AttachmentError({ file: url, cause: e }))
@@ -312,7 +314,8 @@ async function handleMessage(bot: Bot, message: Message) {
   await message.reply({ content: note, allowedMentions: { repliedUser: false }, flags: SILENT_MESSAGE_FLAGS }).catch(() => undefined)
 }
 
-// Registers the message listeners. Messages of one channel are handled in arrival order.
+// Registers the message listeners. Messages of one channel are handled in arrival order:
+// a text sent while a voice message is transcribed waits for it (voice-attachments.e2e.test.ts).
 export function registerIngress(bot: Bot) {
   const chains = new Map<string, Promise<void>>()
 
