@@ -485,7 +485,7 @@ so prompt cache stays warm. Forks copy it byte for byte.
 | scheduling | `--send-at` UTC/cron, `--pre-run`, `--allow-concurrency`, task files in `tasks/`, notification policy, `kimaki task list/edit/delete` |
 | worktrees | only when asked, `kimaki send --worktree`, `--cwd` |
 | reading sessions | `session list/search/read`, Discord links, `session editors` |
-| cross-project | `kimaki project list/add/create`, "plan first" |
+| cross-project | `kimaki project list/add/create`, concise prompts |
 | waiting | `--wait`, `session wait`, 20+ min bash timeout, active-session loop |
 | critique | (if enabled) run critique after edits, include URL |
 | tunnels | `kimaki tunnel` + tuistory for dev servers |

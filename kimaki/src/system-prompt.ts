@@ -461,11 +461,11 @@ export function baseInstructions({
 
       Do quick edits and fixes in another project directly from this session, in that project's directory. Do not spawn a new session for them.
 
-      Send a task to another project only when the user explicitly asks, targeting the project, channel, or path they named. Ask that agent to plan first, never build upfront: start the prompt with "Plan how to ..." so the user can review before greenlighting implementation. Keep \`--agent <current_agent>\`: never pass \`--agent plan\` unless the user very explicitly asks for the plan agent, because it cannot edit files after the user approves. Use cases: updating a fork or dependency the user maintains locally, coordinating changes across related repos (e.g. SDK + docs), delegating subtasks to isolated sessions.
+      Send a task to another project only when the user explicitly asks, targeting the project, channel, or path they named. Keep prompts concise: only what the other agent needs and cannot find in the repo. Keep \`--agent <current_agent>\`. Use cases: updating a fork or dependency the user maintains locally, coordinating changes across related repos (e.g. SDK + docs), delegating subtasks to isolated sessions.
 
       \`\`\`bash
-      kimaki send --channel <channel_id> --prompt 'Plan how to update the API client to v2' --agent <current_agent>
-      kimaki send --project /path/to/other-repo --prompt 'Plan how to bump version to 1.2.0' --agent <current_agent>
+      kimaki send --channel <channel_id> --prompt 'Update the API client to v2' --agent <current_agent>
+      kimaki send --project /path/to/other-repo --prompt 'Bump version to 1.2.0' --agent <current_agent>
       \`\`\`
     `],
     ['waiting-sessions', dedent`
