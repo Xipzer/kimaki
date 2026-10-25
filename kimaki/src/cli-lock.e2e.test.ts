@@ -367,8 +367,9 @@ test('CLI help documents the supported P7 commands', async () => {
         -s, --session <id>              Session ID, Discord thread ID or thread URL (default: OPENCODE_SESSION_ID)
         -c, --channel <id>              Kimaki voice channel to post in (default in voice calls: KIMAKI_CHANNEL_ID)
 
-      diagram <input>                   Render a Mermaid diagram (file path, or - for stdin) to a dark themed PNG. Upload it with upload-to-discord
+      diagram <input>                   Render a Mermaid diagram (file path, or - for stdin) to a light themed PNG. Upload it with upload-to-discord
         -o, --output <path>             PNG file to write (default: input path with .png, or a temp file for stdin)
+        --dark                          Dark theme instead of light
 
       Tools:
       tunnel                            Run a command and expose its local port with a public opentunnel.xyz URL. The child gets KIMAKI_TUNNEL_URL
