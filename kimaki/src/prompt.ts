@@ -39,7 +39,7 @@ import { ConfigError, DbError, DiscordError, OpenCodeError, OpenCodeUnavailableE
 import { formatError, NOTIFY_MESSAGE_FLAGS } from './format-parts.ts'
 import { createLogger } from './logger.ts'
 import type { SendInput } from './lock-routes.ts'
-import { formatEcho } from './queue.ts'
+import { discordMessageId, formatEcho } from './queue.ts'
 import { noAnswerError, parseRemoteResult, remoteEnvelope, promptFilePath, REMOTE_TIMEOUT_MS, type RemoteResult } from './remote-send.ts'
 import { parseTextMessage, type Route } from './routes.ts'
 import { allMessages } from './session-events.ts'
@@ -308,7 +308,7 @@ async function command(
   }
   const { attached, attachments } = await splitPromptFiles(input.files)
   const block = attachmentsBlock(attachments)
-  bot.eventLoop.dispatch(input.threadId, { type: 'kimaki.command', text: typed, username: input.author.username })
+  bot.eventLoop.dispatch(input.threadId, { type: 'kimaki.command', text: typed, username: input.author.username, messageId: discordMessageId(input.messageId) })
   const result = await oc(bot, 'session.command', (client) =>
     client.session.command({
       sessionID: input.sessionId,

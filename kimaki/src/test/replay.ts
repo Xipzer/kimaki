@@ -79,7 +79,10 @@ export function effectLines(effects: Effect[]): string[] {
       const reply = effect.replyTo ? ` reply to ${effect.replyTo}` : ''
       return `[show ${effect.key}${reply}] ${effect.messages.map(uiLine).join(' | ')}`
     }
-    if (effect.type === 'edit') return `[edit ${effect.key}] ${effect.messages.map(uiLine).join(' | ')}`
+    if (effect.type === 'edit') {
+      const reply = effect.reply === undefined ? [] : [`[reply to ${effect.key}] ${effect.reply}`]
+      return [`[edit ${effect.key}] ${effect.messages.map(uiLine).join(' | ')}`, ...reply]
+    }
     // Tests have no git checkout: the branch is always main.
     if (effect.type === 'footer') {
       const footer = formatFooter({ ...effect, folder: path.basename(effect.directory), branch: 'main' })

@@ -347,20 +347,34 @@ test('compaction posts the new context size from the next root step', () => {
 
 test('prompts from other clients echo, except the expanded prompt of a command Kimaki ran', () => {
   const events = loadFixture('queue-plain.events.jsonl')
-  const echoes = (before: ThreadEvent[]) => effectLines(replay({ events: [...before, ...events] }).effects).filter((line) => line.startsWith('»'))
-  const command = { type: 'kimaki.command' as const, text: '/review auth', username: 'tommy' }
+  // Queued ones show in their ack (`[show queue:...]`), a reply to it marks the run.
+  const echoes = (before: ThreadEvent[]) =>
+    effectLines(replay({ events: [...before, ...events] }).effects).filter((line) => line.includes('» ') || line.startsWith('[reply to'))
+  const command = { type: 'kimaki.command' as const, text: '/review auth', username: 'tommy', messageId: null }
   expect(echoes([])).toMatchInlineSnapshot(`
     [
       "» **user:** Run \`sleep 6 && echo slow-done\` with bash, then say done.",
-      "» **user:** QUEUED-1: reply with the word apple.",
-      "» **user:** QUEUED-2: reply with the word cherry.",
+      "[show queue:msg_0f20347e1001nsJ7W4hOvhBpQb] -# » **user:** QUEUED-1: reply with the word apple.
+    -# Queued at position 1. Remove it with /clear-queue position:1",
+      "[show queue:msg_0f20347e500196F4o0voD7LGMV] -# » **user:** QUEUED-2: reply with the word cherry.
+    -# Queued at position 2. Remove it with /clear-queue position:2",
+      "[edit queue:msg_0f20347e1001nsJ7W4hOvhBpQb] -# » **user:** QUEUED-1: reply with the word apple.",
+      "[reply to queue:msg_0f20347e1001nsJ7W4hOvhBpQb] -# Queued message sent",
+      "[edit queue:msg_0f20347e500196F4o0voD7LGMV] -# » **user:** QUEUED-2: reply with the word cherry.",
+      "[reply to queue:msg_0f20347e500196F4o0voD7LGMV] -# Queued message sent",
     ]
   `)
-  // The first prompt is the command's template: hidden. The queued ones still echo.
+  // The first prompt is the command's template: hidden. The queued ones still show.
   expect(echoes([command])).toMatchInlineSnapshot(`
     [
-      "» **user:** QUEUED-1: reply with the word apple.",
-      "» **user:** QUEUED-2: reply with the word cherry.",
+      "[show queue:msg_0f20347e1001nsJ7W4hOvhBpQb] -# » **user:** QUEUED-1: reply with the word apple.
+    -# Queued at position 1. Remove it with /clear-queue position:1",
+      "[show queue:msg_0f20347e500196F4o0voD7LGMV] -# » **user:** QUEUED-2: reply with the word cherry.
+    -# Queued at position 2. Remove it with /clear-queue position:2",
+      "[edit queue:msg_0f20347e1001nsJ7W4hOvhBpQb] -# » **user:** QUEUED-1: reply with the word apple.",
+      "[reply to queue:msg_0f20347e1001nsJ7W4hOvhBpQb] -# Queued message sent",
+      "[edit queue:msg_0f20347e500196F4o0voD7LGMV] -# » **user:** QUEUED-2: reply with the word cherry.",
+      "[reply to queue:msg_0f20347e500196F4o0voD7LGMV] -# Queued message sent",
     ]
   `)
   // A failed command leaves nothing pending.
@@ -389,7 +403,8 @@ test('snapshot closes the ack of an item promoted while disconnected, without an
   const hydrated = reduce({ view, event: snapshot, prefs: DEFAULT_PREFS })
   expect(effectLines(hydrated.effects)).toMatchInlineSnapshot(`
     [
-      "[edit queue:msg_0f20347e1001nsJ7W4hOvhBpQb] -# Queued message sent",
+      "[edit queue:msg_0f20347e1001nsJ7W4hOvhBpQb] -# » **user:** QUEUED-1: reply with the word apple.
+    -# Queued message sent",
     ]
   `)
   expect(hydrated.effects.map((effect) => effect.type)).toEqual(['edit'])

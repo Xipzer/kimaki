@@ -7,6 +7,10 @@
 //   inbox.delivered                    ─▶ "» user: text" echo, ack says "Queued message sent"
 //   inbox.cancelled                    ─▶ ack says "Removed from queue"
 //
+// Prompts without a Discord message (CLI, routines, TUI) have nothing for the
+// ack to reply to: the ack shows the full prompt, and on delivery a
+// "Queued message sent" reply to the ack replaces the echo.
+//
 // A queued prompt's inbox ID is msg_discord_<messageId> (prompt.ts), so a
 // message delete or an edit maps to the item by ID alone. Items without a
 // Discord source message (/queue, CLI, commands) are removed with /clear-queue.
@@ -44,6 +48,11 @@ function ackKey(inboxID: string): string {
   return `queue:${inboxID}`
 }
 
+// CLI and scheduled prompts carry a UUID, not a Discord message to reply to.
+export function discordMessageId(messageId: string): string | null {
+  return /^\d+$/.test(messageId) ? messageId : null
+}
+
 function inputFields(payload: { text: string; metadata?: { readonly [key: string]: JsonValue } }) {
   const text = stripTurnContext(payload.text)
   const discord = payload.metadata?.['discord']
@@ -58,8 +67,7 @@ function inputFields(payload: { text: string; metadata?: { readonly [key: string
     external: false,
     text,
     username: typeof username === 'string' ? username : null,
-    // CLI and scheduled prompts carry a UUID, not a Discord message to reply to.
-    messageId: typeof messageId === 'string' && /^\d+$/.test(messageId) ? messageId : null,
+    messageId: typeof messageId === 'string' ? discordMessageId(messageId) : null,
     // Shown when a prompt without a Discord message is taken (wake, scheduled run).
     echo: typeof echo === 'string' ? echo : null,
   }
@@ -76,10 +84,29 @@ export function formatEchoReply(input: { username: string | null; text: string }
   return echo.length > DISCORD_TEXT_LIMIT ? `${echo.slice(0, DISCORD_TEXT_LIMIT - 1)}…` : echo
 }
 
+// Every non-empty line gets `-# `, cut to `limit` chars so it stays one message.
+function subtextEcho(echo: string, limit = DISCORD_TEXT_LIMIT): string {
+  const subtext = echo.split('\n').filter((line) => line.trim() !== '').map(asSubtext).join('\n')
+  return subtext.length > limit ? `${subtext.slice(0, limit - 1)}…` : subtext
+}
+
+// A voice transcription is subtext, grey and quiet. One message, long text is cut.
+export function formatVoiceEcho(input: { username: string | null; text: string }): string {
+  return subtextEcho(formatEcho(input))
+}
+
+// The ack of a prompt with a Discord message replies to it. Without one (CLI,
+// routines, TUI) the ack itself shows the prompt, and its status line below.
+function ackContent(item: PendingInput, status: string | null): string {
+  if (item.messageId) return asSubtext(status ?? '')
+  const line = status ? `\n${asSubtext(status)}` : ''
+  return `${subtextEcho(item.echo ?? formatEcho(item), DISCORD_TEXT_LIMIT - line.length)}${line}`
+}
+
 type Slice = { draft: Draft<ThreadView>; emit: Emit }
 
-function closeAck({ emit }: Slice, item: PendingInput, content: string) {
-  if (item.acked) emit({ type: 'edit', key: ackKey(item.inboxID), messages: [textOnly(asSubtext(content))] })
+function closeAck({ emit }: Slice, item: PendingInput, status: string) {
+  if (item.acked) emit({ type: 'edit', key: ackKey(item.inboxID), messages: [textOnly(ackContent(item, status))] })
 }
 
 // Removes the item from the inbox; returns it when it was still queued.
@@ -103,7 +130,8 @@ export function enqueueInput(
   const meta = command ? { ...fields, ...command, echo: null } : fields
   // Idle with nothing pending: OpenCode runs it at once, like a normal message.
   const acked = item.delivery === 'queue' && (busy || draft.inbox.length > 0)
-  draft.inbox.push({ inboxID, delivery: item.delivery, ...meta, acked })
+  const pending: PendingInput = { inboxID, delivery: item.delivery, ...meta, acked }
+  draft.inbox.push(pending)
   if (item.delivery !== 'queue') {
     if (!meta.echo) return
     emit({ type: 'send', text: meta.echo, echo: true })
@@ -112,16 +140,22 @@ export function enqueueInput(
   }
   if (!acked) return
   const position = queuedItems(draft).length
-  const ack = textOnly(asSubtext(`Queued at position ${position}. Delete the original message to remove it, or use /clear-queue position:${position}`))
-  emit({ type: 'show', key: ackKey(inboxID), messages: [ack], replyTo: meta.messageId, notify: false })
+  const remove = meta.messageId ? 'Delete the original message to remove it, or use' : 'Remove it with'
+  const ack = textOnly(ackContent(pending, `Queued at position ${position}. ${remove} /clear-queue position:${position}`))
+  emit({ type: 'show', key: ackKey(inboxID), messages: [ack], replyTo: meta.messageId, notify: false, echo: true })
 }
 
 export function deliverQueued(slice: Slice & { inboxID: string }) {
   const item = takeQueued(slice, slice.inboxID)
   if (!item || (!item.acked && !item.echo)) return
+  slice.draft.lastKind = null
+  // The ack already shows the prompt: a reply to it marks where it runs, instead of a second copy.
+  if (item.acked && !item.messageId) {
+    slice.emit({ type: 'edit', key: ackKey(item.inboxID), messages: [textOnly(ackContent(item, null))], reply: asSubtext('Queued message sent') })
+    return
+  }
   closeAck(slice, item, 'Queued message sent')
   slice.emit({ type: 'send', text: item.echo ?? formatEcho(item), echo: true })
-  slice.draft.lastKind = null
 }
 
 export function cancelQueued(slice: Slice & { inboxID: string }) {

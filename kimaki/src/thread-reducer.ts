@@ -120,7 +120,7 @@ export type ThreadView = {
   inbox: readonly PendingInput[]
   // Kimaki runs an OpenCode command (kimaki.command): the next root user item
   // without Discord metadata is its expanded prompt, shown as the typed command.
-  commandPending: { text: string; username: string } | null
+  commandPending: { text: string; username: string; messageId: string | null } | null
   // Questions and permission requests waiting for the user (root and children).
   forms: Readonly<Record<string, PendingForm>>
   permissions: Readonly<Record<string, PendingPermission>>
@@ -141,10 +141,11 @@ export type Effect =
   | { type: 'attachments'; files: readonly UploadFile[]; settle: (result: Error | string[]) => void }
   // The executor adds folder and git branch of `directory` when it posts.
   | { type: 'footer'; directory: string; durationMs: number; contextPercent: number | null; model: ModelRef; agent: string | null; notify: boolean }
-  // Posts the messages in order; the first replies to `replyTo` when set.
-  | { type: 'show'; key: string; messages: readonly UiMessage[]; replyTo: string | null; notify: boolean }
-  // Edits the messages `show` posted under `key` (by index; the last one covers the rest).
-  | { type: 'edit'; key: string; messages: readonly UiMessage[] }
+  // Posts the messages in order; the first replies to `replyTo` when set. `echo`: holds user text, no mentions.
+  | { type: 'show'; key: string; messages: readonly UiMessage[]; replyTo: string | null; notify: boolean; echo?: boolean }
+  // Edits the messages `show` posted under `key` (by index; the last one covers the rest),
+  // then posts `reply` as a reply to the first of them.
+  | { type: 'edit'; key: string; messages: readonly UiMessage[]; reply?: string }
   // Marks the root execution that went idle at `idle` as read in OpenCode, once
   // the lines before it are posted. Bots cannot see Discord read state.
   | { type: 'viewed'; sessionId: string; idle: number }
@@ -170,7 +171,7 @@ export type KimakiEvent =
   // Kimaki is about to run an OpenCode command (prompt.ts). Prompts without
   // Discord metadata are echoed as sent from elsewhere; this one must not be.
   // TODO: pass metadata.discord to session.command once its payload accepts metadata, then drop this event.
-  | { type: 'kimaki.command'; text: string; username: string }
+  | { type: 'kimaki.command'; text: string; username: string; messageId: string | null }
   // session.command failed, so no prompt follows.
   | { type: 'kimaki.command-failed' }
   // A session found by walking parentID after a bot restart.
@@ -634,7 +635,7 @@ function applyKimaki({ draft, event, prefs, emit }: Context & { event: KimakiEve
       if (draft.turn) draft.turn.slept = true
       return
     case 'kimaki.command':
-      draft.commandPending = { text: event.text, username: event.username }
+      draft.commandPending = { text: event.text, username: event.username, messageId: event.messageId }
       return
     case 'kimaki.command-failed':
       draft.commandPending = null

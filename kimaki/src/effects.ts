@@ -231,15 +231,19 @@ export function createEffectsRunner({ discord, markViewed }: { discord: Client; 
       return
     }
     if (effect.type === 'edit') {
-      const ids = thread.prompts.get(effect.key)
+      const ids = thread.prompts.get(effect.key) ?? []
       thread.prompts.delete(effect.key)
-      if (!ids || ids.length === 0) return
-      const channel = await sendableChannel(threadId)
-      if (!channel || lifecycle.closed) return
+      const channel = ids.length > 0 ? await sendableChannel(threadId) : null
+      if (lifecycle.closed) return
       for (const [index, messageId] of ids.entries()) {
         const message = effect.messages[index] ?? effect.messages[effect.messages.length - 1]
-        if (message) await edit({ channel, messageId, message })
+        if (channel && message) await edit({ channel, messageId, message })
       }
+      if (effect.reply === undefined) return
+      // A key from before a restart: the reply still marks the moment, without a reference.
+      const replyTo = ids[0]
+      await post({ threadId, options: { content: effect.reply, ...(replyTo && { reply: { messageReference: replyTo, failIfNotExists: false } }) }, notify: false })
+      await refreshTyping(threadId)
       return
     }
     if (effect.type === 'show') {
@@ -254,6 +258,7 @@ export function createEffectsRunner({ discord, markViewed }: { discord: Client; 
             ...(replyTo && { reply: { messageReference: replyTo, failIfNotExists: false } }),
           },
           notify: effect.notify,
+          mentions: !effect.echo,
         })
         if (id) ids.push(id)
       }

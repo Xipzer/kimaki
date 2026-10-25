@@ -1,8 +1,11 @@
 // Phase 3: the queue on the native OpenCode inbox. `. queue` waits for the run,
 // message delete/edit and /clear-queue change the inbox.
 
+import { execFile } from 'node:child_process'
 import fs from 'node:fs'
+import path from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
+import { promisify } from 'node:util'
 import type { DeterministicMatcher } from 'opencode-deterministic-provider'
 import { afterAll, beforeAll, expect, onTestFinished, test } from 'vitest'
 
@@ -23,6 +26,8 @@ import {
   type OpencodeTestServer,
   type TestTwin,
 } from './test/harness.ts'
+
+const exec = promisify(execFile)
 
 function reply(marker: string, text: string): DeterministicMatcher {
   return { id: marker, priority: 50, when: { latestUserTextIncludes: marker }, then: { parts: textParts(text) } }
@@ -250,4 +255,30 @@ test('/queue and /clear-queue', async () => {
     -# *project ⋅ main ⋅ Ns ⋅ N% ⋅ deterministic-v2*"
   `)
   await expectNever({ threadId: thread.id, text: 'queued one ok' })
+})
+
+test('CLI . queue into a busy thread shows the full text, then replies to it when it runs', async () => {
+  const thread = await startSlowThread('CLI queue')
+  await exec(process.execPath, ['--import', 'tsx', path.resolve('src/cli.ts'), 'send', '--thread', thread.id, '--prompt', 'From the CLI queued-one\nsecond line. queue', '--data-dir', dataDir], {
+    env: { ...process.env, KIMAKI_LOCK_PORT: String(bot.lock.port) },
+  })
+  await waitForBotMessageContaining({ discord: twin.discord, threadId: thread.id, text: 'queued one ok' })
+  await waitForFooter({ discord: twin.discord, threadId: thread.id, count: 2 })
+  expect(await twin.discord.thread(thread.id).text()).toMatchInlineSnapshot(`
+    "--- from: user (tommy)
+    CLI queue slow-marker
+    --- from: assistant (TestBot)
+    -# *using deterministic-provider/deterministic-v2 ⋅ build*
+    -# » **CLI:** From the CLI queued-one
+    -# second line
+    slow-done
+    -# *project ⋅ main ⋅ Ns ⋅ N% ⋅ deterministic-v2*
+    -# Queued message sent
+    queued one ok
+    -# *project ⋅ main ⋅ Ns ⋅ N% ⋅ deterministic-v2*"
+  `)
+  const messages = await twin.discord.thread(thread.id).getMessages()
+  const ack = messages.find((message) => message.content.includes('**CLI:**'))
+  const started = messages.find((message) => message.content === '-# Queued message sent')
+  expect(started?.message_reference?.message_id).toBe(ack?.id)
 })
