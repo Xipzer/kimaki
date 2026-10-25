@@ -25,12 +25,14 @@ import { createLogger } from './logger.ts'
 import type { ConnectContext, OpenCodeClient, V2Event } from './opencode-server.ts'
 import type { EventRecorder } from './session-events.ts'
 import { queuedItems } from './queue.ts'
-import type { BotStore } from './store.ts'
+import type { BotStore, State } from './store.ts'
 import {
+  conversationTyping,
   emptyView,
   eventSessionId,
   isKimakiEvent,
   reduce,
+  type Effect,
   type KimakiEvent,
   type SessionSnapshot,
   type ThreadEvent,
@@ -115,6 +117,23 @@ export function createEventLoop({
     return load
   }
 
+  // Every change of thread views goes through here. The reducer's typing only
+  // sees its own view; typing follows conversationTyping instead, which also
+  // changes in the mainmast of the thread's channel.
+  function commit({ threadId, effects: produced = [], update }: { threadId: string; effects?: readonly Effect[]; update: (state: State) => Partial<State> }) {
+    const before = store.getState().threads
+    store.setState(update)
+    const after = store.getState().threads
+    const typing = (id: string): Effect[] => {
+      const on = conversationTyping({ threads: after, threadId: id })
+      return conversationTyping({ threads: before, threadId: id }) === on ? [] : [{ type: 'typing', on }]
+    }
+    // A removed view: effects.dispose() already stopped its typing.
+    if (after[threadId]) effects.run(threadId, [...typing(threadId), ...produced.filter((effect) => effect.type !== 'typing')])
+    const channelId = (after[threadId] ?? before[threadId])?.channelId
+    if (channelId && channelId !== threadId) effects.run(channelId, typing(channelId))
+  }
+
   // Folds one event into a loaded view.
   function fold(threadId: string, event: ThreadEvent) {
     const state = store.getState()
@@ -123,8 +142,8 @@ export function createEventLoop({
     const verbosity = state.verbosity[view.channelId] ?? verbosityFromV1(null)
     const contextLimits = modelLimits.get(view.directory)?.limits ?? {}
     const result = reduce({ view, event, prefs: { verbosity, contextLimits } })
-    if (result.view !== view) store.setState((current) => ({ threads: { ...current.threads, [threadId]: result.view } }))
-    effects.run(threadId, result.effects)
+    if (result.view === view) effects.run(threadId, result.effects)
+    else commit({ threadId, effects: result.effects, update: (current) => ({ threads: { ...current.threads, [threadId]: result.view } }) })
     if (event.type === 'session.moved' && event.data.sessionID === view.sessionId) void loadModelLimits(event.data.location.directory)
   }
 
@@ -213,7 +232,7 @@ export function createEventLoop({
     }
     if (!store.getState().threads[threadId]) {
       const view = emptyView({ sessionId, channelId: loaded.channelId, directory: loaded.directory, isNew: false })
-      store.setState((current) => ({ threads: { ...current.threads, [threadId]: view } }))
+      commit({ threadId, update: (current) => ({ threads: { ...current.threads, [threadId]: view } }) })
     }
     for (const event of entry.events) fold(threadId, event)
   }
@@ -386,11 +405,14 @@ export function createEventLoop({
     }): Promise<void> {
       ignoredSessions.delete(sessionId)
       coldThreads.delete(threadId)
-      store.setState((current) => ({
-        roots: { ...current.roots, [threadId]: sessionId },
-        sessionThreads: { ...current.sessionThreads, [sessionId]: threadId },
-        threads: { ...current.threads, [threadId]: emptyView({ sessionId, channelId, directory, isNew }) },
-      }))
+      commit({
+        threadId,
+        update: (current) => ({
+          roots: { ...current.roots, [threadId]: sessionId },
+          sessionThreads: { ...current.sessionThreads, [sessionId]: threadId },
+          threads: { ...current.threads, [threadId]: emptyView({ sessionId, channelId, directory, isNew }) },
+        }),
+      })
       // Same synchronous turn as the routing change: no live event can come first.
       for (const event of first) deliver(threadId, event)
       // Before the first prompt, so its footer can show the context percent.
@@ -401,11 +423,14 @@ export function createEventLoop({
     unbind(threadId: string): void {
       coldThreads.delete(threadId)
       effects.dispose(threadId)
-      store.setState((current) => {
-        const { [threadId]: _root, ...roots } = current.roots
-        const { [threadId]: _view, ...threads } = current.threads
-        const sessionThreads = Object.fromEntries(Object.entries(current.sessionThreads).filter(([, mapped]) => mapped !== threadId))
-        return { roots, threads, sessionThreads }
+      commit({
+        threadId,
+        update: (current) => {
+          const { [threadId]: _root, ...roots } = current.roots
+          const { [threadId]: _view, ...threads } = current.threads
+          const sessionThreads = Object.fromEntries(Object.entries(current.sessionThreads).filter(([, mapped]) => mapped !== threadId))
+          return { roots, threads, sessionThreads }
+        },
       })
     },
 

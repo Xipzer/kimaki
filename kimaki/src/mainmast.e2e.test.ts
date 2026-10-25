@@ -80,6 +80,8 @@ beforeAll(async () => {
         { id: 'woken-with-media', priority: 320, when: { latestUserTextIncludes: 'Media uploaded to Discord' }, then: { parts: textParts('Here is the screenshot.') } },
         { id: 'user-steer', priority: 100, when: { latestUserTextIncludes: 'user-steer-marker' }, then: { parts: textParts('Steered job done.') } },
         { id: 'fork', priority: 100, when: { latestUserTextIncludes: 'fork-marker' }, then: { parts: textParts('Fork job done.') } },
+        { id: 'slow-job', priority: 100, when: { latestUserTextIncludes: 'slow-job-marker' }, then: { parts: textParts('Slow job done.'), defaultPartDelayMs: 500 } },
+        { id: 'woken-by-slow-job', priority: 330, when: { latestUserTextRegex: '<session-finished[\\s\\S]*Slow job done' }, then: { parts: textParts('The slow job finished.') } },
         { id: 'woken-by-fork', priority: 310, when: { latestUserTextIncludes: '<session-finished', rawPromptIncludes: 'Fork job done.' }, then: { parts: textParts('The fork finished the job.') } },
         { id: 'btw', priority: 100, when: { latestUserTextIncludes: 'btw-marker' }, then: { parts: textParts('Side answer.') } },
         { id: 'side', priority: 100, when: { latestUserTextIncludes: 'side-marker' }, then: { parts: textParts('Side check done.') } },
@@ -380,6 +382,28 @@ test('a stale coordinator role text is replaced: on a wake for that request, the
   const roles = await roleTexts(root)
   expect(roles.at(-1)).toBe(current)
   expect(roles.at(-2)).toContain('stale-wake-marker')
+})
+
+test('the mainmast shows typing while a worker runs in the background', async () => {
+  const { discord, channelId } = twin
+  const root = bot.store.getState().roots[channelId]!
+  const footers = (await discord.channel(channelId).getMessages()).filter((message) => message.content.startsWith('-# *project')).length
+  discord.channel(channelId).clearTypingEvents()
+  const started = await send(bot, { channelId, name: 'Slow task', prompt: 'slow-job-marker take your time', parentSessionId: root })
+  if (started instanceof Error) throw started
+  await discord.channel(channelId).waitForTypingEvent()
+  // Read when typing starts: it must come from the running worker, not from the wake after it.
+  const workerAtTyping = await discord.thread(started.threadId).text()
+  await waitForFooter({ discord, threadId: started.threadId })
+  await waitForFooter({ discord, threadId: channelId, count: footers + 1 })
+
+  const text = await discord.channel(channelId).text()
+  expect(text.slice(text.lastIndexOf('-# *project', text.lastIndexOf('-# *project') - 1))).toMatchInlineSnapshot(`
+    "-# *project ⋅ main ⋅ Ns ⋅ N% ⋅ deterministic-v2*
+    The slow job finished.
+    -# *project ⋅ main ⋅ Ns ⋅ N% ⋅ deterministic-v2*"
+  `)
+  expect(workerAtTyping).not.toContain('-# *project')
 })
 
 test('the mainmast survives a bot restart; /new-mainmast starts a fresh one', async () => {

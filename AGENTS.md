@@ -236,6 +236,7 @@ when creating system messages like replies to commands never add blank lines bet
 typing comes from `POST /channels/{id}/typing` / `sendTyping()`. one pulse only lasts about 10 seconds in the Discord UI and stops at the next bot message.
 
 - the reducer decides: it emits `{ type: 'typing', on }` when `isTyping(view)` changes. typing is on while the root execution or a child runs, and off while a question or permission waits for the user.
+- a mainmast channel also types while any thread of its channel types (`conversationTyping`). `commit()` in `event-loop.ts` applies it on every view change, so a worker run turns the mainmast typing on and off.
 - `effects.ts` runs one 7s interval per thread and clears it on `typing: false`, on stop, and before the footer.
 - user messages never start typing. only OpenCode events do.
 

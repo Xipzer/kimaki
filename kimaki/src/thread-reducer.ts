@@ -233,9 +233,24 @@ export function isBusy(view: ThreadView): boolean {
   return view.turn !== null || Object.values(view.children).some((child) => child.running)
 }
 
+function waitsForUser(view: ThreadView): boolean {
+  return Object.keys(view.forms).length > 0 || Object.keys(view.permissions).length > 0
+}
+
 // Typing stops while the agent waits for the user (spec 6.6).
 function isTyping(view: ThreadView): boolean {
-  return isBusy(view) && Object.keys(view.forms).length === 0 && Object.keys(view.permissions).length === 0
+  return isBusy(view) && !waitsForUser(view)
+}
+
+// Typing of one conversation across all views: a mainmast (a view whose channel
+// is its own conversation) also types while a thread of its channel does, so
+// background workers show there. Other conversations: isTyping of their view.
+export function conversationTyping({ threads, threadId }: { threads: Readonly<Record<string, ThreadView>>; threadId: string }): boolean {
+  const view = threads[threadId]
+  if (!view || waitsForUser(view)) return false
+  if (isBusy(view)) return true
+  if (view.channelId !== threadId) return false
+  return Object.entries(threads).some(([id, thread]) => id !== threadId && thread.channelId === threadId && isTyping(thread))
 }
 
 export function eventSessionId(event: V2Event): string | null {
