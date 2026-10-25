@@ -115,13 +115,14 @@ export function registerDiscordCommands(cli: Goke) {
       await action({ route: 'upload', dataDir: options.dataDir, input, signal: AbortSignal.timeout(5 * 60_000) })
     })
 
-  cli.command('diagram <input>', 'Render a Mermaid diagram (file path, or - for stdin) to a dark themed PNG. Upload it with upload-to-discord')
+  cli.command('diagram <input>', 'Render a Mermaid diagram (file path, or - for stdin) to a light themed PNG. Upload it with upload-to-discord')
     .option('-o, --output <path>', 'PNG file to write (default: input path with .png, or a temp file for stdin)')
+    .option('--dark', 'Dark theme instead of light')
     .action(async (input, options) => {
       const source = input === '-' ? await readStdin() : await fs.promises.readFile(input, 'utf8').catch((error: Error) => error)
       if (source instanceof Error) fail(source)
       const { renderDiagram } = await import('../diagram.ts')
-      const png = renderDiagram(source)
+      const png = renderDiagram(source, { theme: options.dark ? 'dark' : 'light' })
       if (png instanceof Error) fail(png)
       const output = path.resolve(options.output ?? (input === '-' ? path.join(os.tmpdir(), `kimaki-diagram-${Date.now()}.png`) : input.replace(/(\.\w+)?$/, '.png')))
       const written = await fs.promises.writeFile(output, png).catch((error: Error) => error)

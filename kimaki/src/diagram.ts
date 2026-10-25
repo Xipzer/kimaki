@@ -16,9 +16,27 @@ import valueParser, { type Node as ValueNode } from 'postcss-value-parser'
 const FONTS_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'assets', 'fonts')
 const SCALE = 2
 const PADDING = 24
+// Discord shrinks long images until labels are unreadable; a square one reads best.
+// The compact candidate asks pele for the narrowest layout: wrapped labels and `LR`
+// turned into `TB` (https://pele.run/api#narrow-screens).
+const SQUARE_CANDIDATES = [{ autoDirection: false }, { maxWidth: 1, autoDirection: true, directionBreakpoint: Infinity }]
 
-// Category hues. Built in as classDefs, so diagrams only write `node:::blue`.
-const DIAGRAM_COLORS = {
+type ColorName = 'blue' | 'green' | 'purple' | 'pink' | 'amber' | 'red' | 'teal'
+type Palette = { readonly [name in ColorName]: { fill: string; stroke: string } }
+
+// Category hues, built in as classDefs so diagrams only write `node:::blue`.
+// Light: the claude-style palette of the diagrams-and-charts skill. Dark: Vercel/Next.js docs.
+const LIGHT_COLORS: Palette = {
+  blue: { fill: '#edf5fb', stroke: '#5290c8' },
+  green: { fill: '#eef6f0', stroke: '#5f9a6d' },
+  purple: { fill: '#f3effa', stroke: '#8a72c2' },
+  pink: { fill: '#fbeef3', stroke: '#c4688a' },
+  amber: { fill: '#fbf5e8', stroke: '#c99a3e' },
+  red: { fill: '#fbeeee', stroke: '#c8524f' },
+  teal: { fill: '#ebf6f4', stroke: '#3f9a8f' },
+}
+
+const DARK_COLORS: Palette = {
   blue: { fill: '#0b1f38', stroke: '#1d68c5' },
   green: { fill: '#1a2c1e', stroke: '#49a45f' },
   purple: { fill: '#251931', stroke: '#8955a7' },
@@ -26,32 +44,63 @@ const DIAGRAM_COLORS = {
   amber: { fill: '#4c3d20', stroke: '#f2b342' },
   red: { fill: '#3c1618', stroke: '#e5484d' },
   teal: { fill: '#0d2d2a', stroke: '#12a594' },
-} as const
+}
 
-// pele's CSS variables (https://pele.run/theming), dark Vercel/Next.js docs palette.
-const THEME: ReadonlyMap<string, string> = new Map(Object.entries({
-  '--pele-bg': '#0a0a0a',
-  '--pele-fg': '#ededed',
-  '--pele-muted': '#8f8f8f',
-  '--pele-line': '#878787',
-  '--pele-surface': '#171717',
-  '--pele-surface-alt': '#232323',
-  '--pele-border': '#3d3d3d',
-  '--pele-accent': '#4a8fe7',
-  '--pele-critical': '#c14c70',
-  '--pele-error': '#e5484d',
-  '--pele-radius': '6px',
-  '--pele-font': 'Geist, sans-serif',
-  '--pele-font-mono': 'Geist Mono, monospace',
-  '--pele-series-1': DIAGRAM_COLORS.blue.stroke,
-  '--pele-series-2': DIAGRAM_COLORS.amber.stroke,
-  '--pele-series-3': DIAGRAM_COLORS.green.stroke,
-  '--pele-series-4': DIAGRAM_COLORS.pink.stroke,
-  '--pele-series-5': DIAGRAM_COLORS.purple.stroke,
-  '--pele-series-6': '#4a8fe7',
-  '--pele-series-7': DIAGRAM_COLORS.red.stroke,
-  '--pele-series-8': DIAGRAM_COLORS.teal.stroke,
-}))
+export type DiagramTheme = 'light' | 'dark'
+
+type Theme = { colors: Palette; vars: ReadonlyMap<string, string> }
+
+// pele's CSS variables (https://pele.run/theming).
+function theme({ colors, base }: { colors: Palette; base: Record<string, string> }): Theme {
+  const vars = new Map(Object.entries({
+    ...base,
+    '--pele-radius': '6px',
+    '--pele-font': 'Geist, sans-serif',
+    '--pele-font-mono': 'Geist Mono, monospace',
+    '--pele-series-1': colors.blue.stroke,
+    '--pele-series-2': colors.amber.stroke,
+    '--pele-series-3': colors.green.stroke,
+    '--pele-series-4': colors.pink.stroke,
+    '--pele-series-5': colors.purple.stroke,
+    '--pele-series-6': base['--pele-accent']!,
+    '--pele-series-7': colors.red.stroke,
+    '--pele-series-8': colors.teal.stroke,
+  }))
+  return { colors, vars }
+}
+
+const THEMES: { readonly [name in DiagramTheme]: Theme } = {
+  light: theme({
+    colors: LIGHT_COLORS,
+    base: {
+      '--pele-bg': '#fafbf8',
+      '--pele-fg': '#141413',
+      '--pele-muted': '#72736e',
+      '--pele-line': '#72736e',
+      '--pele-surface': '#ffffff',
+      '--pele-surface-alt': '#efeee5',
+      '--pele-border': '#72736e',
+      '--pele-accent': '#d97757',
+      '--pele-critical': LIGHT_COLORS.pink.stroke,
+      '--pele-error': LIGHT_COLORS.red.stroke,
+    },
+  }),
+  dark: theme({
+    colors: DARK_COLORS,
+    base: {
+      '--pele-bg': '#0a0a0a',
+      '--pele-fg': '#ededed',
+      '--pele-muted': '#8f8f8f',
+      '--pele-line': '#878787',
+      '--pele-surface': '#171717',
+      '--pele-surface-alt': '#232323',
+      '--pele-border': '#3d3d3d',
+      '--pele-accent': '#4a8fe7',
+      '--pele-critical': DARK_COLORS.pink.stroke,
+      '--pele-error': DARK_COLORS.red.stroke,
+    },
+  }),
+}
 
 export class DiagramError extends errore.createTaggedError({
   name: 'DiagramError',
@@ -63,9 +112,9 @@ export class DiagramError extends errore.createTaggedError({
 // inherit down the element tree, and every var() and color-mix() in attributes
 // and inline styles is computed to a plain value.
 // TODO: drop this once resvg resolves var(). https://github.com/linebender/resvg/issues/821
-export function computeCustomProperties(svg: string, theme: ReadonlyMap<string, string> = THEME): string {
+export function computeCustomProperties(svg: string, vars: ReadonlyMap<string, string> = THEMES.light.vars): string {
   const document = parseDocument(svg, { xmlMode: true })
-  for (const child of document.children) visit(child, theme)
+  for (const child of document.children) visit(child, vars)
   return DomUtils.getOuterHTML(document, { xmlMode: true })
 }
 
@@ -145,27 +194,32 @@ function hexChannels(color: string | undefined): number[] | undefined {
 const CLASS_DEF_TYPES = new Set(['flowchart', 'swimlane', 'state', 'class', 'er', 'requirement'])
 
 // Appends a classDef per color the source does not define itself.
-export function withColorClasses(source: string): string {
+export function withColorClasses(source: string, theme: DiagramTheme = 'light'): string {
   const type = detectType(source)
   if (!type || !CLASS_DEF_TYPES.has(type)) return source
+  const { colors, vars } = THEMES[theme]
   const defined = new Set(source.split('\n').flatMap((line) => line.trim().match(/^classDef\s+(\S+)/)?.[1]?.split(',') ?? []))
-  const lines = Object.entries(DIAGRAM_COLORS)
+  const lines = Object.entries(colors)
     .filter(([name]) => !defined.has(name))
-    .map(([name, { fill, stroke }]) => `  classDef ${name} fill:${fill},stroke:${stroke},color:${THEME.get('--pele-fg')}`)
+    .map(([name, { fill, stroke }]) => `  classDef ${name} fill:${fill},stroke:${stroke},color:${vars.get('--pele-fg')}`)
   return [source.trimEnd(), ...lines].join('\n')
 }
 
-export function renderDiagram(source: string): DiagramError | Buffer {
-  const result = errore.try(
-    () => render(withColorClasses(source), { fontFamily: 'Geist', fontFamilyMono: 'Geist Mono', padding: PADDING, responsive: false, autoDirection: false, links: false, images: false }),
+export function renderDiagram(source: string, { theme = 'light' }: { theme?: DiagramTheme } = {}): DiagramError | Buffer {
+  const { vars } = THEMES[theme]
+  const colored = withColorClasses(source, theme)
+  const renders = errore.try(
+    () => SQUARE_CANDIDATES.map((layout) => render(colored, { fontFamily: 'Geist', fontFamilyMono: 'Geist Mono', padding: PADDING, responsive: false, links: false, images: false, ...layout })),
     (error) => new DiagramError({ reason: error instanceof Error ? error.message : String(error) }),
   )
-  if (result instanceof Error) return result
+  if (renders instanceof Error) return renders
+  const squareness = ({ width, height }: { width: number; height: number }) => Math.abs(Math.log(width / height))
+  const result = renders.reduce((best, candidate) => (squareness(candidate) < squareness(best) ? candidate : best))
   const fontFiles = fs.readdirSync(FONTS_DIR).filter((file) => file.endsWith('.ttf')).map((file) => path.join(FONTS_DIR, file))
   return errore.try(
     () => {
-      const resvg = new Resvg(computeCustomProperties(result.svg), {
-        background: THEME.get('--pele-bg'),
+      const resvg = new Resvg(computeCustomProperties(result.svg, vars), {
+        background: vars.get('--pele-bg'),
         fitTo: { mode: 'zoom', value: SCALE },
         font: { loadSystemFonts: false, fontFiles, defaultFontFamily: 'Geist', sansSerifFamily: 'Geist', monospaceFamily: 'Geist Mono' },
       })

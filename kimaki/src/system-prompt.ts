@@ -598,7 +598,8 @@ export function baseInstructions({
       Mermaid kinds: \`flowchart\`, \`sequenceDiagram\`, \`stateDiagram-v2\`, \`erDiagram\`, \`classDiagram\`, \`gitGraph\`, \`mindmap\`, \`timeline\`, \`gantt\`, \`pie\`, \`xychart\`, \`sankey\`, \`architecture-beta\`.
 
       Make them **rich**: 8 to 20 nodes with real names from the code, subgraphs for boundaries, labels on edges. Never 3 boxes in a row.
-      Make them **colorful**: give nodes a built-in color class with \`:::name\` (\`blue\`, \`green\`, \`purple\`, \`pink\`, \`amber\`, \`red\`, \`teal\`), one per category: clients green, our system blue, third party purple, storage amber, errors red. Color the key path with \`linkStyle\`. Sequence regions: \`rect rgb(11, 31, 56)\`.
+      Make them **square**: Discord shrinks long images until text is unreadable. For a long pipeline use \`flowchart TB\` with 2 to 4 subgraphs that each set \`direction LR\`, so the chain wraps into rows.
+      Make them **colorful**: give nodes a built-in color class with \`:::name\` (\`blue\`, \`green\`, \`purple\`, \`pink\`, \`amber\`, \`red\`, \`teal\`), one per category: clients green, our system blue, third party purple, storage amber, errors red. Color the key path with \`linkStyle\`. Sequence regions: \`rect rgb(237, 245, 251)\`. Images are light by default; \`--dark\` renders a dark one.
 
       \`\`\`
       flowchart LR
@@ -613,7 +614,7 @@ export function baseInstructions({
         db[(Postgres)]:::amber
         ui -->|cookie| mw -->|query| db
         ui -->|sign in| google -->|code| cb -->|upsert user| db
-        linkStyle 2,3,4 stroke:#f2b342,stroke-width:2px
+        linkStyle 2,3,4 stroke:#d97757,stroke-width:2px
       \`\`\`
     `],
     ['action-buttons', dedent`
