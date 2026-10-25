@@ -156,7 +156,7 @@ test('voice in a channel starts a session with the transcription and the spoken 
     "--- from: user (tommy)
     [attachment: voice-message.ogg]
     --- from: assistant (TestBot)
-    » **tommy:** Plan the refactor voice-plan
+    -# » **tommy:** Plan the refactor voice-plan
     -# *using deterministic-provider/deterministic-v2 ⋅ plan*
     voice plan ok
     -# *project ⋅ main ⋅ Ns ⋅ N% ⋅ deterministic-v2 ⋅ plan*"
@@ -179,7 +179,7 @@ test('uploaded audio files with odd Discord media types are transcribed', async 
     "--- from: user (tommy)
     [attachment: memo.m4a]
     --- from: assistant (TestBot)
-    » **tommy:** From m4a voice-steer
+    -# » **tommy:** From m4a voice-steer
     -# *using deterministic-provider/deterministic-v2 ⋅ build*
     voice steer ok
     -# *project ⋅ main ⋅ Ns ⋅ N% ⋅ deterministic-v2*"
@@ -225,17 +225,17 @@ test('voice in a busy thread: queue waits, btw forks, new-session starts a threa
     --- from: user (tommy)
     [attachment: voice-message.ogg]
     --- from: assistant (TestBot)
-    » **tommy:** Afterwards voice-queue
+    -# » **tommy:** Afterwards voice-queue
     -# Queued message sent
     --- from: user (tommy)
     [attachment: voice-message.ogg]
     --- from: assistant (TestBot)
-    » **tommy:** Side voice-btw
+    -# » **tommy:** Side voice-btw
     Session forked! Continue in <#THREAD>
     --- from: user (tommy)
     [attachment: voice-message.ogg]
     --- from: assistant (TestBot)
-    » **tommy:** Fresh start voice-new
+    -# » **tommy:** Fresh start voice-new
     Started a new session in <#THREAD>
     slow-done
     -# *project ⋅ main ⋅ Ns ⋅ N% ⋅ deterministic-v2*

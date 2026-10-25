@@ -81,7 +81,7 @@ test('an Ogg Opus voice message is converted to WAV and transcribed by OpenAI', 
     "--- from: user (tommy)
     [attachment: voice-message.ogg]
     --- from: assistant (TestBot)
-    » **tommy:** Hello from the phone voice-openai
+    -# » **tommy:** Hello from the phone voice-openai
     -# *using deterministic-provider/deterministic-v2 ⋅ build*
     openai voice ok
     -# *project ⋅ main ⋅ Ns ⋅ N% ⋅ deterministic-v2*"
@@ -148,7 +148,7 @@ test('the OpenAI key wins over the ChatGPT credential from OpenCode, which takes
     "--- from: user (tommy)
     [attachment: voice-message.ogg]
     --- from: assistant (TestBot)
-    » **tommy:** Hello from the phone voice-openai
+    -# » **tommy:** Hello from the phone voice-openai
     -# *using deterministic-provider/deterministic-v2 ⋅ build*
     openai voice ok
     -# *project ⋅ main ⋅ Ns ⋅ N% ⋅ deterministic-v2*"
@@ -167,7 +167,7 @@ test('the OpenAI key wins over the ChatGPT credential from OpenCode, which takes
     "--- from: user (tommy)
     [attachment: voice-message.ogg]
     --- from: assistant (TestBot)
-    » **tommy:** Hello from ChatGPT voice-openai
+    -# » **tommy:** Hello from ChatGPT voice-openai
     -# *using deterministic-provider/deterministic-v2 ⋅ build*
     openai voice ok
     -# *project ⋅ main ⋅ Ns ⋅ N% ⋅ deterministic-v2*"
