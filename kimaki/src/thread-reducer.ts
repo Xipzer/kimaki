@@ -53,7 +53,7 @@ import {
   type ToolInput,
   type UiMessage,
 } from './format-parts.ts'
-import { IDLE_NUDGE_SOURCE, IDLE_REPLY } from './plugin/mainmast.ts'
+import { IDLE_REPLY } from './plugin/mainmast.ts'
 import { closePermission, hydratePermissions, showPermission, STATUS, type PendingPermission } from './permissions.ts'
 import { closeForm, formatAnswer, hydrateForms, showForm, withAnswer, type PendingForm } from './questions.ts'
 import { cancelQueued, deliverQueued, enqueueInput, hydrateQueue, promoteQueued, queuedItems, type PendingInput } from './queue.ts'
@@ -121,8 +121,6 @@ export type ThreadView = {
   // Kimaki runs an OpenCode command (kimaki.command): the next root user item
   // without Discord metadata is its expanded prompt, shown as the typed command.
   commandPending: { text: string; username: string } | null
-  // The plugin asked the idle mainmast for work (plugin/mainmast.ts): its IDLE_REPLY text is hidden.
-  idleNudge: boolean
   // Questions and permission requests waiting for the user (root and children).
   forms: Readonly<Record<string, PendingForm>>
   permissions: Readonly<Record<string, PendingPermission>>
@@ -226,7 +224,6 @@ export function emptyView({
     compacted: false,
     inbox: [],
     commandPending: null,
-    idleNudge: false,
     forms: {},
     permissions: {},
   }
@@ -297,7 +294,7 @@ function contextPercent({ tokens, model, prefs }: { tokens: number; model: Model
 function emitFooter({ draft, prefs, emit, turn, at, notify }: Context & { turn: Draft<Turn>; at: number; notify: boolean }) {
   // No model step ran (a compaction-only execution): nothing to summarize.
   if (!turn.model) return
-  // The answer posted no text or tool line (e.g. an idle nudge's IDLE_REPLY, only hidden tools).
+  // The answer posted no text or tool line (e.g. an IDLE_REPLY, only hidden tools).
   if (draft.lastKind === null) return
   // A child still runs: the answer comes later.
   if (Object.values(draft.children).some((child) => child.running)) return
@@ -337,10 +334,6 @@ function applyOpencode({ draft, event, prefs, emit }: Context & { event: V2Event
   const label = child?.agent ?? null
   if (event.type === 'session.inbox.enqueued' && event.data.item.type === 'synthetic' && !child?.background) {
     const metadata = event.data.item.payload.metadata ?? {}
-    if (!child && metadata['source'] === IDLE_NUDGE_SOURCE) {
-      draft.idleNudge = true
-      return
-    }
     return showShellFinished({ draft, prefs, emit, metadata, label })
   }
   switch (event.type) {
@@ -397,8 +390,8 @@ function applyRoot(context: Context & { event: V2Event }) {
     }
     case 'session.text.ended': {
       const text = event.data.text.trim()
-      // An idle nudge with nothing to do answers IDLE_REPLY: Discord shows nothing.
-      if (!text || (draft.idleNudge && text === IDLE_REPLY)) return
+      // A mainmast turn with nothing for the user (idle nudge, a note) answers IDLE_REPLY: Discord shows nothing.
+      if (!text || text === IDLE_REPLY) return
       emit({ type: 'markdown', text, blankLineBefore: draft.lastKind === 'tool' })
       draft.lastKind = 'text'
       return
@@ -438,7 +431,6 @@ function applyRoot(context: Context & { event: V2Event }) {
       if (draft.turn) emitFooter({ ...context, turn: draft.turn, at: event.created, notify: !draft.turn.slept })
       draft.turn = null
       draft.lastKind = null
-      draft.idleNudge = false
       emit({ type: 'viewed', sessionId: draft.sessionId, idle: event.created })
       return
     }
@@ -446,7 +438,6 @@ function applyRoot(context: Context & { event: V2Event }) {
       if (draft.compacted) showCompacted(context, { tokens: null, percent: null })
       draft.turn = null
       draft.lastKind = null
-      draft.idleNudge = false
       emit({ type: 'send', text: formatError(event.data.error.message), notify: true })
       emit({ type: 'viewed', sessionId: draft.sessionId, idle: event.created })
       return
@@ -454,7 +445,6 @@ function applyRoot(context: Context & { event: V2Event }) {
       if (draft.compacted) showCompacted(context, { tokens: null, percent: null })
       draft.turn = null
       draft.lastKind = null
-      draft.idleNudge = false
       // A shutdown does not make the session idle in OpenCode.
       if (event.data.reason !== 'shutdown') emit({ type: 'viewed', sessionId: draft.sessionId, idle: event.created })
       return

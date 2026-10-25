@@ -17,8 +17,8 @@ import type { Plugin } from '@opencode/plugin'
 import type { SessionContext } from '@opencode/plugin/promise/session'
 import dedent from 'string-dedent'
 
-export const IDLE_NUDGE_SOURCE = 'kimaki-idle'
-// The whole answer of a nudge turn with nothing to do. The reducer drops it.
+const IDLE_NUDGE_SOURCE = 'kimaki-idle'
+// The whole answer of a mainmast turn with nothing for the user. The reducer drops it.
 export const IDLE_REPLY = 'IDLE'
 
 export function idleNudgeText(minutes: number) {
@@ -236,13 +236,13 @@ function mainmastSection({ sessionId, channelId, dataDir }: { sessionId: string;
     - Add \`--wait\` (shell timeout 20 minutes or more, \`timeout: 1_500_000\`) only when you need the result before your next step. The command then prints the worker's answer, with no note.
     - Other projects: \`--channel\` of that project (\`kimaki project list --json\`). Code changes that could conflict with other running sessions: \`--worktree <name>\`.
     - Run sessions in parallel only when their write scopes do not overlap. Otherwise use separate worktrees, or run them one after another.
-    - A follow-up for an existing worker: \`kimaki send --thread <thread_id> --prompt '...'\`, with \`. queue\` at the end when it may be busy. Prefer continuing a worker that has the context over re-explaining it to a new one.
+    - A follow-up for an existing worker: \`kimaki send --thread <thread_id> --prompt '...'\`, with \`. queue\` at the end when it may be busy. Prefer continuing a worker that has the context over re-explaining it to a new one. Then say in one line what you sent, with its thread link \`<#thread_id>\` once: the user cannot see the follow-up otherwise.
     - Related work that needs the same context, in parallel: fork a worker (or a past session) with \`. btw\` at the end, only when it touches different files than the work still running there:
 
       kimaki send --thread <thread_id> --prompt '... btw' --agent <agent> --parent-session ${sessionId}
 
       The fork gets a new thread with the whole history; the source keeps running. Its \`<session-finished>\` note wakes you like any worker.
-    - Link a worker as \`<#thread_id>\` once, in your report of its outcome: no other notice shows that it finished. Nowhere else: no thread links, session URLs or session IDs in other replies.
+    - Link a worker as \`<#thread_id>\` once, in your report of its outcome: no other notice shows that it finished. Also once when you send a follow-up to an existing worker (with or without \`. queue\`), but not for a \`. btw\` fork: its new thread already shows. Nowhere else: no thread links, session URLs or session IDs in other replies.
 
     ### writing prompts for workers
 
@@ -264,6 +264,7 @@ function mainmastSection({ sessionId, channelId, dataDir }: { sessionId: string;
     - A worker you waited for (\`--wait\`) returns its answer in the command output instead, with no note. Report it the same way. When a wait is cut off (shell timeout, interrupt), check the worker yourself: its note may not come.
     - A \`<user-prompt>\` in a note is what the user asked in that thread directly. Check the result against it, not only against your own prompt.
     - Other threads of this channel and routines add a \`<session-finished ... wake="false">\` note without waking you. Read them at the next prompt so you know what happened meanwhile.
+    - When a turn has nothing the user needs (only notes of threads they already see, a reminder with nothing to start), reply with exactly \`IDLE\` and nothing else: Kimaki hides it. Never write filler like "nothing new" or "you already see it in that thread".
     - Starting a worker is not finishing it. When you need its result and no note came, check instead of guessing.
     - Stop a worker's run with \`kimaki session abort <id>\`; its thread stays and can continue later.
     - \`<session-finished>\` notes and reminders are for you. Never mention them to the user.

@@ -76,6 +76,13 @@ test('a turn that posts nothing visible ends without a footer', () => {
   `)
 })
 
+test('any turn that answers IDLE posts no text and no footer, not only idle nudges', () => {
+  const turn = loadFixture('tools.events.jsonl').filter((event) => !event.type.startsWith('session.tool.'))
+  const idle = turn.map((event) => (event.type === 'session.text.ended' ? { ...event, data: { ...event.data, text: 'IDLE' } } : event))
+  const visible = replay({ events: idle }).effects.filter((effect) => effect.type === 'markdown' || effect.type === 'footer')
+  expect(visible).toEqual([])
+})
+
 test('kimaki sleep in a turn makes its footer silent, the next turn notifies again', () => {
   const turn = loadFixture('tools.events.jsonl').filter((event) => !event.type.startsWith('session.tool.'))
   const end = turn.findIndex((event) => event.type === 'session.execution.succeeded')

@@ -12,7 +12,7 @@ Add **mainmast** channels, the new default. A project channel is now a chat with
   Fixed in #fix-flaky-login-test: the test now awaits the session cookie.
 ```
 
-- The mainmast starts workers in the background and says in one line what it started. When a worker run ends, its final answer wakes the mainmast, which reports the outcome with one link to the thread. Kimaki posts no other finish notice.
+- The mainmast starts workers in the background and says in one line what it started. A follow-up it sends to an existing worker also gets one line with that thread's link (not for btw forks, whose thread already shows). When a worker run ends, its final answer wakes the mainmast, which reports the outcome with one link to the thread. Kimaki posts no other finish notice.
 - For related work that needs the same context, the mainmast can fork a worker or a past session with `kimaki send --thread <id> --prompt '... btw' --parent-session <mainmast>`, when the fork touches different files. `--parent-session` now also applies to btw forks, so the fork wakes the mainmast when it ends, like any worker.
 - Before it reports, the mainmast reviews the real change: it reads each critique diff as a patch (`<critique url>.patch`) and the changed files when needed.
 - The mainmast report of a worker includes its critique diff URLs (one per commit) and media. When a worker reports changes or commit hashes without diff URLs, the mainmast makes them itself. `kimaki upload-to-discord` now prints the Discord URL of each uploaded file (`{"uploaded":[{"name","url"}]}`). The `<session-finished>` note and `kimaki session read` list the media a run uploaded, so the mainmast posts the same URLs, with previews, instead of uploading again.
@@ -23,6 +23,7 @@ Add **mainmast** channels, the new default. A project channel is now a chat with
 - Workers read the mainmast session for project context. The mainmast keeps memory in a tracked `MEMORY.md`, read through its headings.
 - Halfway through the OpenCode `warming` window (30 minutes without warming) an idle mainmast is asked for useful work. With warming on, it is compacted when the window ends, while the cache is still warm.
 - The mainmast and worker instructions come from the Kimaki OpenCode plugin. After a Kimaki upgrade, an existing mainmast or worker gets the new instructions at its next message, added after the history, so the prompt cache stays warm.
+- A mainmast turn with nothing for you (an idle reminder, notes of threads you already see) posts nothing: the mainmast answers `IDLE`, which Kimaki hides with no footer, instead of filler like "nothing new".
 - `/new-mainmast` starts a fresh mainmast in the channel.
 - Onboarding answers in the `#kimaki` channel instead of a thread.
 - `kimaki session read <id>` now prints only prompts and final answers. Use `--full` for every tool call. `kimaki session wait` and `kimaki send --wait` print the same short output.
