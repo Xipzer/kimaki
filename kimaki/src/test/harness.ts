@@ -92,7 +92,7 @@ export async function startOpencodeTestServer({
   // Appended after the allow-all rules: the last matching rule wins.
   permissions?: Array<{ action: string; resource: string; effect: 'allow' | 'deny' | 'ask' }>
   // More deterministic models next to TEST_MODEL, e.g. with thinking variants.
-  models?: Record<string, { name: string; variants?: Array<{ id: string }> }>
+  models?: Record<string, { name: string; variants?: Array<{ id: string }>; limit?: { context?: number; output?: number } }>
   // Agent overrides and custom agents (config `agents`).
   agents?: Record<string, { description?: string; mode?: 'primary' | 'subagent' | 'all'; hidden?: boolean; model?: string }>
   // MCP servers (config `mcp.servers`).

@@ -10,6 +10,7 @@
 // Quiet for nudgeMs means idle, so the nudge never lands in a running turn; it
 // fires once per user prompt. compactMs is the OpenCode warming window: warm
 // requests stop then, so compaction is the last cheap read of the cached prefix.
+// Deadlines are also in plugin storage, so a plugin reload re-arms them.
 // Only the mainmast itself, never its threads or other sessions.
 // TODO: let the mainmast compact worker sessions too (they keep their full history now).
 
@@ -32,9 +33,16 @@ export function idleNudgeText(minutes: number) {
 
 type Timers = { nudgeMs: number; compactMs: number | null }
 type Timer = ReturnType<typeof setTimeout>
+type Kind = 'nudge' | 'compact'
+// A pending nudge or compaction, also in plugin storage: OpenCode reloads the plugin
+// on every Kimaki build or upgrade, which clears its timers.
+type Deadline = { directory: string; at: number }
 
-// A small history is cheap to keep: compacting it only loses detail.
-const MIN_COMPACT_CONTEXT_SHARE = 0.2
+// A small history is cheap to keep: compacting it only loses detail. Tokens, not a
+// share of the window: a mainmast at 190k never reached 20% of a 1M window.
+const MIN_COMPACT_TOKENS = 100_000
+// Missed while no plugin ran (OpenCode was down): the nudge is late, the cache cold.
+const STALE_DEADLINE_MS = 60_000
 
 function readTimers(metadata: Readonly<Record<string, unknown>> | undefined): Timers | null {
   const kimaki = metadata?.['kimaki']
@@ -49,9 +57,8 @@ function readTimers(metadata: Readonly<Record<string, unknown>> | undefined): Ti
 export async function registerMainmastTimers(ctx: Plugin.Context): Promise<() => void> {
   // Marker timers never change after create: one session.get per session, also for non-mainmast ones.
   const known = new Map<string, Promise<Timers | null>>()
-  const armed = new Set<string>()
-  const nudges = new Map<string, Timer>()
-  const compactions = new Map<string, Timer>()
+  // By storage key, `<kind>/<sessionID>`.
+  const pending = new Map<string, Timer>()
 
   function timers(sessionID: string): Promise<Timers | null> {
     const cached = known.get(sessionID)
@@ -68,56 +75,69 @@ export async function registerMainmastTimers(ctx: Plugin.Context): Promise<() =>
     return found
   }
 
-  // The last request used at least MIN_COMPACT_CONTEXT_SHARE of the model's context window.
-  async function worthCompacting(sessionID: string, model: { providerID: string; id: string }): Promise<boolean> {
-    const [messages, models] = await Promise.all([
-      ctx.session.context({ sessionID }),
-      ctx.model.list({ location: { directory: ctx.location.directory } }),
-    ])
+  async function worthCompacting(sessionID: string): Promise<boolean> {
+    const messages = await ctx.session.context({ sessionID })
     const last = messages.findLast((message) => message.type === 'assistant' && message.tokens)
     const tokens = last?.type === 'assistant' && last.tokens ? last.tokens.input + last.tokens.output + last.tokens.reasoning + last.tokens.cache.read + last.tokens.cache.write : 0
-    const limit = models.data.find((candidate) => candidate.providerID === model.providerID && candidate.id === model.id)?.limit.context
-    return !limit || tokens >= limit * MIN_COMPACT_CONTEXT_SHARE
+    return tokens >= MIN_COMPACT_TOKENS
   }
 
-  function schedule(map: Map<string, Timer>, sessionID: string, ms: number, run: () => Promise<unknown>) {
-    clearTimeout(map.get(sessionID))
+  async function run(kind: Kind, sessionID: string) {
+    const found = await timers(sessionID)
+    if (!found) return
+    if (kind === 'nudge') {
+      await ctx.session.synthetic({ sessionID, text: idleNudgeText(Math.round(found.nudgeMs / 60_000)), delivery: 'queue', metadata: { source: IDLE_NUDGE_SOURCE } })
+      return
+    }
+    if (await worthCompacting(sessionID)) await ctx.session.compact({ sessionID, delivery: 'queue' })
+  }
+
+  function arm(kind: Kind, sessionID: string, at: number) {
+    const key = `${kind}/${sessionID}`
+    clearTimeout(pending.get(key))
     const timer = setTimeout(() => {
-      map.delete(sessionID)
+      pending.delete(key)
       // Plugins stay silent: a failed nudge or compaction only loses that one.
-      void run().catch(() => undefined)
-    }, ms)
+      void ctx.storage.remove(key).catch(() => undefined).then(() => run(kind, sessionID)).catch(() => undefined)
+    }, Math.max(0, at - Date.now()))
     timer.unref?.()
-    map.set(sessionID, timer)
+    pending.set(key, timer)
   }
 
+  function schedule(kind: Kind, sessionID: string, ms: number) {
+    const deadline: Deadline = { directory: ctx.location.directory, at: Date.now() + ms }
+    arm(kind, sessionID, deadline.at)
+    void ctx.storage.set(`${kind}/${sessionID}`, deadline).catch(() => undefined)
+  }
+
+  // Deadlines of the plugin before a reload. Storage is shared by all locations: each takes its own.
+  const stored = await ctx.storage.scan({ prefix: '' }).catch(() => null)
+  for (const { key, value } of stored?.entries ?? []) {
+    const [kind, sessionID] = key.split('/')
+    if ((kind !== 'nudge' && kind !== 'compact') || !sessionID || !value || typeof value !== 'object') continue
+    const at: unknown = Reflect.get(value, 'at')
+    if (typeof at !== 'number') continue
+    if (at < Date.now() - STALE_DEADLINE_MS) void ctx.storage.remove(key).catch(() => undefined)
+    else if (Reflect.get(value, 'directory') === ctx.location.directory) arm(kind, sessionID, at)
+  }
+
+  // Quiet for nudgeMs after a user prompt: one nudge, pushed back by every request until it fires.
   await ctx.session.hook('prompt', async (event) => {
-    if (await timers(event.sessionID)) armed.add(event.sessionID)
+    const found = await timers(event.sessionID)
+    if (found) schedule('nudge', event.sessionID, found.nudgeMs)
   })
   // Every model request of the session: the session is not idle yet, and the warming window moves.
   await ctx.session.hook('context', async (event) => {
     const found = await timers(event.sessionID)
     if (!found) return
-    const { sessionID } = event
-    if (armed.has(sessionID)) {
-      schedule(nudges, sessionID, found.nudgeMs, async () => {
-        armed.delete(sessionID)
-        await ctx.session.synthetic({ sessionID, text: idleNudgeText(Math.round(found.nudgeMs / 60_000)), delivery: 'queue', metadata: { source: IDLE_NUDGE_SOURCE } })
-      })
-    }
-    if (!found.compactMs) return
-    const model = { providerID: event.model.providerID, id: event.model.id }
-    schedule(compactions, sessionID, found.compactMs, async () => {
-      if (!(await worthCompacting(sessionID, model))) return
-      await ctx.session.compact({ sessionID, delivery: 'queue' })
-    })
+    if (pending.has(`nudge/${event.sessionID}`)) schedule('nudge', event.sessionID, found.nudgeMs)
+    if (found.compactMs) schedule('compact', event.sessionID, found.compactMs)
   })
 
+  // Storage keeps the deadlines for the next plugin instance.
   return () => {
-    for (const timer of [...nudges.values(), ...compactions.values()]) clearTimeout(timer)
-    nudges.clear()
-    compactions.clear()
-    armed.clear()
+    for (const timer of pending.values()) clearTimeout(timer)
+    pending.clear()
     known.clear()
   }
 }
