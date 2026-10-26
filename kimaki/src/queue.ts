@@ -81,8 +81,13 @@ function inputFields({ payload, channelId }: { payload: { text: string; metadata
 
 // The full prompt. A long one becomes several messages (effects.ts).
 export function formatEcho({ username, text }: { username: string | null; text: string }): string {
-  return `» **${username ?? 'queued'}:** ${text}`
+  // Block markdown only renders at the start of a line, so it goes below the prefix.
+  const separator = BLOCK_MARKDOWN_START.test(text) ? '\n' : ' '
+  return `» **${username ?? 'queued'}:**${separator}${text}`
 }
+
+// Headings, quotes, lists, code fences, rules, tables and subtext.
+const BLOCK_MARKDOWN_START = /^ {0,3}(#{1,6}(\s|$)|-#\s|>|[-*+]\s|\d{1,9}[.)]\s|```|~~~|-{3,}\s*$|\|)/
 
 // A reply that stands in for the user message is one Discord message: long text is cut.
 export function formatEchoReply(input: { username: string | null; text: string }): string {
