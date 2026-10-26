@@ -26,7 +26,7 @@ export function idleNudgeText(minutes: number) {
   return [
     '<system-reminder>',
     `The user has not replied for ${minutes} minutes. If there is useful work that clearly moves their goals forward, start it now.`,
-    'Do not tell the user anything unless it is important and they should really see it: a failure, a blocker, a decision only they can make, or a result they asked for. Never post a status, a plan or a recap of what you did or are doing.',
+    'Do not reply in chat now unless it is important and they should really see it: a failure, a blocker, a decision only they can make, or a result they asked for. Never post a status, a plan or a recap of what you did or are doing.',
     `In every other case your whole reply is exactly ${IDLE_REPLY}, also after starting work.`,
     '</system-reminder>',
   ].join('\n')
