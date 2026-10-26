@@ -264,7 +264,7 @@ test('voice in a busy thread: queue waits, btw forks, new-session starts a threa
     [attachment: voice-message.ogg]
     --- from: assistant (TestBot)
     -# » **tommy:** Afterwards voice-queue
-    -# Queued message sent
+    -# Queued
     --- from: user (tommy)
     [attachment: voice-message.ogg]
     --- from: assistant (TestBot)
@@ -277,7 +277,7 @@ test('voice in a busy thread: queue waits, btw forks, new-session starts a threa
     Started a new session in <#THREAD>
     slow-done
     -# *project ⋅ main ⋅ Ns ⋅ N% ⋅ deterministic-v2*
-    » **tommy:** Afterwards voice-queue
+    -# Queued message sent
     voice queue ok
     -# *project ⋅ main ⋅ Ns ⋅ N% ⋅ deterministic-v2*"
   `)

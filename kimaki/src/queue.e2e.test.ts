@@ -99,12 +99,12 @@ async function expectNever({ threadId, text }: { threadId: string; text: string 
   }
 }
 
-test('. queue waits for the run, acks with position, echoes when it starts', async () => {
+test('. queue waits for the run, acks with position, replies to the message when it starts', async () => {
   const thread = await startSlowThread('Queue after me')
   const user = twin.discord.thread(thread.id).user(TEST_USER_ID)
-  await user.sendMessage({ content: 'First queued-one. queue' })
+  const first = await user.sendMessage({ content: 'First queued-one. queue' })
   await waitForBotMessageContaining({ discord: twin.discord, threadId: thread.id, text: 'position 1' })
-  await user.sendMessage({ content: 'Second queued-two. queue' })
+  const second = await user.sendMessage({ content: 'Second queued-two. queue' })
   await waitForBotMessageContaining({ discord: twin.discord, threadId: thread.id, text: 'queued two ok' })
   await waitForFooter({ discord: twin.discord, threadId: thread.id, count: 3 })
   expect(await twin.discord.thread(thread.id).text()).toMatchInlineSnapshot(`
@@ -115,20 +115,23 @@ test('. queue waits for the run, acks with position, echoes when it starts', asy
     --- from: user (tommy)
     First queued-one. queue
     --- from: assistant (TestBot)
-    -# Queued message sent
+    -# Queued
     --- from: user (tommy)
     Second queued-two. queue
     --- from: assistant (TestBot)
-    -# Queued message sent
+    -# Queued
     slow-done
     -# *project ⋅ main ⋅ Ns ⋅ N% ⋅ deterministic-v2*
-    » **tommy:** First queued-one
+    -# Queued message sent
     queued one ok
     -# *project ⋅ main ⋅ Ns ⋅ N% ⋅ deterministic-v2*
-    » **tommy:** Second queued-two
+    -# Queued message sent
     queued two ok
     -# *project ⋅ main ⋅ Ns ⋅ N% ⋅ deterministic-v2*"
   `)
+  const messages = await twin.discord.thread(thread.id).getMessages()
+  const sent = messages.filter((message) => message.content === '-# Queued message sent')
+  expect(sent.map((message) => message.message_reference?.message_id)).toEqual([first.id, second.id])
 })
 
 test('message delete takes items out of the queue, edit re-queues', async () => {
@@ -180,10 +183,10 @@ test('message delete takes items out of the queue, edit re-queues', async () => 
     [attachment: queued-notes.txt]
     --- from: assistant (TestBot)
     -# Removed from queue
-    -# Queued message sent
+    -# Queued
     slow-done
     -# *project ⋅ main ⋅ Ns ⋅ N% ⋅ deterministic-v2*
-    » **tommy:** New text edited-marker
+    -# Queued message sent
     edited ok
     -# *project ⋅ main ⋅ Ns ⋅ N% ⋅ deterministic-v2*"
   `)
@@ -217,10 +220,10 @@ test('a revoked user cannot replace a queued prompt', async () => {
     --- from: user (tommy)
     Replacement edited-marker. queue
     --- from: assistant (TestBot)
-    -# Queued message sent
+    -# Queued
     slow-done
     -# *project ⋅ main ⋅ Ns ⋅ N% ⋅ deterministic-v2*
-    » **tommy:** Original queued-one
+    -# Queued message sent
     queued one ok
     -# *project ⋅ main ⋅ Ns ⋅ N% ⋅ deterministic-v2*"
   `)
@@ -246,11 +249,11 @@ test('/queue and /clear-queue', async () => {
     » **tommy:** Slash queued-one
     -# Removed from queue
     » **tommy:** Slash queued-two
-    -# Queued message sent
+    -# Queued
     -# Cleared 1 queued message
     slow-done
     -# *project ⋅ main ⋅ Ns ⋅ N% ⋅ deterministic-v2*
-    » **tommy:** Slash queued-two
+    -# Queued message sent
     queued two ok
     -# *project ⋅ main ⋅ Ns ⋅ N% ⋅ deterministic-v2*"
   `)

@@ -4,12 +4,12 @@
 //
 //   inbox.enqueued (queue, while busy) ─▶ "Queued at position N" ack
 //   inbox.enqueued (steer, echo)       ─▶ the echo line (wakes, scheduled runs, TUI prompts)
-//   inbox.delivered                    ─▶ "» user: text" echo, ack says "Queued message sent"
+//   inbox.delivered                    ─▶ "Queued message sent" reply to the user message, ack says "Queued"
 //   inbox.cancelled                    ─▶ ack says "Removed from queue"
 //
-// Prompts without a Discord message (CLI, routines, TUI) have nothing for the
-// ack to reply to: the ack shows the full prompt, and on delivery a
-// "Queued message sent" reply to the ack replaces the echo.
+// The prompt text is never posted again on delivery. Prompts without a Discord
+// message (CLI, routines, TUI) have nothing for the ack to reply to: the ack
+// shows the full prompt, and the "Queued message sent" reply goes to the ack.
 //
 // A queued prompt's inbox ID is msg_discord_<messageId> (prompt.ts), so a
 // message delete or an edit maps to the item by ID alone. Items without a
@@ -155,12 +155,15 @@ export function deliverQueued(slice: Slice & { inboxID: string }) {
   const item = takeQueued(slice, slice.inboxID)
   if (!item || (!item.acked && !item.echo)) return
   slice.draft.lastKind = null
-  // The ack already shows the prompt: a reply to it marks where it runs, instead of a second copy.
-  if (item.acked && !item.messageId) {
-    slice.emit({ type: 'edit', key: ackKey(item.inboxID), messages: [textOnly(ackContent(item, null))], reply: asSubtext('Queued message sent') })
+  // The user message (or the ack without one) already shows the prompt: a
+  // reply to it marks where it runs, instead of a second copy. In a mainmast
+  // channel the answer itself replies to the user message (`replyTo`).
+  if (item.acked) {
+    const ack = textOnly(ackContent(item, item.messageId ? 'Queued' : null))
+    const reply = item.replyTo ? {} : { reply: asSubtext('Queued message sent'), replyTo: item.messageId }
+    slice.emit({ type: 'edit', key: ackKey(item.inboxID), messages: [ack], ...reply })
     return
   }
-  closeAck(slice, item, 'Queued message sent')
   slice.emit({ type: 'send', text: item.echo ?? formatEcho(item), echo: true })
 }
 

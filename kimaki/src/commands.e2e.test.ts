@@ -281,10 +281,10 @@ test('/queue-command queues an OpenCode command after the current run', async ()
     --- from: assistant (TestBot)
     -# *using deterministic-provider/deterministic-v2 ⋅ plan*
     » **tommy:** /later please
-    -# Queued message sent
+    -# Queued
     slow-done
     -# *project ⋅ main ⋅ Ns ⋅ N% ⋅ deterministic-v2 ⋅ plan*
-    » **tommy:** /later please
+    -# Queued message sent
     queued command reply
     -# *project ⋅ main ⋅ Ns ⋅ N% ⋅ deterministic-v2 ⋅ plan*"
   `)

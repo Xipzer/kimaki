@@ -144,7 +144,7 @@ test('a restarted bot still echoes and runs the queue it did not see', async () 
     --- from: assistant (TestBot)
     -# Queued at position 1. Delete the original message to remove it, or use /clear-queue position:1
     slow-done
-    » **tommy:** Survives restart queued-one
+    -# Queued message sent
     queued one ok
     -# *project ⋅ main ⋅ Ns ⋅ N% ⋅ deterministic-v2*"
   `)

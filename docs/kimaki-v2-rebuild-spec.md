@@ -675,7 +675,7 @@ Principles:
 | `session.execution.failed` | stop typing, `✗ error message` (max 400 chars), no footer |
 | `session.execution.interrupted` | stop typing, no footer, no error |
 | `session.inbox.enqueued` (queue) | reply `Queued (position N)` on the source message, no button |
-| `session.inbox.delivered` | queued item: post `» Tommy: prompt preview`; the ack says `Queued message sent` |
+| `session.inbox.delivered` | queued item: reply `Queued message sent` to the user message (or to the ack without one), no second copy of the text; the ack says `Queued` |
 | `session.inbox.cancelled` | remove queued ack |
 | `form.created` (question) | stop typing, dropdowns after preceding text is rendered |
 | `form.replied` / `.cancelled` | disable dropdowns |
