@@ -87,7 +87,7 @@ test('session command, named fork, and resume without a channel use the session 
   const resumed = JSON.parse((await cli(['session', 'resume', source.sessionId])).stdout)
   expect(await twin.discord.thread(source.threadId).text()).toMatchInlineSnapshot(`
     "--- from: assistant (TestBot)
-    » **CLI:** command-source
+    -# » **CLI:** command-source
     -# *using deterministic-provider/deterministic-v2 ⋅ build*
     ok
     -# *project ⋅ main ⋅ Ns ⋅ deterministic-v2*

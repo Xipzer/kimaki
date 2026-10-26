@@ -296,7 +296,7 @@ test('voice in a busy thread: queue waits, btw forks, new-session starts a threa
   `)
   expect(hide(await twin.discord.thread(fresh.id).text())).toMatchInlineSnapshot(`
     "--- from: assistant (TestBot)
-    » **tommy:** Fresh start voice-new
+    -# » **tommy:** Fresh start voice-new
     -# *using deterministic-provider/deterministic-v2 ⋅ build*
     voice new session ok
     -# *project ⋅ main ⋅ Ns ⋅ N% ⋅ deterministic-v2*"

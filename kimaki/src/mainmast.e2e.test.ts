@@ -186,7 +186,7 @@ test('a worker started with --parent-session gets a thread and wakes the mainmas
   `)
   expect(await discord.thread(thread.id).text({ showReplies: true })).toMatchInlineSnapshot(`
     "--- from: assistant (TestBot)
-    » **CLI:** worker-marker do the job
+    -# » **CLI:** worker-marker do the job
     -# *using deterministic-provider/deterministic-v2 ⋅ build*
     Job done in the worker.
     -# *project ⋅ main ⋅ Ns ⋅ N% ⋅ deterministic-v2*"

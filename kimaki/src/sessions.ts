@@ -33,7 +33,7 @@ import { createLogger } from './logger.ts'
 import { mainmastTimers } from './mainmast.ts'
 import type { OpenCodeClient, OpencodeEndpoint } from './opencode-server.ts'
 import { prompt, runInSession } from './prompt.ts'
-import { formatEcho, formatVoiceEcho } from './queue.ts'
+import { formatEcho } from './queue.ts'
 import type { Route } from './routes.ts'
 import * as schema from './schema.ts'
 import { disabledSkillRules } from './builtin-skills.ts'
@@ -351,7 +351,6 @@ export async function startSession(
     messageId,
     startMessageId = messageId,
     showInput = startMessageId === null,
-    voice = false,
     threadName: explicitName,
     files = [],
     model: explicitModel,
@@ -377,8 +376,6 @@ export async function startSession(
     // Post the input as the first thread message: the start message does not
     // show it (voice message, or no start message).
     showInput?: boolean
-    // The input is a voice transcription: shown as subtext.
-    voice?: boolean
     // Default: the input text, flattened and cut to 80 chars.
     threadName?: string
     files?: readonly PromptFile[]
@@ -495,8 +492,7 @@ export async function startSession(
     const shown = names ? `${text}\nFiles: ${names}` : text
     // Through the thread's effect queue, so the prompt does not wait for Discord,
     // the echo comes before the session output and a long prompt is split.
-    const format = voice ? formatVoiceEcho : formatEcho
-    bot.effects.run(thread.id, [{ type: 'send', text: format({ username: author.username, text: shown }), echo: true }])
+    bot.effects.run(thread.id, [{ type: 'send', text: formatEcho({ username: author.username, text: shown }), echo: true }])
   }
 
   const base = { sessionId: session.id, threadId: thread.id, threadName, author, messageId, files, waited }

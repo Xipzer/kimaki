@@ -34,7 +34,7 @@ import { createLogger } from './logger.ts'
 import { parseInput, sendInput } from './lock-routes.ts'
 import { cancelQueuedPrompt, dispatch, requeueEdited, send } from './prompt.ts'
 import { REMOTE_PROMPT_FILE, REMOTE_RESULT_PREFIX, REMOTE_SEND_PREFIX } from './remote-send.ts'
-import { formatVoiceEcho, queuedItemFor } from './queue.ts'
+import { formatEchoReply, queuedItemFor } from './queue.ts'
 import { parseTextMessage, type Route } from './routes.ts'
 import { primaryAgents, startMainmast, startSession } from './sessions.ts'
 import { isVoiceAttachment, parseVoiceMessage, transcribe, voiceMediaType, type AttachmentLike } from './voice.ts'
@@ -264,7 +264,7 @@ async function handleMessage(bot: Bot, message: Message) {
   logger.log(`${route.kind}${detail} from ${author.username} in ${thread ? `thread ${thread.id}` : `channel ${channelId}`}${attached}`)
   // The transcription is not visible anywhere else.
   if (voice && (thread || bot.mainmast) && route.kind !== 'shell' && route.kind !== 'command' && route.kind !== 'skill') {
-    await message.reply({ content: formatVoiceEcho({ username: author.username, text: route.text }), allowedMentions: { parse: [] }, flags: SILENT_MESSAGE_FLAGS })
+    await message.reply({ content: formatEchoReply({ username: author.username, text: route.text }), allowedMentions: { parse: [] }, flags: SILENT_MESSAGE_FLAGS })
   }
 
   // Mainmast: the channel is the conversation of one long session.
@@ -272,7 +272,7 @@ async function handleMessage(bot: Bot, message: Message) {
     const result = bot.store.getState().roots[channel.id]
       ? await dispatch(bot, { conversation: channel, route, author, messageId: message.id, files })
       : route.kind === 'new-session'
-        ? await startSession(bot, { channelId, directory: project.directory, route: { kind: 'steer', text: route.text, ...(route.agent && { agent: route.agent }) }, author, messageId: message.id, startMessageId: null, voice: Boolean(voice), files })
+        ? await startSession(bot, { channelId, directory: project.directory, route: { kind: 'steer', text: route.text, ...(route.agent && { agent: route.agent }) }, author, messageId: message.id, startMessageId: null, files })
         : await startMainmast(bot, {
             channel,
             // Queue and btw need a session to wait for or fork from: the first input is a plain prompt.
@@ -299,7 +299,6 @@ async function handleMessage(bot: Bot, message: Message) {
       author,
       messageId: message.id,
       showInput: Boolean(voice),
-      voice: Boolean(voice),
       files,
     })
     if (started instanceof Error) return reportError(started)

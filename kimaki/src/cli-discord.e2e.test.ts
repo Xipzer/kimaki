@@ -56,7 +56,7 @@ test('independent Discord CLI lists threads and users, uploads a file, and reads
   const install = await cli(['bot', 'install-url'])
   expect(await twin.discord.thread(started.threadId).text()).toMatchInlineSnapshot(`
     "--- from: assistant (TestBot)
-    » **CLI:** Discord CLI flow
+    -# » **CLI:** Discord CLI flow
     -# *using deterministic-provider/deterministic-v2 ⋅ build*
     ok
     -# *project ⋅ main ⋅ Ns ⋅ deterministic-v2*

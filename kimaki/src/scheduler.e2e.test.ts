@@ -51,7 +51,7 @@ test('a one-shot routine starts a thread at its time, then is gone', async () =>
   await waitForFooter({ discord: twin.discord, threadId: threadId! })
   expect(await twin.discord.thread(threadId!).text()).toMatchInlineSnapshot(`
     "--- from: assistant (TestBot)
-    » **routine #1:** Check the deploy once
+    -# » **routine #1:** Check the deploy once
     -# *using deterministic-provider/deterministic-v2 ⋅ build*
     ok
     -# *project ⋅ main ⋅ Ns ⋅ deterministic-v2*"
@@ -93,7 +93,7 @@ test('a cron routine fires once per occurrence, in a new thread each time', asyn
   expect([first.length, second.length]).toEqual([1, 1])
   expect(await twin.discord.thread(second[0]!).text()).toMatchInlineSnapshot(`
     "--- from: assistant (TestBot)
-    » **routine #2:** Hourly report
+    -# » **routine #2:** Hourly report
     -# *using deterministic-provider/deterministic-v2 ⋅ build*
     ok
     -# *project ⋅ main ⋅ Ns ⋅ deterministic-v2*"
@@ -114,14 +114,14 @@ test('a routine for an existing thread prompts that thread, with or without . qu
   await waitForFooter({ discord: twin.discord, threadId: started.threadId, count: 3 })
   expect(await twin.discord.thread(started.threadId).text()).toMatchInlineSnapshot(`
     "--- from: assistant (TestBot)
-    » **CLI:** Thread for a reminder
+    -# » **CLI:** Thread for a reminder
     -# *using deterministic-provider/deterministic-v2 ⋅ build*
     ok
     -# *project ⋅ main ⋅ Ns ⋅ deterministic-v2*
-    » **routine #3:** Reminder: check the logs
+    -# » **routine #3:** Reminder: check the logs
     ok
     -# *project ⋅ main ⋅ Ns ⋅ deterministic-v2*
-    » **routine #4:** Then summarize them
+    -# » **routine #4:** Then summarize them
     ok
     -# *project ⋅ main ⋅ Ns ⋅ deterministic-v2*"
   `)
@@ -136,11 +136,9 @@ test('--pre-run: a failing command skips the run, output is appended to the prom
   await waitForFooter({ discord: twin.discord, threadId: created[0]! })
   expect(await twin.discord.thread(created[0]!).text()).toMatchInlineSnapshot(`
     "--- from: assistant (TestBot)
-    » **routine #6:** Summarize the new issues
-
-    ## Pre-run command output
-
-    issue 42 is new
+    -# » **routine #6:** Summarize the new issues
+    -# **Pre-run command output**
+    -# issue 42 is new
     -# *using deterministic-provider/deterministic-v2 ⋅ build*
     ok
     -# *project ⋅ main ⋅ Ns ⋅ deterministic-v2*"
@@ -162,14 +160,14 @@ test('recurring worktree routines get a fresh checkout on every run', async () =
   const normalize = (text: string) => text.replace(/report-[a-f0-9]{8}/g, 'report-ID')
   expect(normalize(await twin.discord.thread(first[0]!).text())).toMatchInlineSnapshot(`
     "--- from: assistant (TestBot)
-    » **routine #7:** Isolated recurring report
+    -# » **routine #7:** Isolated recurring report
     -# *using deterministic-provider/deterministic-v2 ⋅ build*
     ok
     -# *report-ID ⋅ opencode/kimaki-report-ID ⋅ Ns ⋅ deterministic-v2*"
   `)
   expect(normalize(await twin.discord.thread(second[0]!).text())).toMatchInlineSnapshot(`
     "--- from: assistant (TestBot)
-    » **routine #7:** Isolated recurring report
+    -# » **routine #7:** Isolated recurring report
     -# *using deterministic-provider/deterministic-v2 ⋅ build*
     ok
     -# *report-ID ⋅ opencode/kimaki-report-ID ⋅ Ns ⋅ deterministic-v2*"

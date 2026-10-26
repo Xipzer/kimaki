@@ -43,7 +43,7 @@ test('session read, list, sync, wait, url and events read real session history',
   const events = await cli(['session', 'events', first.sessionId])
   expect(await twin.discord.thread(first.threadId).text()).toMatchInlineSnapshot(`
     "--- from: assistant (TestBot)
-    » **CLI:** Reader content marker
+    -# » **CLI:** Reader content marker
     -# *using deterministic-provider/deterministic-v2 ⋅ build*
     ok
     -# *project ⋅ main ⋅ Ns ⋅ deterministic-v2*"
@@ -68,7 +68,7 @@ test('session wait returns for a real pending question; active discovery errors 
   const result = await cli(['session', 'wait', first.sessionId, '--timeout', '3s'])
   expect(await twin.discord.thread(first.threadId).text()).toMatchInlineSnapshot(`
     "--- from: assistant (TestBot)
-    » **CLI:** wait-form-marker
+    -# » **CLI:** wait-form-marker
     -# *using deterministic-provider/deterministic-v2 ⋅ build*
     **Next**
     Continue?"

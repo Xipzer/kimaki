@@ -14,7 +14,7 @@ test('text-only turn: banner, text, typing, footer with context percent', () => 
     [
       {
         "echo": true,
-        "text": "» **user:** Do these steps with tools, one by one: 1) run \`ls cli/src | head -5\` with bash, 2) write a file tmp-events/hello.txt containing "hello", 3) edit that file to replace hello with "hello world", 4) glob for **/*.txt under tmp-events, 5) read the file. Then reply with one short line.",
+        "text": "-# » **user:** Do these steps with tools, one by one: 1) run \`ls cli/src | head -5\` with bash, 2) write a file tmp-events/hello.txt containing "hello", 3) edit that file to replace hello with "hello world", 4) glob for **/*.txt under tmp-events, 5) read the file. Then reply with one short line.",
         "type": "send",
       },
       {
@@ -153,7 +153,7 @@ test('execution failure shows the error and no footer, interrupt shows nothing',
     [
       {
         "echo": true,
-        "text": "» **user:** Run \`sleep 30 && echo never\` with bash, then summarize.",
+        "text": "-# » **user:** Run \`sleep 30 && echo never\` with bash, then summarize.",
         "type": "send",
       },
       {
@@ -175,7 +175,7 @@ test('execution failure shows the error and no footer, interrupt shows nothing',
       },
       {
         "echo": true,
-        "text": "» **user:** Say only: resumed after abort.",
+        "text": "-# » **user:** Say only: resumed after abort.",
         "type": "send",
       },
       {
@@ -371,7 +371,7 @@ test('prompts from other clients echo, except the expanded prompt of a command K
   const command = { type: 'kimaki.command' as const, text: '/review auth', username: 'tommy', messageId: null }
   expect(echoes([])).toMatchInlineSnapshot(`
     [
-      "» **user:** Run \`sleep 6 && echo slow-done\` with bash, then say done.",
+      "-# » **user:** Run \`sleep 6 && echo slow-done\` with bash, then say done.",
       "[show queue:msg_0f20347e1001nsJ7W4hOvhBpQb] -# » **user:** QUEUED-1: reply with the word apple.
     -# Queued at position 1. Remove it with /clear-queue position:1",
       "[show queue:msg_0f20347e500196F4o0voD7LGMV] -# » **user:** QUEUED-2: reply with the word cherry.

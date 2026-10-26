@@ -246,9 +246,9 @@ test('/queue and /clear-queue', async () => {
     Slash queue slow-marker
     --- from: assistant (TestBot)
     -# *using deterministic-provider/deterministic-v2 ⋅ build*
-    » **tommy:** Slash queued-one
+    -# » **tommy:** Slash queued-one
     -# Removed from queue
-    » **tommy:** Slash queued-two
+    -# » **tommy:** Slash queued-two
     -# Queued
     -# Cleared 1 queued message
     slow-done

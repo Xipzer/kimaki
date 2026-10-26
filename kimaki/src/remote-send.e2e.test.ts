@@ -38,8 +38,8 @@ test('CLI remote envelope runs only on the owning bot and returns its IDs', asyn
   await waitForFooter({ discord: twin.discord, threadId: ids.threadId, count: 2 })
   expect((await twin.discord.thread(ids.threadId).text()).replaceAll(ids.threadId, 'THREAD')).toMatchInlineSnapshot(`
     "--- from: assistant (TestBot)
-    » **CLI:** Remote first
-    Files: remote.txt
+    -# » **CLI:** Remote first
+    -# Files: remote.txt
     -# *using deterministic-provider/deterministic-v2 ⋅ build*
     ok
     -# *project ⋅ main ⋅ Ns ⋅ deterministic-v2*
@@ -67,7 +67,7 @@ test('CI send with only KIMAKI_BOT_TOKEN and no local bot reaches the owning bot
   await waitForFooter({ discord: twin.discord, threadId: ids.threadId })
   expect(await twin.discord.thread(ids.threadId).text()).toMatchInlineSnapshot(`
     "--- from: assistant (TestBot)
-    » **CLI:** From CI
+    -# » **CLI:** From CI
     -# *using deterministic-provider/deterministic-v2 ⋅ build*
     ok
     -# *project ⋅ main ⋅ Ns ⋅ deterministic-v2*"

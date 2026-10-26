@@ -138,7 +138,7 @@ test('a user joins and speaks, the backend runs kimaki commands and the model sa
     "--- from: assistant (TestBot)
     -# voice call started ⋅ gpt-live ⋅ cove
     Hello tommy.
-    » **tommy:** Which projects do I have?
+    -# » **tommy:** Which projects do I have?
     -# ┣ shell _seq 1 2000; kimaki project list_
     -# ┣ shell _kimaki send --channel 200000000000000100 --prompt 'Voice call note' --notify-on…_
     -# session started in <#thread>

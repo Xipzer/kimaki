@@ -56,7 +56,7 @@ test('agent shim shows buttons after text and a click resumes the real session',
   await waitForFooter({ discord: twin.discord, threadId, count: 2 })
   expect(await twin.discord.thread(threadId).text()).toMatchInlineSnapshot(`
     "--- from: assistant (TestBot)
-    » **CLI:** button-marker
+    -# » **CLI:** button-marker
     -# *using deterministic-provider/deterministic-v2 ⋅ build*
     Choose the next action.
 
@@ -89,7 +89,7 @@ test('native file upload modal returns local paths to the agent shell', async ()
   await waitForFooter({ discord: twin.discord, threadId })
   expect(await twin.discord.thread(threadId).text()).toMatchInlineSnapshot(`
     "--- from: assistant (TestBot)
-    » **CLI:** upload-marker
+    -# » **CLI:** upload-marker
     -# *using deterministic-provider/deterministic-v2 ⋅ build*
     -# ┣ shell _Request logo_
     -# dismissed
@@ -106,7 +106,7 @@ test('git context is added only to marked Discord sessions', async () => {
   await waitForFooter({ discord: twin.discord, threadId })
   expect(await twin.discord.thread(threadId).text()).toMatchInlineSnapshot(`
     "--- from: assistant (TestBot)
-    » **CLI:** git-marker
+    -# » **CLI:** git-marker
     -# *using deterministic-provider/deterministic-v2 ⋅ build*
     Git context received.
     -# *project ⋅ main ⋅ Ns ⋅ N% ⋅ deterministic-v2*"

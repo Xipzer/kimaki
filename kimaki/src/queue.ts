@@ -79,8 +79,7 @@ function inputFields({ payload, channelId }: { payload: { text: string; metadata
   }
 }
 
-// The full prompt. A long one becomes several messages (effects.ts).
-export function formatEcho({ username, text }: { username: string | null; text: string }): string {
+function echoLine({ username, text }: { username: string | null; text: string }): string {
   // Block markdown only renders at the start of a line, so it goes below the prefix.
   const separator = BLOCK_MARKDOWN_START.test(text) ? '\n' : ' '
   return `» **${username ?? 'queued'}:**${separator}${text}`
@@ -88,22 +87,39 @@ export function formatEcho({ username, text }: { username: string | null; text: 
 
 // Headings, quotes, lists, code fences, rules, tables and subtext.
 const BLOCK_MARKDOWN_START = /^ {0,3}(#{1,6}(\s|$)|-#\s|>|[-*+]\s|\d{1,9}[.)]\s|```|~~~|-{3,}\s*$|\|)/
+const CODE_FENCE = /^ {0,3}(```|~~~)/
 
-// A reply that stands in for the user message is one Discord message: long text is cut.
+// Every prompt the bot posts (CLI, routines, TUI, voice, slash commands) is
+// subtext, so it reads apart from model output. A long one becomes several messages (effects.ts).
+export function formatEcho(input: { username: string | null; text: string }): string {
+  return subtext(echoLine(input))
+}
+
+// A reply that stands in for a user message (slash commands, voice messages)
+// is one Discord message: long text is cut.
 export function formatEchoReply(input: { username: string | null; text: string }): string {
-  const echo = formatEcho(input)
-  return echo.length > DISCORD_TEXT_LIMIT ? `${echo.slice(0, DISCORD_TEXT_LIMIT - 1)}…` : echo
+  return cut(formatEcho(input), DISCORD_TEXT_LIMIT)
 }
 
-// Every non-empty line gets `-# `, cut to `limit` chars so it stays one message.
-function subtextEcho(echo: string, limit = DISCORD_TEXT_LIMIT): string {
-  const subtext = echo.split('\n').filter((line) => line.trim() !== '').map(asSubtext).join('\n')
-  return subtext.length > limit ? `${subtext.slice(0, limit - 1)}…` : subtext
+// Every non-empty line gets `-# `. Subtext only renders inline markdown: code
+// blocks stay as they are, headings become bold, other block markers show as text.
+function subtext(text: string): string {
+  let fenced = false
+  return text
+    .split('\n')
+    .flatMap((line) => {
+      if (CODE_FENCE.test(line)) fenced = !fenced
+      else if (!fenced && line.trim() === '') return []
+      else if (!fenced && !line.startsWith('-# ')) return [asSubtext(line.replace(HEADING, '**$1**'))]
+      return [line]
+    })
+    .join('\n')
 }
 
-// A voice transcription is subtext, grey and quiet. One message, long text is cut.
-export function formatVoiceEcho(input: { username: string | null; text: string }): string {
-  return subtextEcho(formatEcho(input))
+const HEADING = /^ {0,3}#{1,6}\s+(.+?)\s*$/
+
+function cut(text: string, limit: number): string {
+  return text.length > limit ? `${text.slice(0, limit - 1)}…` : text
 }
 
 // The ack of a prompt with a Discord message replies to it. Without one (CLI,
@@ -111,7 +127,7 @@ export function formatVoiceEcho(input: { username: string | null; text: string }
 function ackContent(item: PendingInput, status: string | null): string {
   if (item.messageId) return asSubtext(status ?? '')
   const line = status ? `\n${asSubtext(status)}` : ''
-  return `${subtextEcho(item.echo ?? formatEcho(item), DISCORD_TEXT_LIMIT - line.length)}${line}`
+  return `${cut(subtext(item.echo ?? echoLine(item)), DISCORD_TEXT_LIMIT - line.length)}${line}`
 }
 
 type Slice = { draft: Draft<ThreadView>; emit: Emit }

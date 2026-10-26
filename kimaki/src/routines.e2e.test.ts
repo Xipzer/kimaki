@@ -92,7 +92,7 @@ test('a routine row written by V1 runs unchanged', async () => {
   await waitForFooter({ discord: twin.discord, threadId: threadId! })
   expect(await twin.discord.thread(threadId!).text()).toMatchInlineSnapshot(`
     "--- from: assistant (TestBot)
-    » **routine #3:** V1 weekly check
+    -# » **routine #3:** V1 weekly check
     -# *using deterministic-provider/deterministic-v2 ⋅ build*
     ok
     -# *project ⋅ main ⋅ Ns ⋅ deterministic-v2*"

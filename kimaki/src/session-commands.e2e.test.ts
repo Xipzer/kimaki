@@ -138,8 +138,8 @@ test('/new-session starts a thread with attached files and an agent', async () =
   `)
   expect(await discord.thread(thread.id).text()).toMatchInlineSnapshot(`
     "--- from: assistant (TestBot)
-    » **tommy:** Read it new-marker
-    Files: notes.txt
+    -# » **tommy:** Read it new-marker
+    -# Files: notes.txt
     -# *using deterministic-provider/deterministic-v2 ⋅ plan*
     saw the file
     -# *project ⋅ main ⋅ Ns ⋅ N% ⋅ deterministic-v2 ⋅ plan*"
@@ -208,7 +208,7 @@ test('/resume binds an existing session to a new thread and moves the binding', 
     --- from: assistant (TestBot)
     resumed answer
     -# *project ⋅ main ⋅ Ns ⋅ N% ⋅ deterministic-v2*
-    » **user:** Back in the TUI tui-marker
+    -# » **user:** Back in the TUI tui-marker
     tui answer
     -# *project ⋅ main ⋅ Ns ⋅ N% ⋅ deterministic-v2*"
   `)

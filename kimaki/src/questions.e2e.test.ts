@@ -138,7 +138,7 @@ test('single question answered from the dropdown', async () => {
   await waitForFooter({ discord: twin.discord, threadId: thread.id })
   expect(await twin.discord.thread(thread.id).text({ showInteractions: true })).toMatchInlineSnapshot(`
     "--- from: assistant (TestBot)
-    » **CLI:** Pick a color ask-one
+    -# » **CLI:** Pick a color ask-one
     -# *using deterministic-provider/deterministic-v2 ⋅ build*
     **Color**
     Which color do you prefer?
@@ -163,7 +163,7 @@ test('two questions: the form is answered after both, multi-select keeps options
   await waitForFooter({ discord: twin.discord, threadId: thread.id })
   expect(await twin.discord.thread(thread.id).text()).toMatchInlineSnapshot(`
     "--- from: assistant (TestBot)
-    » **CLI:** Two questions ask-two
+    -# » **CLI:** Two questions ask-two
     -# *using deterministic-provider/deterministic-v2 ⋅ build*
     **Color**
     Which color do you prefer?
@@ -189,7 +189,7 @@ test('Other opens a modal and sends the typed answer', async () => {
   await waitForFooter({ discord: twin.discord, threadId: thread.id })
   expect(await twin.discord.thread(thread.id).text()).toMatchInlineSnapshot(`
     "--- from: assistant (TestBot)
-    » **CLI:** Custom color ask-other
+    -# » **CLI:** Custom color ask-other
     -# *using deterministic-provider/deterministic-v2 ⋅ build*
     **Color**
     Which color do you prefer?
@@ -246,7 +246,7 @@ test('OpenCode forms without the question tool (web search setup, yes/no) show l
   `)
   expect(await twin.discord.thread(thread.id).text()).toMatchInlineSnapshot(`
     "--- from: assistant (TestBot)
-    » **CLI:** Hello instead-marker
+    -# » **CLI:** Hello instead-marker
     -# *using deterministic-provider/deterministic-v2 ⋅ build*
     did the other thing
     -# *project ⋅ main ⋅ Ns ⋅ N% ⋅ deterministic-v2*
@@ -266,7 +266,7 @@ test('a new message cancels the pending question and is answered', async () => {
   await waitForFooter({ discord: twin.discord, threadId: thread.id })
   expect(await twin.discord.thread(thread.id).text()).toMatchInlineSnapshot(`
     "--- from: assistant (TestBot)
-    » **CLI:** Ask then change ask-cancel
+    -# » **CLI:** Ask then change ask-cancel
     -# *using deterministic-provider/deterministic-v2 ⋅ build*
     **Color**
     Which color do you prefer?
@@ -294,7 +294,7 @@ test('a restarted bot shows the pending question again and it still works', asyn
   await waitForFooter({ discord: twin.discord, threadId: thread.id })
   expect(await twin.discord.thread(thread.id).text()).toMatchInlineSnapshot(`
     "--- from: assistant (TestBot)
-    » **CLI:** Survive restart ask-restart
+    -# » **CLI:** Survive restart ask-restart
     -# *using deterministic-provider/deterministic-v2 ⋅ build*
     **Color**
     Which color do you prefer?

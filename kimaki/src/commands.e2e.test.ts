@@ -133,10 +133,10 @@ test('/skill and /command run catalog entries through project autocomplete', asy
     -# *using deterministic-provider/deterministic-v2 ⋅ build*
     ok
     -# *project ⋅ main ⋅ Ns ⋅ deterministic-v2*
-    » **tommy:** /opencode explain skill-marker
+    -# » **tommy:** /opencode explain skill-marker
     skill reply
     -# *project ⋅ main ⋅ Ns ⋅ N% ⋅ deterministic-v2*
-    » **tommy:** /hello world
+    -# » **tommy:** /hello world
     command reply
     -# *project ⋅ main ⋅ Ns ⋅ N% ⋅ deterministic-v2*"
   `)
@@ -186,7 +186,7 @@ test('/<agent>-agent sets the channel agent, or starts a session with a prompt',
   `)
   expect(await discord.thread(built.id).text()).toMatchInlineSnapshot(`
     "--- from: assistant (TestBot)
-    » **tommy:** Build it build-marker
+    -# » **tommy:** Build it build-marker
     -# *using deterministic-provider/deterministic-v2 ⋅ build*
     build reply
     -# *project ⋅ main ⋅ Ns ⋅ N% ⋅ deterministic-v2*"
@@ -211,10 +211,10 @@ test('/<cmd>-cmd, /<skill>-skill and a `/server:prompt` message run in the threa
     -# *using deterministic-provider/deterministic-v2 ⋅ plan*
     ok
     -# *project ⋅ main ⋅ Ns ⋅ deterministic-v2 ⋅ plan*
-    » **tommy:** /hello world
+    -# » **tommy:** /hello world
     command reply
     -# *project ⋅ main ⋅ Ns ⋅ N% ⋅ deterministic-v2 ⋅ plan*
-    » **tommy:** /opencode explain skill-marker
+    -# » **tommy:** /opencode explain skill-marker
     skill reply
     -# *project ⋅ main ⋅ Ns ⋅ N% ⋅ deterministic-v2 ⋅ plan*
     --- from: user (tommy)
@@ -280,7 +280,7 @@ test('/queue-command queues an OpenCode command after the current run', async ()
     Long run slow-marker
     --- from: assistant (TestBot)
     -# *using deterministic-provider/deterministic-v2 ⋅ plan*
-    » **tommy:** /later please
+    -# » **tommy:** /later please
     -# Queued
     slow-done
     -# *project ⋅ main ⋅ Ns ⋅ N% ⋅ deterministic-v2 ⋅ plan*

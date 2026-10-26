@@ -418,7 +418,7 @@ test('/<agent>-agent variant: sets the thinking level with the agent, per sessio
     -# *using deterministic-provider/deterministic-v2 ⋅ build*
     ok
     -# *project ⋅ main ⋅ Ns ⋅ deterministic-v2*
-    » **tommy:** (plan, deep) Think hard
+    -# » **tommy:** (plan, deep) Think hard
     -# Switched model to deterministic-v2 (deep)
     -# Switched agent to Plan
     ok
@@ -504,7 +504,7 @@ test('agent selection replaces a stale model and uses the agent model for varian
     Switched to **build** agent for this session (was **thinker**)
     The agent changes from the next step.
     -# Switched agent from Thinker to Build
-    » **tommy:** (thinker, low) Use the agent model
+    -# » **tommy:** (thinker, low) Use the agent model
     -# Switched model to Thinker (low)
     -# Switched agent from Build to Thinker
     ok
@@ -530,7 +530,7 @@ test('agent selection replaces a stale model and uses the agent model for varian
     Switched to **build** agent for this session (was **thinker**)
     The agent changes from the next step.
     -# Switched agent from Thinker to Build
-    » **tommy:** (thinker, low) Use the agent model
+    -# » **tommy:** (thinker, low) Use the agent model
     -# Switched model to Thinker (low)
     -# Switched agent from Build to Thinker
     ok
