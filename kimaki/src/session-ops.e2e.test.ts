@@ -16,6 +16,7 @@ import {
   startTwin,
   tempDataDir,
   textParts,
+  waitFor,
   waitForBotMessageContaining,
   waitForFooter,
   warmUp,
@@ -95,7 +96,12 @@ test('/diff with a clean working tree and /context-usage after a turn', async ()
 test('/compact summarizes the history without a footer', async () => {
   const thread = await newThread('Something to compact')
   await command(thread.id, 'compact', 'Compacting')
-  await waitForBotMessageContaining({ discord: twin.discord, threadId: thread.id, text: 'context compacted' })
+  const sessionId = bot.store.getState().roots[thread.id]!
+  const client = await server.client()
+  await waitFor({
+    label: 'compaction message',
+    check: async () => (await client.message.list({ sessionID: sessionId, order: 'asc' })).data.some((message) => message.type === 'compaction') || null,
+  })
   expect(await twin.discord.thread(thread.id).text()).toMatchInlineSnapshot(`
     "--- from: user (tommy)
     Something to compact
@@ -103,12 +109,8 @@ test('/compact summarizes the history without a footer', async () => {
     -# *using deterministic-provider/deterministic-v2 ⋅ build*
     ok
     -# *project ⋅ main ⋅ Ns ⋅ deterministic-v2*
-    Compacting the session context
-    -# context compacted"
+    Compacting the session context"
   `)
-  const sessionId = bot.store.getState().roots[thread.id]!
-  const messages = await (await server.client()).message.list({ sessionID: sessionId, order: 'asc' })
-  expect(messages.data.map((message) => message.type)).toContain('compaction')
 })
 
 test('/undo hides the last turn but keeps its files, /redo restores the turn', async () => {

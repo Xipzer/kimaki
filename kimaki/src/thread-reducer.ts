@@ -310,6 +310,13 @@ function showCompacted(context: Context, size: { tokens: number | null; percent:
   toolLine(context, formatCompacted(size))
 }
 
+// A compaction in an execution with no model step (`/compact`, the idle mainmast compaction) stays silent:
+// the user did not ask for anything, so the line is only noise. Auto compaction in a turn shows.
+function endCompaction(context: Context) {
+  if (context.draft.compacted && context.draft.turn?.model) showCompacted(context, { tokens: null, percent: null })
+  context.draft.compacted = false
+}
+
 function contextPercent({ tokens, model, prefs }: { tokens: number; model: ModelRef | null; prefs: Prefs }): number | null {
   if (!model || tokens <= 0) return null
   const limit = prefs.models[`${model.providerID}/${model.id}`]?.context
@@ -473,8 +480,7 @@ function applyRoot(context: Context & { event: V2Event }) {
     case 'session.compaction.failed':
       return toolLine(context, formatError(`compaction failed: ${event.data.error.message}`))
     case 'session.execution.succeeded': {
-      // `/compact` alone: no step reads the new context in this execution.
-      if (draft.compacted) showCompacted(context, { tokens: null, percent: null })
+      endCompaction(context)
       if (draft.turn) emitFooter({ ...context, turn: draft.turn, at: event.created, notify: !draft.turn.slept })
       draft.turn = null
       draft.lastKind = null
@@ -482,14 +488,14 @@ function applyRoot(context: Context & { event: V2Event }) {
       return
     }
     case 'session.execution.failed':
-      if (draft.compacted) showCompacted(context, { tokens: null, percent: null })
+      endCompaction(context)
       draft.turn = null
       draft.lastKind = null
       emit({ type: 'send', text: formatError(event.data.error.message), notify: true })
       emit({ type: 'viewed', sessionId: draft.sessionId, idle: event.created })
       return
     case 'session.execution.interrupted':
-      if (draft.compacted) showCompacted(context, { tokens: null, percent: null })
+      endCompaction(context)
       draft.turn = null
       draft.lastKind = null
       // A shutdown does not make the session idle in OpenCode.

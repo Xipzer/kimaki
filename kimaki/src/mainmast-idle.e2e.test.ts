@@ -77,7 +77,6 @@ test('an idle mainmast is nudged once, stays silent, then gets compacted', async
     label: 'compaction of the idle mainmast',
     check: async () => (await client.message.list({ sessionID: root, order: 'desc', limit: 10 })).data.some((message) => message.type === 'compaction') || null,
   })
-  await waitFor({ label: 'compaction line', check: async () => (await discord.channel(channelId).text()).includes('context compacted') || null })
 
   expect(await discord.channel(channelId).text()).toMatchInlineSnapshot(`
     "--- from: user (tommy)
@@ -85,8 +84,7 @@ test('an idle mainmast is nudged once, stays silent, then gets compacted', async
     --- from: assistant (TestBot)
     -# *using deterministic-provider/deterministic-v2 ⋅ build*
     Hi there.
-    -# *project ⋅ main ⋅ Ns ⋅ N% ⋅ deterministic-v2*
-    -# context compacted"
+    -# *project ⋅ main ⋅ Ns ⋅ N% ⋅ deterministic-v2*"
   `)
   const messages = await client.message.list({ sessionID: root, order: 'asc', limit: 20 })
   // One nudge, answered with nothing, before the compaction.
