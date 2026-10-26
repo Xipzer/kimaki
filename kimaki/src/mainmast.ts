@@ -12,6 +12,7 @@ import { oc, projectOf, readMarker, threadOfSession, type Bot, type MainmastTime
 import { parseDuration } from './duration.ts'
 import type { RunEnded } from './event-loop.ts'
 import { createLogger } from './logger.ts'
+import { IDLE_REPLY } from './plugin/mainmast.ts'
 import { finalAnswer, mediaBlock, uploadedMedia, type Message } from './session-events.ts'
 import { escapeAttribute } from './system-prompt.ts'
 
@@ -141,7 +142,7 @@ async function noteRunEnded(bot: Bot, run: RunEnded): Promise<void> {
     cut(answer, wake ? WAKE_ANSWER_CHARS : NOTE_ANSWER_CHARS),
     ...(media ? [media] : []),
     `More: kimaki session read ${run.sessionId}`,
-    ...(wake ? [`The user sees nothing else about this. Tell them the outcome in a few short lines, with the thread link <#${run.threadId}> once${media ? ' and the media URLs above' : ''}.`] : []),
+    ...(wake ? [`The user sees nothing else about this. When it is work they asked for, a failure or a decision they must make, tell them the outcome in a few plain sentences, with the thread link <#${run.threadId}> once${media ? ' and the media URLs above' : ''}. Otherwise reply exactly ${IDLE_REPLY}.`] : []),
     '</session-finished>',
   ].join('\n')
   const sent = await oc(bot, 'session.synthetic', (client) =>

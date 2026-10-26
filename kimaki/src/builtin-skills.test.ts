@@ -56,7 +56,6 @@ test('--disable-prompt removes exactly the headings of each section', () => {
       ],
       "discord-callouts": [
         "## Callouts in Kimaki Discord",
-        "## Tests not fully green",
       ],
       "discord-permissions": [
         "## permissions",

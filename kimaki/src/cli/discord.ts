@@ -26,7 +26,7 @@ const BUTTONS_SHOWN = dedent`
   If your text in this turn does not explain them yet, write it now:
   - what was done in this session, concisely, including any findings from tool or task outputs that the choice depends on
   - what each button does and its tradeoffs
-  Be concise: a few short lines, no walls of text. Do not only repeat the button labels. Then stop and wait for the click.
+  Be concise: a few short lines in plain sentences, no walls of text. Do not only repeat the button labels. Then stop and wait for the click.
 
 `
 // buttons, upload-request

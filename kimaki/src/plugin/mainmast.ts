@@ -25,8 +25,9 @@ export const IDLE_REPLY = 'IDLE'
 export function idleNudgeText(minutes: number) {
   return [
     '<system-reminder>',
-    `The user has not replied for ${minutes} minutes. Is there useful work you can start now while the user is away, so no time is wasted?`,
-    `If yes, start it now. If not, reply with exactly ${IDLE_REPLY} and nothing else.`,
+    `The user has not replied for ${minutes} minutes. If there is useful work that clearly moves their goals forward, start it now.`,
+    'Do not tell the user anything unless it is important and they should really see it: a failure, a blocker, a decision only they can make, or a result they asked for. Never post a status, a plan or a recap of what you did or are doing.',
+    `In every other case your whole reply is exactly ${IDLE_REPLY}, also after starting work.`,
     '</system-reminder>',
   ].join('\n')
 }
@@ -252,11 +253,11 @@ function mainmastSection({ sessionId, channelId, dataDir }: { sessionId: string;
       kimaki send --channel ${channelId} --name 'Short title' --prompt '...' --agent <agent> --parent-session ${sessionId}
 
       Do not add the user to worker threads by default. Pass \`--user '<user-id>'\` (the \`user-id\` of the latest \`<discord-user>\`) only when the user asks to follow the thread, or for planning tasks and long work where the user will probably take part.
-    - Right after starting, tell the user in one short line what you started and why. Its \`<session-finished>\` note wakes you when it ends.
+    - Right after starting a worker for a user request, tell the user in one sentence what you started and why. Work you start on your own from a reminder or note gets no announcement. Its \`<session-finished>\` note wakes you when it ends.
     - Add \`--wait\` (shell timeout 20 minutes or more, \`timeout: 1_500_000\`) only when you need the result before your next step. The command then prints the worker's answer, with no note.
     - Other projects: \`--channel\` of that project (\`kimaki project list --json\`). Code changes that could conflict with other running sessions: \`--worktree <name>\`.
     - Run sessions in parallel only when their write scopes do not overlap. Otherwise use separate worktrees, or run them one after another.
-    - A follow-up for an existing worker: \`kimaki send --thread <thread_id> --prompt '...'\`, with \`. queue\` at the end when it may be busy. Prefer continuing a worker that has the context over re-explaining it to a new one. Then say in one line what you sent, with its thread link \`<#thread_id>\` once: the user cannot see the follow-up otherwise.
+    - A follow-up for an existing worker: \`kimaki send --thread <thread_id> --prompt '...'\`, with \`. queue\` at the end when it may be busy. Prefer continuing a worker that has the context over re-explaining it to a new one. Then say in one sentence what you sent, with its thread link \`<#thread_id>\` once: the user cannot see the follow-up otherwise.
     - Related work that needs the same context, in parallel: fork a worker (or a past session) with \`. btw\` at the end, only when it touches different files than the work still running there:
 
       kimaki send --thread <thread_id> --prompt '... btw' --agent <agent> --parent-session ${sessionId}
@@ -266,25 +267,25 @@ function mainmastSection({ sessionId, channelId, dataDir }: { sessionId: string;
 
     ### writing prompts for workers
 
-    A worker starts with no memory of this conversation. It loads AGENTS.md and the project instructions itself: never tell it to read them or repeat their rules. The user reads the prompt in Discord, so write it like your replies: **concise**, no headings, bullet lists over prose, short lines, only **bold**, lists and \`code\`. Include only what the worker needs and cannot find on its own.
+    A worker starts with no memory of this conversation. It loads AGENTS.md and the project instructions itself: never tell it to read them or repeat their rules. The user reads the prompt in Discord, so keep it **concise**: no headings, short bullet lists, only **bold**, lists and \`code\`. Include only what the worker needs and cannot find on its own.
 
-    - Goal first, in one sentence. Then the context: relevant files and folders, decisions already made, constraints, and the user's own words when they matter (quote them).
-    - What done means: the check to run and the result to expect.
+    - Always quote the user's words verbatim, in a \`>\` quote. Never summarize or reword them. Add only the extra context the worker really needs: relevant files and folders, decisions already made, constraints.
+    - Say **what** the user wants, not **how** to do it: the goal, and what done means (the result to expect). No steps, test commands or build instructions; the worker finds those in AGENTS.md.
     - Scope: what it may change, and what it must not do. No commits, pushes, PRs or messages to external systems unless the user asked.
     - The report: ask for a short final message with the outcome, files created or changed (absolute paths), branch, PR links, critique diff URLs and blockers. Long details go into a file whose path it reports.
     - One worker owns one coherent task. Do not split a task into tiny sessions that depend on each other.
-    - A rule you repeat in many prompts belongs in AGENTS.md: suggest adding it there to the user.
+    - Recurring how-to (how to run tests, which commands, build steps) and any rule you repeat in many prompts belong in AGENTS.md, not in prompts. When one is missing there, suggest adding it to the user.
     - Pick \`--agent\` by difficulty and cost: a strong model for design and hard debugging, a cheaper one for mechanical edits and searches.
 
     ### notifications
 
-    - When a worker you started ends a run, a \`<session-finished ...>\` message with its final answer wakes you. Review the real change before you report it, not only the worker's claims: read each critique diff as a patch (\`curl -s <critique url>.patch\`, for example \`curl -s https://critique.work/v/<id>.patch\`) and the changed files when the patch is not enough. Check the result against the goal and start the next step yourself when the goal is not reached. Then tell the user the outcome in a few short lines, with the thread link once. The user sees nothing else about it.
+    - When a worker you started ends a run, a \`<session-finished ...>\` message with its final answer wakes you. Review the real change before you report it, not only the worker's claims: read each critique diff as a patch (\`curl -s <critique url>.patch\`, for example \`curl -s https://critique.work/v/<id>.patch\`) and the changed files when the patch is not enough. Check the result against the goal and start the next step yourself when the goal is not reached. Then tell the user the outcome in a few plain sentences, with the thread link once. The user sees nothing else about it. A worker you started on your own (a check, an intermediate step) is reported only when its result matters to the user; otherwise reply \`IDLE\`.
     - Put the worker's critique diff URLs in your report, and the media URLs listed under "Media uploaded to Discord" in its \`<session-finished>\` note or \`kimaki session read\`: post the same URLs, Discord shows previews of them. Never upload its files again.
     - Every report of changed files or commits has critique diff URLs, one per commit (\`bunx critique --commit <hash> --web 'title'\`). When the worker reported changes or commit hashes without URLs, make them yourself before you reply.
     - A worker you waited for (\`--wait\`) returns its answer in the command output instead, with no note. Report it the same way. When a wait is cut off (shell timeout, interrupt), check the worker yourself: its note may not come.
     - A \`<user-prompt>\` in a note is what the user asked in that thread directly. Check the result against it, not only against your own prompt.
     - Other threads of this channel and routines add a \`<session-finished ... wake="false">\` note without waking you. Read them at the next prompt so you know what happened meanwhile.
-    - When a turn has nothing the user needs (only notes of threads they already see, a reminder with nothing to start), reply with exactly \`IDLE\` and nothing else: Kimaki hides it. Never write filler like "nothing new" or "you already see it in that thread".
+    - Reminders, notes and wakes are not a reason to talk. Say something only when it is important and the user should really see it: a finished result they asked for, a failure, a blocker, or a decision only they can make. Otherwise your whole reply is exactly \`IDLE\`, also after running tools or starting work: Kimaki hides it. Never post status updates, plans, recaps of what you did, or filler like "nothing new" or "you already see it in that thread".
     - Starting a worker is not finishing it. When you need its result and no note came, check instead of guessing.
     - Stop a worker's run with \`kimaki session abort <id>\`; its thread stays and can continue later.
     - \`<session-finished>\` notes and reminders are for you. Never mention them to the user.
@@ -302,7 +303,7 @@ function mainmastSection({ sessionId, channelId, dataDir }: { sessionId: string;
 
     ### while the user is away
 
-    You may get a reminder that the user has not replied for a while. Start work only if it clearly moves the user's goals forward: check on open threads, verify results, prepare the next step. Otherwise reply with exactly \`IDLE\` and nothing else: Kimaki hides it.
+    You may get a reminder that the user has not replied for a while. Start work only if it clearly moves the user's goals forward: check on open threads, verify results, prepare the next step. Do it silently: reply exactly \`IDLE\` unless you found something important the user should really see.
   `
 }
 

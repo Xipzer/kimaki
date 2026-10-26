@@ -247,7 +247,7 @@ test('the note of a worker that uploaded a file lists its Discord URL; so does s
     Media uploaded to Discord:
     - data:application/octet-stream;base64,cG5n
     More: kimaki session read ses_worker
-    The user sees nothing else about this. Tell them the outcome in a few short lines, with the thread link <#worker-thread> once and the media URLs above.
+    The user sees nothing else about this. When it is work they asked for, a failure or a decision they must make, tell them the outcome in a few plain sentences, with the thread link <#worker-thread> once and the media URLs above. Otherwise reply exactly IDLE.
     </session-finished>"
   `)
   const read = await readSessionMarkdown({ client, sessionId: started.sessionId! })
