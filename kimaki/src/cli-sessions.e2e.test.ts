@@ -91,6 +91,7 @@ test('session command, named fork, and resume without a channel use the session 
     -# *using deterministic-provider/deterministic-v2 ⋅ build*
     ok
     -# *project ⋅ main ⋅ Ns ⋅ deterministic-v2*
+    -# » **CLI:** /review focus --focus security
     reviewed with passthrough
     -# *project ⋅ main ⋅ Ns ⋅ N% ⋅ deterministic-v2*"
   `)

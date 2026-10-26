@@ -34,14 +34,21 @@ test('CLI send starts and continues a session through the authenticated bot API'
   const first = await cli(['send', '--channel', twin.channelId, '--prompt', 'CLI first'])
   const ids = JSON.parse(first.stdout) as { threadId: string; sessionId: string }
   await waitForFooter({ discord: twin.discord, threadId: ids.threadId })
+  // Follow-ups into an idle thread have no Discord message: the thread must still show them.
   await cli(['send', '--thread', ids.threadId, '--prompt', 'CLI second. queue'])
   await waitForFooter({ discord: twin.discord, threadId: ids.threadId, count: 2 })
+  await cli(['send', '--thread', ids.threadId, '--prompt', 'CLI third'])
+  await waitForFooter({ discord: twin.discord, threadId: ids.threadId, count: 3 })
   expect(await twin.discord.thread(ids.threadId).text()).toMatchInlineSnapshot(`
     "--- from: assistant (TestBot)
     -# » **CLI:** CLI first
     -# *using deterministic-provider/deterministic-v2 ⋅ build*
     ok
     -# *project ⋅ main ⋅ Ns ⋅ deterministic-v2*
+    -# » **CLI:** CLI second
+    ok
+    -# *project ⋅ main ⋅ Ns ⋅ deterministic-v2*
+    -# » **CLI:** CLI third
     ok
     -# *project ⋅ main ⋅ Ns ⋅ deterministic-v2*"
   `)
@@ -468,6 +475,7 @@ test('CLI registry shares thread actions, preferences, title and archive', async
     -# *using deterministic-provider/deterministic-v2 ⋅ build*
     ok
     -# *project ⋅ main ⋅ Ns ⋅ deterministic-v2*
+    -# » **CLI:** Registry queued
     ok
     -# *project ⋅ main ⋅ Ns ⋅ deterministic-v2*"
   `)

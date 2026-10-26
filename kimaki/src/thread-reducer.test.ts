@@ -373,7 +373,7 @@ test('prompts from other clients echo, except the expanded prompt of a command K
   // Queued ones show in their ack (`[show queue:...]`), a reply to it marks the run.
   const echoes = (before: ThreadEvent[]) =>
     effectLines(replay({ events: [...before, ...events] }).effects).filter((line) => line.includes('» ') || line.startsWith('[reply to'))
-  const command = { type: 'kimaki.command' as const, text: '/review auth', username: 'tommy', messageId: null }
+  const command = { type: 'kimaki.command' as const, text: '/review auth', username: 'tommy', messageId: null, echo: null }
   expect(echoes([])).toMatchInlineSnapshot(`
     [
       "-# » **user:** Run \`sleep 6 && echo slow-done\` with bash, then say done.",
@@ -400,6 +400,8 @@ test('prompts from other clients echo, except the expanded prompt of a command K
       "[reply to queue:msg_0f20347e500196F4o0voD7LGMV] -# Queued message sent",
     ]
   `)
+  // A command sent with `kimaki send` has no Discord message: its echo stands in for the template.
+  expect(echoes([{ ...command, echo: '-# » **CLI:** /review auth' }])[0]).toMatchInlineSnapshot(`"-# » **CLI:** /review auth"`)
   // A failed command leaves nothing pending.
   expect(echoes([command, { type: 'kimaki.command-failed' }])).toEqual(echoes([]))
 })

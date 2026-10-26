@@ -195,7 +195,7 @@ async function handleRemoteEnvelope(bot: Bot, { message, channelId, threadId }: 
   const input = prompt instanceof Error ? prompt : parseInput(sendInput, { ...value.options, ...target, prompt })
   const attachments = [...message.attachments.values()].filter((attachment) => attachment !== promptAttachment)
   const files = await saveAttachments({ dataDir: bot.dataDir, messageId: message.id, attachments })
-  const result = input instanceof Error ? input : files instanceof Error ? files : await send(bot, { ...input, files }, { localOnly: true })
+  const result = input instanceof Error ? input : files instanceof Error ? files : await send(bot, { ...input, files }, { localOnly: true, shownIn: message.id })
   const answer = JSON.stringify(result instanceof Error ? { error: result.message } : result)
   await message
     .reply({

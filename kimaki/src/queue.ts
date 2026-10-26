@@ -154,7 +154,7 @@ export function enqueueInput(
   // The expanded prompt of a command Kimaki ran: the queue echo shows the typed command, never the template.
   const command = external ? draft.commandPending : null
   if (external) draft.commandPending = null
-  const meta = command ? { ...fields, ...command, echo: null } : fields
+  const meta = command ? { ...fields, ...command } : fields
   // Idle with nothing pending: OpenCode runs it at once, like a normal message.
   const acked = item.delivery === 'queue' && (busy || draft.inbox.length > 0)
   const pending: PendingInput = { inboxID, delivery: item.delivery, ...meta, acked }

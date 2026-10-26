@@ -124,7 +124,8 @@ export type ThreadView = {
   inbox: readonly PendingInput[]
   // Kimaki runs an OpenCode command (kimaki.command): the next root user item
   // without Discord metadata is its expanded prompt, shown as the typed command.
-  commandPending: { text: string; username: string; messageId: string | null } | null
+  // `echo` is set when no Discord message shows the command (CLI, routines).
+  commandPending: { text: string; username: string; messageId: string | null; echo: string | null } | null
   // Questions and permission requests waiting for the user (root and children).
   forms: Readonly<Record<string, PendingForm>>
   permissions: Readonly<Record<string, PendingPermission>>
@@ -176,7 +177,7 @@ export type KimakiEvent =
   // Kimaki is about to run an OpenCode command (prompt.ts). Prompts without
   // Discord metadata are echoed as sent from elsewhere; this one must not be.
   // TODO: pass metadata.discord to session.command once its payload accepts metadata, then drop this event.
-  | { type: 'kimaki.command'; text: string; username: string; messageId: string | null }
+  | { type: 'kimaki.command'; text: string; username: string; messageId: string | null; echo: string | null }
   // session.command failed, so no prompt follows.
   | { type: 'kimaki.command-failed' }
   // A session found by walking parentID after a bot restart.
@@ -668,7 +669,7 @@ function applyKimaki({ draft, event, prefs, emit }: Context & { event: KimakiEve
       if (draft.turn) draft.turn.slept = true
       return
     case 'kimaki.command':
-      draft.commandPending = { text: event.text, username: event.username, messageId: event.messageId }
+      draft.commandPending = { text: event.text, username: event.username, messageId: event.messageId, echo: event.echo }
       return
     case 'kimaki.command-failed':
       draft.commandPending = null

@@ -299,6 +299,7 @@ async function command(
     author: Author
     messageId: string
     files: readonly PromptFile[]
+    echo?: string
   },
 ): Promise<OpenCodeUnavailableError | OpenCodeError | void> {
   const { route } = input
@@ -317,7 +318,7 @@ async function command(
   }
   const { attached, attachments } = await splitPromptFiles(input.files)
   const block = attachmentsBlock(attachments)
-  bot.eventLoop.dispatch(input.threadId, { type: 'kimaki.command', text: typed, username: input.author.username, messageId: discordMessageId(input.messageId) })
+  bot.eventLoop.dispatch(input.threadId, { type: 'kimaki.command', text: typed, username: input.author.username, messageId: discordMessageId(input.messageId), echo: input.echo ?? null })
   const result = await oc(bot, 'session.command', (client) =>
     client.session.command({
       sessionID: input.sessionId,
@@ -553,7 +554,13 @@ async function remoteSend(bot: Bot, input: SendInput) {
 
 // `localOnly`: never forward to another machine (remote envelopes, scheduled runs).
 // `task`: a scheduled run; its input shows as "» routine #N: prompt".
-export async function send(bot: Bot, input: SendInput, { localOnly = false, task }: { localOnly?: boolean; task?: ScheduledRun } = {}) {
+// `shownIn`: a Discord message that already shows the prompt (remote envelope, clicked buttons).
+// Without it the thread shows the prompt as an echo.
+export async function send(
+  bot: Bot,
+  input: SendInput,
+  { localOnly = false, task, shownIn }: { localOnly?: boolean; task?: ScheduledRun; shownIn?: string } = {},
+) {
   if (input.worktree !== undefined && (input.cwd || input.threadId || input.sessionId || input.notifyOnly)) {
     return new ConfigError({ reason: '--worktree requires a new session without --cwd or --notify-only.' })
   }
@@ -570,7 +577,7 @@ export async function send(bot: Bot, input: SendInput, { localOnly = false, task
     if (!thread.isThread()) return
     for (const id of ids) void thread.members.add(id).catch((error: Error) => logger.warn(`add thread member ${id}`, error))
   }
-  const messageId = crypto.randomUUID()
+  const messageId = shownIn ?? crypto.randomUUID()
   // Also set without a session (routines, a terminal): it marks the prompt as not typed by a person.
   const sender: Sender = { ...(input.senderSessionId && { sessionId: input.senderSessionId }), ...(input.wait && { waited: true }) }
   const route = parseTextMessage({ content: input.prompt })
@@ -596,7 +603,7 @@ export async function send(bot: Bot, input: SendInput, { localOnly = false, task
       const switched = await switchModel(bot, { sessionId, model: { ...model, variant: null } })
       if (switched instanceof Error) return switched
     }
-    const echo = task ? formatEcho({ username: author.username, text: routeText(route) }) : undefined
+    const echo = shownIn ? undefined : formatEcho({ username: author.username, text: routeText(route) })
     const result = await dispatch(bot, { conversation: thread, route, author, messageId, files: input.files, echo, sender, parentSessionId: input.parentSessionId })
     if (result instanceof Error) return result
     return result ?? { threadId, sessionId: bot.store.getState().roots[threadId]! }
