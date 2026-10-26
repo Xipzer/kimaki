@@ -34,6 +34,7 @@ import {
   reduce,
   type Effect,
   type KimakiEvent,
+  type Prefs,
   type SessionSnapshot,
   type ThreadEvent,
 } from './thread-reducer.ts'
@@ -85,35 +86,35 @@ export function createEventLoop({
 }) {
   // The client of the current connection, set before hydration starts.
   const connection: { client: OpenCodeClient | null } = { client: null }
-  // Context window sizes ("providerID/modelID" -> tokens) by directory.
+  // Model names and context window sizes ("providerID/modelID" -> info) by directory.
   // Cleared on connect; reloaded when the catalog changes (a /login adds a
-  // provider). `limits` is null while the first load runs; a reload keeps the
-  // old limits until it finishes. Failed loads are removed so the next call retries.
-  const modelLimits = new Map<string, { load: Promise<void>; limits: Readonly<Record<string, number>> | null }>()
+  // provider). `models` is null while the first load runs; a reload keeps the
+  // old models until it finishes. Failed loads are removed so the next call retries.
+  const modelCatalog = new Map<string, { load: Promise<void>; models: Prefs['models'] | null }>()
   const coldThreads = new Map<string, Held>()
   const unknownSessions = new Map<string, Held>()
   const ignoredSessions = new Set<string>()
 
-  // Resolves when the limits of `directory` are known (or failed to load).
+  // Resolves when the models of `directory` are known (or failed to load).
   // `reload`: read them again even when cached or loading.
-  function loadModelLimits(directory: string, { reload = false } = {}): Promise<void> {
+  function loadModels(directory: string, { reload = false } = {}): Promise<void> {
     const client = connection.client
     if (!client) return Promise.resolve()
-    const existing = modelLimits.get(directory)
+    const existing = modelCatalog.get(directory)
     if (existing && !reload) return existing.load
     const models = client.model.list({ location: { directory } }).catch((e) => new OpenCodeError({ operation: 'model.list', cause: e }))
     const load = models.then((result) => {
       // A reconnect or a newer reload replaced this load: its result is stale.
-      if (modelLimits.get(directory)?.load !== load) return
+      if (modelCatalog.get(directory)?.load !== load) return
       if (result instanceof Error) {
-        modelLimits.delete(directory)
+        modelCatalog.delete(directory)
         logger.warn(result)
         return
       }
-      const limits = Object.fromEntries(result.data.map((model) => [`${model.providerID}/${model.id}`, model.limit.context]))
-      modelLimits.set(directory, { load, limits })
+      const models = Object.fromEntries(result.data.map((model) => [`${model.providerID}/${model.id}`, { name: model.name, context: model.limit.context }]))
+      modelCatalog.set(directory, { load, models })
     })
-    modelLimits.set(directory, { load, limits: existing?.limits ?? null })
+    modelCatalog.set(directory, { load, models: existing?.models ?? null })
     return load
   }
 
@@ -140,11 +141,11 @@ export function createEventLoop({
     const view = state.threads[threadId]
     if (!view) return
     const verbosity = state.verbosity[view.channelId] ?? verbosityFromV1(null)
-    const contextLimits = modelLimits.get(view.directory)?.limits ?? {}
-    const result = reduce({ view, event, prefs: { verbosity, contextLimits } })
+    const models = modelCatalog.get(view.directory)?.models ?? {}
+    const result = reduce({ view, event, prefs: { verbosity, models } })
     if (result.view === view) effects.run(threadId, result.effects)
     else commit({ threadId, effects: result.effects, update: (current) => ({ threads: { ...current.threads, [threadId]: result.view } }) })
-    if (event.type === 'session.moved' && event.data.sessionID === view.sessionId) void loadModelLimits(event.data.location.directory)
+    if (event.type === 'session.moved' && event.data.sessionID === view.sessionId) void loadModels(event.data.location.directory)
   }
 
   // One line per run start and end of a root session, so the log shows what each thread did.
@@ -213,7 +214,7 @@ export function createEventLoop({
       if (!client) return new OpenCodeError({ operation: 'load session directory while disconnected' })
       const info = await client.session.get({ sessionID: sessionId }).catch((cause) => new OpenCodeError({ operation: 'read session directory', cause }))
       if (info instanceof Error) return info
-      await loadModelLimits(info.location.directory)
+      await loadModels(info.location.directory)
       return { channelId, directory: info.location.directory }
     })()
     entry.loading = false
@@ -338,7 +339,7 @@ export function createEventLoop({
         const failed = sessions.find((session) => session instanceof Error)
         if (failed instanceof Error) return failed
         const directory = info?.location.directory ?? null
-        if (directory) await loadModelLimits(directory)
+        if (directory) await loadModels(directory)
         const event: ThreadSnapshot['event'] = {
           type: 'kimaki.snapshot',
           at,
@@ -416,7 +417,7 @@ export function createEventLoop({
       // Same synchronous turn as the routing change: no live event can come first.
       for (const event of first) deliver(threadId, event)
       // Before the first prompt, so its footer can show the context percent.
-      await loadModelLimits(directory)
+      await loadModels(directory)
     },
 
     // A thread loses its session (`/resume` moved the session to a new thread).
@@ -452,7 +453,7 @@ export function createEventLoop({
     async onConnect({ client, signal }: ConnectContext): Promise<OpenCodeError | void> {
       connection.client = client
       // A new connection may bring new providers, and old unrelated sessions are gone.
-      modelLimits.clear()
+      modelCatalog.clear()
       ignoredSessions.clear()
       const result = await snapshots({ client, signal })
       if (result instanceof Error) return result
@@ -467,9 +468,9 @@ export function createEventLoop({
     onEvent(event: V2Event): void {
       if (CATALOG_EVENTS.has(event.type)) {
         // Credential events have no location: they can change every directory.
-        const directories = event.location ? [event.location.directory] : [...modelLimits.keys()]
+        const directories = event.location ? [event.location.directory] : [...modelCatalog.keys()]
         for (const directory of directories) {
-          if (modelLimits.has(directory)) void loadModelLimits(directory, { reload: true })
+          if (modelCatalog.has(directory)) void loadModels(directory, { reload: true })
         }
         return
       }

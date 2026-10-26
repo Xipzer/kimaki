@@ -98,6 +98,22 @@ test('kimaki sleep in a turn makes its footer silent, the next turn notifies aga
   `)
 })
 
+test('root model and agent switches after the banner show as subtext lines', () => {
+  const events = loadFixture('switch-model.events.jsonl')
+  const switches = events.filter((event) => event.type === 'session.model.selected' || event.type === 'session.agent.selected')
+  // Before the first step the banner shows the model and agent; a re-select of the same model shows nothing.
+  const sameModel = switches.flatMap((event) => (event.type === 'session.model.selected' ? [{ ...event, data: { ...event.data, previous: event.data.model } }] : []))
+  const created = events.findIndex((event) => event.type === 'session.created')
+  const lines = effectLines(replay({ events: [...events.slice(0, created + 1), ...switches, ...events.slice(created + 1), ...sameModel] }).effects)
+  expect(lines.filter((line) => /Switched|using/.test(line))).toMatchInlineSnapshot(`
+    [
+      "-# *using openai/gpt-6-luna low ⋅ build*",
+      "-# Switched model to GPT 6 Luna (medium)",
+      "-# Switched agent to Plan",
+    ]
+  `)
+})
+
 test('execution failure shows the error and no footer, interrupt shows nothing', () => {
   const events = loadFixture('abort.events.jsonl')
   const sessionID = rootSessionId(events)
@@ -221,11 +237,13 @@ test('only these event types produce effects for the root session', () => {
   }
   expect([...producing].sort()).toMatchInlineSnapshot(`
     [
+      "session.agent.selected",
       "session.execution.interrupted",
       "session.execution.started",
       "session.execution.succeeded",
       "session.inbox.delivered",
       "session.inbox.enqueued",
+      "session.model.selected",
       "session.shell.ended",
       "session.shell.started",
       "session.step.started",
@@ -245,14 +263,12 @@ test('only these event types produce effects for the root session', () => {
       "provider.updated",
       "reference.updated",
       "server.connected",
-      "session.agent.selected",
       "session.compaction.delta",
       "session.compaction.ended",
       "session.compaction.started",
       "session.created",
       "session.forked",
       "session.instructions.updated",
-      "session.model.selected",
       "session.renamed",
       "session.step.ended",
       "session.step.failed",

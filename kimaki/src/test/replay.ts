@@ -27,7 +27,7 @@ export function rootSessionId(events: V2Event[]): string {
 
 export const DEFAULT_PREFS: Prefs = {
   verbosity: 'tools',
-  contextLimits: { 'openai/gpt-6-luna': 400_000 },
+  models: { 'openai/gpt-6-luna': { name: 'GPT 6 Luna', context: 400_000 } },
 }
 
 export function replay({

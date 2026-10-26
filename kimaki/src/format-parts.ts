@@ -136,6 +136,17 @@ export function formatBanner({ model, agent }: { model: ModelRef & { variant?: s
   return asSubtext(`*using ${model.providerID}/${model.id}${variant} ⋅ ${agent}*`)
 }
 
+// "Switched model to Claude Opus 5.5 (high)", for a root session switch after its banner.
+export function formatModelSwitched({ name, variant }: { name: string; variant?: string }): string {
+  return asSubtext(`Switched model to ${name}${variant && variant !== 'default' ? ` (${variant})` : ''}`)
+}
+
+const agentLabel = (agent: string) => agent.charAt(0).toUpperCase() + agent.slice(1)
+
+export function formatAgentSwitched({ agent, previous }: { agent: string; previous?: string }): string {
+  return asSubtext(`Switched agent ${previous ? `from ${agentLabel(previous)} ` : ''}to ${agentLabel(agent)}`)
+}
+
 export function formatFooter({
   folder,
   branch,

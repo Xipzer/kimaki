@@ -36,10 +36,12 @@ import {
   executeCalls,
   formatExecuteFailures,
   buttonRow,
+  formatAgentSwitched,
   formatBanner,
   formatCacheMiss,
   formatCompacted,
   formatError,
+  formatModelSwitched,
   formatRetry,
   formatShellEnded,
   formatShellFinished,
@@ -193,8 +195,8 @@ export function isKimakiEvent(event: ThreadEvent): event is KimakiEvent {
 
 export type Prefs = {
   verbosity: Verbosity
-  // "providerID/modelID" -> context window size in tokens.
-  contextLimits: Readonly<Record<string, number>>
+  // "providerID/modelID" -> display name and context window size in tokens.
+  models: Readonly<Record<string, { name: string; context: number }>>
 }
 
 const RETRY_NOTICE_INTERVAL_MS = 10_000
@@ -308,7 +310,7 @@ function showCompacted(context: Context, size: { tokens: number | null; percent:
 
 function contextPercent({ tokens, model, prefs }: { tokens: number; model: ModelRef | null; prefs: Prefs }): number | null {
   if (!model || tokens <= 0) return null
-  const limit = prefs.contextLimits[`${model.providerID}/${model.id}`]
+  const limit = prefs.models[`${model.providerID}/${model.id}`]?.context
   if (!limit || limit <= 0) return null
   return Math.round((tokens / limit) * 100)
 }
@@ -385,6 +387,20 @@ function applyRoot(context: Context & { event: V2Event }) {
     case 'session.execution.started':
       draft.turn ??= newTurn(event.created)
       return
+    // A new session's banner already shows its first model and agent.
+    case 'session.model.selected': {
+      const { model, previous } = event.data
+      const same = previous && previous.providerID === model.providerID && previous.id === model.id && previous.variant === model.variant
+      if (draft.bannerPending || same) return
+      emit({ type: 'send', text: formatModelSwitched({ name: prefs.models[`${model.providerID}/${model.id}`]?.name ?? `${model.providerID}/${model.id}`, variant: model.variant }) })
+      return
+    }
+    case 'session.agent.selected': {
+      const { agent, previous } = event.data
+      if (draft.bannerPending || agent === previous) return
+      emit({ type: 'send', text: formatAgentSwitched({ agent, previous }) })
+      return
+    }
     case 'session.step.started': {
       const model = { providerID: event.data.model.providerID, id: event.data.model.id }
       draft.turn ??= newTurn(event.created)
