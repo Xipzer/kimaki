@@ -10,7 +10,7 @@ import { setTimeout as sleep } from 'node:timers/promises'
 import dedent from 'string-dedent'
 import { wrapJsonSchema, type Goke } from 'goke'
 
-import { distCliEntry, stableNodePath, writeAutostartScript } from '../autostart.ts'
+import { distCliEntry, removeAutostartScript, stableNodePath, writeAutostartScript } from '../autostart.ts'
 import { parseDisabledPromptSections, parseDisabledSkills, PROMPT_SECTIONS } from '../builtin-skills.ts'
 import { callBot, DEFAULT_LOCK_PORT, RESTART_EXIT_CODE, startLockServer } from '../lock-server.ts'
 import { parseDuration } from '../duration.ts'
@@ -96,6 +96,7 @@ export function registerStartCommand(cli: Goke) {
     .option('--disable-prompt <section>', wrapJsonSchema<string[]>({ type: 'array', items: { type: 'string' }, description: `System prompt section to remove from new sessions (repeatable): ${PROMPT_SECTIONS.join(', ')}` }))
     .option('--no-analytics', 'Disable anonymous usage analytics (same as KIMAKI_STRADA_ENABLED=0)')
     .option('--no-mainmast', 'Channel messages start a new thread each, instead of going to one long session in the channel')
+    .option('--no-autostart', 'Do not open a terminal with the bot when OpenCode starts (for bots run by launchd, systemd or pm2)')
     .option('--if-not-running', 'Start only if no bot runs; never stop the running one (used by autostart)')
     .action(async (options) => {
       // The IPC check ignores a KIMAKI_SUPERVISED leaked into a shell by an older bot.
@@ -250,9 +251,13 @@ export function registerStartCommand(cli: Goke) {
       if (onboarded) process.stderr.write(`Onboarding: https://discord.com/channels/${onboarded.guildId}/${onboarded.threadId}\n`)
       const voiceChannels = await ensureVoiceChannels(bot, { machine })
       if (voiceChannels instanceof Error) logger.warn('cannot create the Kimaki voice channel', voiceChannels)
-      // Only the default port: the plugin checks that one. Runtime flags only;
-      // credentials, onboarding and --voice are saved in SQLite.
-      if (lock.port === DEFAULT_LOCK_PORT) {
+      // --no-autostart removes the script on every start, so the opt-out sticks while
+      // launchd or systemd passes the flag. Only the default port: the plugin checks
+      // that one. Runtime flags only; credentials, onboarding and --voice are saved in SQLite.
+      if (options.noAutostart) {
+        const removed = await removeAutostartScript({ dataDir })
+        if (removed instanceof Error) logger.warn('cannot remove the autostart script', removed)
+      } else if (lock.port === DEFAULT_LOCK_PORT) {
         const autostart = await writeAutostartScript({ dataDir, args: [
           ...(options.worktrees ? ['--worktrees'] : []),
           ...(options.allowAllUsers ? ['--allow-all-users'] : []),

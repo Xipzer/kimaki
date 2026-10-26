@@ -1,20 +1,22 @@
 // Start the bot when OpenCode starts. The bot writes <dataDir>/autostart.command
-// on every start; the Kimaki OpenCode plugin opens it when no bot answers on
+// on every start; the Kimaki OpenCode plugin opens it when nothing listens on
 // the lock port:
 //
 //   kimaki start ──writes──▶ ~/.kimaki/autostart.command   (exec <bot node> <pkg>/dist/cli.js ...)
 //                                       ▲
-//   OpenCode loads plugin ──no /health on 29988──▶ open -g autostart.command
-//                                                  (default terminal app, in background)
+//   OpenCode loads plugin ──29988 refuses TCP──▶ open -g autostart.command
+//                                                (default terminal app, in background)
 //
 // The script exists only after onboarding succeeded, so a fresh install never
-// opens a terminal with the onboarding prompts. It always runs dist/cli.js,
+// opens a terminal with the onboarding prompts. `kimaki --no-autostart` deletes it
+// on every start instead (bots under launchd, systemd or pm2). It always runs dist/cli.js,
 // also when the bot ran from src: keep dist built. --if-not-running makes a bot that
 // lost the race exit instead of stopping the running one.
 // Imported by the plugin (OpenCode process): no logger, no bot modules.
 
 import { spawn } from 'node:child_process'
 import fs from 'node:fs'
+import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -72,10 +74,11 @@ export async function writeAutostartScript({ dataDir, args }: { dataDir: string;
     node=${quote(stableNodePath())}
     [ -x "$node" ] || node=node
     echo 'Kimaki autostart'
-    echo 'OpenCode started and no Kimaki bot answered on port ${DEFAULT_LOCK_PORT}, so the Kimaki'
+    echo 'OpenCode started and no Kimaki bot listened on port ${DEFAULT_LOCK_PORT}, so the Kimaki'
     echo 'OpenCode plugin opened this window to start the Discord bot.'
     echo 'The bot lets you talk to your OpenCode sessions from Discord.'
     echo 'Close this window or press Ctrl+C to stop the bot.'
+    echo 'To turn autostart off, start kimaki once with --no-autostart.'
     echo "Node: $node"
     echo "Script: $0"
     echo
@@ -85,16 +88,34 @@ export async function writeAutostartScript({ dataDir, args }: { dataDir: string;
     .catch((cause: Error) => cause)
 }
 
+export function removeAutostartScript({ dataDir }: { dataDir: string }): Promise<Error | void> {
+  return fs.promises.rm(path.join(dataDir, SCRIPT_NAME), { force: true }).catch((cause: Error) => cause)
+}
+
+// True only when the connect is refused. The kernel accepts into the listen
+// backlog even while the bot's event loop is busy, and a timeout (busy OpenCode
+// start) is not proof of a free port: opening a window then is the bug of #243.
+function lockPortIsFree(port: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const socket = net.connect({ host: '127.0.0.1', port })
+    const done = (free: boolean) => {
+      socket.destroy()
+      resolve(free)
+    }
+    socket.setTimeout(5_000, () => done(false))
+    socket.once('connect', () => done(false))
+    socket.once('error', (error) => done(Reflect.get(error, 'code') === 'ECONNREFUSED'))
+  })
+}
+
 // Only the default install: HOME and the default port, never KIMAKI_* env.
 // Agent shells export KIMAKI_DATA_DIR, so test OpenCode servers started from
 // them would otherwise start the real bot. Test servers set HOME to a temp dir.
 async function startIfStopped(): Promise<void> {
   const file = path.join(os.homedir(), '.kimaki', SCRIPT_NAME)
   if (!fs.existsSync(file)) return
-  // Any answer means the port is taken (V2 or V1 bot).
-  const running = await fetch(`http://127.0.0.1:${DEFAULT_LOCK_PORT}/health`, { signal: AbortSignal.timeout(2_000) })
-    .then(() => true, () => false)
-  if (running) return
+  // Any listener means the port is taken (V2 or V1 bot); it could not bind anyway.
+  if (!(await lockPortIsFree(DEFAULT_LOCK_PORT))) return
   // macOS opens .command files in the default terminal app; -g keeps it in the background.
   const [command, args] = process.platform === 'darwin' ? ['open', ['-g', file]] as const : ['sh', [file]] as const
   const child = spawn(command, args, { detached: true, stdio: 'ignore' })
