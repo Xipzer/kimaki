@@ -201,6 +201,7 @@ export type Prefs = {
 
 const RETRY_NOTICE_INTERVAL_MS = 10_000
 const CACHE_MISS_SLACK = 1_024
+const CACHE_MISS_MIN_WRITE_SHARE = 0.5
 const REPLAY_LIMIT = 30
 
 export function emptyView({
@@ -420,8 +421,11 @@ function applyRoot(context: Context & { event: V2Event }) {
       }
       // The prompt only grows, so the cached prefix should too. A drop means the provider
       // re-read it: changed prefix, other model, or cache expired (TTL). The slack absorbs cache block rounding.
+      // Only a step that rewrote most of the prompt is a full loss; a smaller rewrite is a partial miss, not worth a line.
       const previous = draft.cached
-      if (previous && tokens.cache.read + CACHE_MISS_SLACK < previous.tokens) {
+      const promptTokens = tokens.input + tokens.cache.read + tokens.cache.write
+      const rewroteMost = tokens.cache.write >= promptTokens * CACHE_MISS_MIN_WRITE_SHARE
+      if (previous && rewroteMost && tokens.cache.read + CACHE_MISS_SLACK < previous.tokens) {
         toolLine(context, formatCacheMiss({ read: tokens.cache.read, expected: previous.tokens, idleMs: event.created - previous.at }))
       }
       draft.cached = { tokens: tokens.cache.read + tokens.cache.write, at: event.created }

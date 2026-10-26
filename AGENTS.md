@@ -111,7 +111,7 @@ source: `packages/core/src/session/instruction-state.ts` and `message-updater.ts
 
 **instructions that must update in existing sessions go through the plugin.** the bot-written instruction entry is frozen at session create: a new Kimaki version never reaches old sessions through it. OpenCode reloads the plugin when its code changes, so plugin-owned text updates on its own. OpenCode has no instruction source for plugins: the plugin stores the text as a synthetic message before a user prompt when the latest one is missing or stale (`registerMainmastRoles` in `plugin/mainmast.ts`, the pattern of OpenCode's `core/src/plugin/plan.ts`). it lands at the tail, so the prompt cache stays warm.
 
-kimaki posts `-# prompt cache miss: ...` in the thread when the cached prefix of a root step shrinks (`thread-reducer.ts`, `session.step.ended`). causes: changed prefix, model switch, or provider cache TTL expiry (about 5 minutes idle on Anthropic).
+kimaki posts `-# prompt cache miss: ...` in the thread when the cached prefix of a root step shrinks and that step wrote at least 50% of its prompt to the cache, so partial misses stay silent (`thread-reducer.ts`, `session.step.ended`). causes: changed prefix, model switch, or provider cache TTL expiry (about 5 minutes idle on Anthropic).
 
 # restarting the discord bot
 

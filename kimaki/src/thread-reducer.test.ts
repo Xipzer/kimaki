@@ -325,14 +325,19 @@ test('cache miss notice when the cached prefix shrinks, e.g. after the cache TTL
   const last = events[lastIndex]
   if (last?.type !== 'session.step.ended') return expect.fail('fixture has no root step.ended')
   // Same turn, but the last request found nothing in cache 10 minutes later.
-  const missed = events.map((event, index) =>
-    index === lastIndex ? { ...last, created: last.created + 600_000, data: { ...last.data, tokens: { ...last.data.tokens, cache: { read: 0, write: 0 } } } } : event,
-  )
-  expect(effectLines(replay({ events: missed }).effects).filter((line) => line.includes('cache'))).toMatchInlineSnapshot(`
+  const withCache = (cache: { read: number; write: number }, input = last.data.tokens.input) =>
+    events.map((event, index) =>
+      index === lastIndex ? { ...last, created: last.created + 600_000, data: { ...last.data, tokens: { ...last.data.tokens, input, cache } } } : event,
+    )
+  const cacheLines = (stream: V2Event[]) => effectLines(replay({ events: stream }).effects).filter((line) => line.includes('cache'))
+  // Everything was written again: a full loss.
+  expect(cacheLines(withCache({ read: 0, write: 25_000 }, 0))).toMatchInlineSnapshot(`
     [
       "\\n-# prompt cache miss: 0 of 25k tokens cached, 10m 1s after the last request",
     ]
   `)
+  // Less than half of the prompt was written: a partial miss shows nothing.
+  expect(cacheLines(withCache({ read: 0, write: 5_000 }, 20_000))).toEqual([])
   expect(effectLines(replay({ events }).effects).filter((line) => line.includes('cache'))).toEqual([])
 })
 
