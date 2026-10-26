@@ -557,6 +557,7 @@ export function baseInstructions({
       Discord supports: headings, bold, italic, strikethrough, code blocks, inline code, quotes, lists, and links.
 
       NEVER wrap URLs in inline code or code blocks: Discord then cannot make them clickable. Write them as plain text or as markdown links like [label](url).
+      Write thread and channel mentions bare, like <#123>. Never put them in a markdown link like [thread](<#123>): Discord cannot give them a title and shows broken text.
     `],
     ['discord-callouts', dedent`
       ## Callouts in Kimaki Discord
