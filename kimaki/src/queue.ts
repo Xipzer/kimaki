@@ -34,6 +34,9 @@ export type PendingInput = {
   username: string | null
   // Discord message the prompt came from (the ack replies to it).
   messageId: string | null
+  // The first answer text replies to this message. Only in a mainmast channel:
+  // a thread holds one conversation, so turns need no extra delimiter there.
+  replyTo: string | null
   // An ack was posted; only acked items get an echo when they start.
   acked: boolean
   // Line from the prompt metadata (scheduled runs) or for prompts sent outside Discord; shown on delivery even without an ack.
@@ -53,21 +56,24 @@ export function discordMessageId(messageId: string): string | null {
   return /^\d+$/.test(messageId) ? messageId : null
 }
 
-function inputFields(payload: { text: string; metadata?: { readonly [key: string]: JsonValue } }) {
+function inputFields({ payload, channelId }: { payload: { text: string; metadata?: { readonly [key: string]: JsonValue } }; channelId: string }) {
   const text = stripTurnContext(payload.text)
   const discord = payload.metadata?.['discord']
   // Sent outside Discord (TUI, other clients): echo it like V1 external sync did.
   if (!discord || typeof discord !== 'object' || Array.isArray(discord)) {
-    return { external: true, text, username: null, messageId: null, echo: text.trim() ? formatEcho({ username: 'user', text }) : null }
+    return { external: true, text, username: null, messageId: null, replyTo: null, echo: text.trim() ? formatEcho({ username: 'user', text }) : null }
   }
   const username = discord['username']
-  const messageId = discord['messageId']
+  const raw = discord['messageId']
   const echo = discord['echo']
+  const messageId = typeof raw === 'string' ? discordMessageId(raw) : null
   return {
     external: false,
     text,
     username: typeof username === 'string' ? username : null,
-    messageId: typeof messageId === 'string' ? discordMessageId(messageId) : null,
+    messageId,
+    // A mainmast prompt's conversation is the project channel itself.
+    replyTo: discord['threadId'] === channelId ? messageId : null,
     // Shown when a prompt without a Discord message is taken (wake, scheduled run).
     echo: typeof echo === 'string' ? echo : null,
   }
@@ -123,7 +129,7 @@ export function enqueueInput(
   const { draft, emit, data, busy } = slice
   const { item, inboxID } = data
   if (item.type !== 'user' || draft.inbox.some((candidate) => candidate.inboxID === inboxID)) return
-  const { external, ...fields } = inputFields(item.payload)
+  const { external, ...fields } = inputFields({ payload: item.payload, channelId: draft.channelId })
   // The expanded prompt of a command Kimaki ran: the queue echo shows the typed command, never the template.
   const command = external ? draft.commandPending : null
   if (external) draft.commandPending = null
@@ -186,7 +192,7 @@ export function hydrateQueue(slice: Slice & { inbox: readonly SessionInboxInfo[]
     const existing = known.get(item.id)
     if (existing?.delivery === item.delivery) return existing
     if (existing?.delivery === 'queue' && item.delivery === 'steer') closeAck(slice, existing, 'Queued message sent')
-    const { external: _external, ...fields } = inputFields(item.payload)
+    const { external: _external, ...fields } = inputFields({ payload: item.payload, channelId: draft.channelId })
     return { inboxID: item.id, delivery: item.delivery, ...fields, acked: item.delivery === 'queue' }
   })
 }

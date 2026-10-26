@@ -170,7 +170,8 @@ export function createEffectsRunner({ discord, markViewed }: { discord: Client; 
     const channel = await sendableChannel(threadId)
     if (!channel || lifecycle.closed) return null
     const flags = (options.flags ?? 0) | embedFlags(options.content) | (notify ? 0 : MessageFlags.SuppressNotifications)
-    const sent = await channel.send({ ...options, flags, allowedMentions: { parse: mentions ? ['users'] : [] } }).catch((e: Error) => e)
+    // Replies never ping their author: the footer is what notifies.
+    const sent = await channel.send({ ...options, flags, allowedMentions: { parse: mentions ? ['users'] : [], repliedUser: false } }).catch((e: Error) => e)
     if (!(sent instanceof Error)) return sent.id
     logger.error(`send failed in ${threadId}`, sent)
     return null
@@ -241,7 +242,7 @@ export function createEffectsRunner({ discord, markViewed }: { discord: Client; 
       }
       if (effect.reply === undefined) return
       // A key from before a restart: the reply still marks the moment, without a reference.
-      const replyTo = ids[0]
+      const replyTo = effect.replyTo ?? ids[0]
       await post({ threadId, options: { content: effect.reply, ...(replyTo && { reply: { messageReference: replyTo, failIfNotExists: false } }) }, notify: false })
       await refreshTyping(threadId)
       return
@@ -266,8 +267,9 @@ export function createEffectsRunner({ discord, markViewed }: { discord: Client; 
       await refreshTyping(threadId)
       return
     }
-    for (const payload of markdownMessages(effect)) {
-      await post({ threadId, options: payload, notify: false })
+    for (const [index, payload] of markdownMessages(effect).entries()) {
+      const replyTo = index === 0 ? effect.replyTo : null
+      await post({ threadId, options: { ...payload, ...(replyTo && { reply: { messageReference: replyTo, failIfNotExists: false } }) }, notify: false })
     }
     await refreshTyping(threadId)
   }

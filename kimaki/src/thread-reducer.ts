@@ -66,6 +66,8 @@ export type Turn = {
   tokens: number
   // `kimaki sleep` ran in this turn: the session wakes later, so the footer is silent.
   slept: boolean
+  // Discord message the next answer text replies to (a mainmast prompt, queue.ts). Taken by the first text.
+  replyTo: string | null
 }
 
 export type Child = {
@@ -134,7 +136,8 @@ export type Effect =
   // `echo`: user text (a prompt echo), posted with mentions disabled.
   | { type: 'send'; text: string; notify?: boolean; echo?: boolean }
   // Model markdown, rendered and split by the executor.
-  | { type: 'markdown'; text: string; blankLineBefore: boolean }
+  // `replyTo`: the first message replies to this Discord message.
+  | { type: 'markdown'; text: string; blankLineBefore: boolean; replyTo: string | null }
   | { type: 'typing'; on: boolean }
   // Files from `kimaki upload-to-discord` (never from the reducer). `settle`
   // answers the waiting CLI call: the Discord URL of each file once posted, or why not.
@@ -144,8 +147,8 @@ export type Effect =
   // Posts the messages in order; the first replies to `replyTo` when set. `echo`: holds user text, no mentions.
   | { type: 'show'; key: string; messages: readonly UiMessage[]; replyTo: string | null; notify: boolean; echo?: boolean }
   // Edits the messages `show` posted under `key` (by index; the last one covers the rest),
-  // then posts `reply` as a reply to the first of them.
-  | { type: 'edit'; key: string; messages: readonly UiMessage[]; reply?: string }
+  // then posts `reply` as a reply to `replyTo`, or to the first of them when null.
+  | { type: 'edit'; key: string; messages: readonly UiMessage[]; reply?: string; replyTo?: string | null }
   // Marks the root execution that went idle at `idle` as read in OpenCode, once
   // the lines before it are posted. Bots cannot see Discord read state.
   | { type: 'viewed'; sessionId: string; idle: number }
@@ -228,6 +231,10 @@ export function emptyView({
     forms: {},
     permissions: {},
   }
+}
+
+function newTurn(startedAt: number): Turn {
+  return { startedAt, model: null, agent: null, tokens: 0, slept: false, replyTo: null }
 }
 
 export function isBusy(view: ThreadView): boolean {
@@ -376,11 +383,11 @@ function applyRoot(context: Context & { event: V2Event }) {
       emit({ type: 'send', text: asSubtext(`Working directory changed to ${event.data.location.directory}`) })
       return
     case 'session.execution.started':
-      draft.turn ??= { startedAt: event.created, model: null, agent: null, tokens: 0, slept: false }
+      draft.turn ??= newTurn(event.created)
       return
     case 'session.step.started': {
       const model = { providerID: event.data.model.providerID, id: event.data.model.id }
-      draft.turn ??= { startedAt: event.created, model: null, agent: null, tokens: 0, slept: false }
+      draft.turn ??= newTurn(event.created)
       draft.turn.model = model
       draft.turn.agent = event.data.agent
       if (draft.bannerPending) emit({ type: 'send', text: formatBanner({ model: event.data.model, agent: event.data.agent }) })
@@ -408,7 +415,10 @@ function applyRoot(context: Context & { event: V2Event }) {
       const text = event.data.text.trim()
       // A mainmast turn with nothing for the user (idle nudge, a note) answers IDLE_REPLY: Discord shows nothing.
       if (!text || text === IDLE_REPLY) return
-      emit({ type: 'markdown', text, blankLineBefore: draft.lastKind === 'tool' })
+      const replyTo = draft.turn?.replyTo ?? null
+      // The reply header already sets the text apart from the tool lines above.
+      emit({ type: 'markdown', text, blankLineBefore: draft.lastKind === 'tool' && !replyTo, replyTo })
+      if (draft.turn) draft.turn.replyTo = null
       draft.lastKind = 'text'
       return
     }
@@ -469,7 +479,10 @@ function applyRoot(context: Context & { event: V2Event }) {
     case 'session.inbox.delivered': {
       // OpenCode runs queued items in the same execution: close the answer
       // before each one with a silent footer, like V1 did per turn.
-      const queued = queuedItems(draft).some((item) => item.inboxID === event.data.inboxID)
+      const item = draft.inbox.find((candidate) => candidate.inboxID === event.data.inboxID)
+      const queued = item?.delivery === 'queue'
+      // Each user prompt the run takes gets its own reply; synthetic items keep the current one.
+      if (item && draft.turn) draft.turn.replyTo = item.replyTo
       if (queued && draft.turn?.model) {
         emitFooter({ ...context, turn: draft.turn, at: event.created, notify: false })
         draft.turn.startedAt = event.created
@@ -654,7 +667,7 @@ function applyKimaki({ draft, event, prefs, emit }: Context & { event: KimakiEve
       const active = new Set(event.activeSessionIds)
       for (const [id, child] of Object.entries(draft.children)) child.running = active.has(id)
       if (!active.has(draft.sessionId)) draft.turn = null
-      else draft.turn ??= { startedAt: event.at, model: null, agent: null, tokens: 0, slept: false }
+      else draft.turn ??= newTurn(event.at)
       // Nothing runs: tool calls whose end was missed while disconnected are over.
       if (!isBusy(draft)) draft.tools = {}
       for (const session of event.sessions) {
@@ -701,7 +714,7 @@ export function replayEffects({
   const skipped = blocks.length - kept.length
   const effects = kept.map((block, index): Effect => {
     const previous = kept[index - 1]?.kind ?? null
-    if (block.kind === 'text') return { type: 'markdown', text: block.text, blankLineBefore: previous === 'tool' }
+    if (block.kind === 'text') return { type: 'markdown', text: block.text, blankLineBefore: previous === 'tool', replyTo: null }
     return { type: 'send', text: previous === 'text' ? `\n${block.text}` : block.text }
   })
   return [

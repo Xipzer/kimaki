@@ -330,7 +330,7 @@ export function createVoiceCalls({ opencodeConfigDir }: { opencodeConfigDir: str
 
   // Bot lines in the text chat of the voice channel, through the same FIFO as session output.
   function post(bot: Bot, { channelId, text, markdown = false }: { channelId: string; text: string; markdown?: boolean }) {
-    bot.effects.run(channelId, [markdown ? { type: 'markdown', text, blankLineBefore: false } : { type: 'send', text }])
+    bot.effects.run(channelId, [markdown ? { type: 'markdown', text, blankLineBefore: false, replyTo: null } : { type: 'send', text }])
   }
 
   // Errors during a call go to the log and to the text chat of the voice channel.

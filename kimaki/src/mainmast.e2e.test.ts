@@ -120,16 +120,18 @@ test('channel messages go to one session that replies in the channel', async () 
   await discord.channel(channelId).user(TEST_USER_ID).sendMessage({ content: 'Again hello-marker once-marker' })
   await waitForFooter({ discord, threadId: channelId, count: 2 })
 
-  expect(await discord.channel(channelId).text()).toMatchInlineSnapshot(`
+  expect(await discord.channel(channelId).text({ showReplies: true })).toMatchInlineSnapshot(`
     "--- from: user (tommy)
     Say hi hello-marker
     --- from: assistant (TestBot)
     -# *using deterministic-provider/deterministic-v2 ⋅ build*
+    [reply to tommy: Say hi hello-marker]
     Hello from the mainmast.
     -# *project ⋅ main ⋅ Ns ⋅ N% ⋅ deterministic-v2*
     --- from: user (tommy)
     Again hello-marker once-marker
     --- from: assistant (TestBot)
+    [reply to tommy: Again hello-marker once-marker]
     Hello from the mainmast.
     -# *project ⋅ main ⋅ Ns ⋅ N% ⋅ deterministic-v2*"
   `)
@@ -157,29 +159,32 @@ test('a worker started with --parent-session gets a thread and wakes the mainmas
   })
   await waitForFooter({ discord, threadId: channelId, count: footers.length + 2 })
 
-  expect((await discord.channel(channelId).text()).replaceAll(thread.id, 'worker-thread')).toMatchInlineSnapshot(`
+  // Only the first answer text of a user prompt replies to it: never tool lines, the wake answer or a worker thread.
+  expect((await discord.channel(channelId).text({ showReplies: true })).replaceAll(thread.id, 'worker-thread')).toMatchInlineSnapshot(`
     "--- from: user (tommy)
     Say hi hello-marker
     --- from: assistant (TestBot)
     -# *using deterministic-provider/deterministic-v2 ⋅ build*
+    [reply to tommy: Say hi hello-marker]
     Hello from the mainmast.
     -# *project ⋅ main ⋅ Ns ⋅ N% ⋅ deterministic-v2*
     --- from: user (tommy)
     Again hello-marker once-marker
     --- from: assistant (TestBot)
+    [reply to tommy: Again hello-marker once-marker]
     Hello from the mainmast.
     -# *project ⋅ main ⋅ Ns ⋅ N% ⋅ deterministic-v2*
     --- from: user (tommy)
     Fix it delegate-marker
     --- from: assistant (TestBot)
     -# ┣ shell _Start the worker thread_
-
+    [reply to tommy: Fix it delegate-marker]
     Started a worker for it.
     -# *project ⋅ main ⋅ Ns ⋅ N% ⋅ deterministic-v2*
     The worker finished the job.
     -# *project ⋅ main ⋅ Ns ⋅ N% ⋅ deterministic-v2*"
   `)
-  expect(await discord.thread(thread.id).text()).toMatchInlineSnapshot(`
+  expect(await discord.thread(thread.id).text({ showReplies: true })).toMatchInlineSnapshot(`
     "--- from: assistant (TestBot)
     » **CLI:** worker-marker do the job
     -# *using deterministic-provider/deterministic-v2 ⋅ build*
@@ -299,7 +304,6 @@ test('a worker started with --wait answers through the wait, with no note', asyn
     Fix it waitjob-marker
     --- from: assistant (TestBot)
     -# ┣ shell _Run the worker and wait_
-
     The waited worker is done.
     -# *project ⋅ main ⋅ Ns ⋅ N% ⋅ deterministic-v2*"
   `)

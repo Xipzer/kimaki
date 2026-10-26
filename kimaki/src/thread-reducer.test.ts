@@ -27,6 +27,7 @@ test('text-only turn: banner, text, typing, footer with context percent', () => 
       },
       {
         "blankLineBefore": false,
+        "replyTo": null,
         "text": "Done. \`tmp-events/hello.txt\` contains \`hello world\`.",
         "type": "markdown",
       },
@@ -167,6 +168,7 @@ test('execution failure shows the error and no footer, interrupt shows nothing',
       },
       {
         "blankLineBefore": false,
+        "replyTo": null,
         "text": "resumed after abort",
         "type": "markdown",
       },
@@ -379,6 +381,40 @@ test('prompts from other clients echo, except the expanded prompt of a command K
   `)
   // A failed command leaves nothing pending.
   expect(echoes([command, { type: 'kimaki.command-failed' }])).toEqual(echoes([]))
+})
+
+test('mainmast: the first answer text of each prompt replies to its Discord message, threads never reply', () => {
+  // The fixture's prompts get Discord metadata, like prompt.ts writes it: messages 101, 102, 103.
+  const withDiscord = (threadId: string) => {
+    let next = 101
+    return loadFixture('queue-plain.events.jsonl').map((event): V2Event => {
+      if (event.type !== 'session.inbox.enqueued' || event.data.item.type !== 'user') return event
+      const discord = { messageId: String(next++), threadId, username: 'tommy' }
+      const item = { ...event.data.item, payload: { ...event.data.item.payload, metadata: { discord } } }
+      return { ...event, data: { ...event.data, item } }
+    })
+  }
+  // replay() binds the view to channel `channel`: a prompt whose conversation is that channel is a mainmast prompt.
+  expect(effectLines(replay({ events: withDiscord('channel') }).effects)).toMatchInlineSnapshot(`
+    [
+      "[typing on]",
+      "-# *using openai/gpt-6-luna low ⋅ build*",
+      "-# ┣ shell _sleep 6 && echo slow-done_",
+      "[show queue:msg_0f20347e1001nsJ7W4hOvhBpQb reply to 102] -# Queued at position 1. Delete the original message to remove it, or use /clear-queue position:1",
+      "[show queue:msg_0f20347e500196F4o0voD7LGMV reply to 103] -# Queued at position 2. Delete the original message to remove it, or use /clear-queue position:2",
+      "[reply to 101] Done.",
+      "[silent] -# *project ⋅ main ⋅ 10s ⋅ 6% ⋅ gpt-6-luna*",
+      "[edit queue:msg_0f20347e1001nsJ7W4hOvhBpQb] -# Queued",
+      "[reply to 102] apple",
+      "[silent] -# *project ⋅ main ⋅ 2s ⋅ 6% ⋅ gpt-6-luna*",
+      "[edit queue:msg_0f20347e500196F4o0voD7LGMV] -# Queued",
+      "[reply to 103] cherry",
+      "[typing off]",
+      "-# *project ⋅ main ⋅ 2s ⋅ 6% ⋅ gpt-6-luna*",
+    ]
+  `)
+  const thread = replay({ events: withDiscord('thread') }).effects
+  expect(thread.filter((effect) => effect.type === 'markdown').map((effect) => effect.replyTo)).toEqual([null, null, null])
 })
 
 test('snapshot closes the ack of an item promoted while disconnected, without an echo', () => {

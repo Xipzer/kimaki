@@ -24,6 +24,7 @@ Add **mainmast** channels, the new default. A project channel is now a chat with
 - Halfway through the OpenCode `warming` window (30 minutes without warming) an idle mainmast is asked for useful work. With warming on, it is compacted when the window ends, while the cache is still warm, once its context passes 100k tokens (also with 1M-context models). A pending reminder or compaction survives an OpenCode plugin reload, for example after a Kimaki upgrade.
 - The mainmast and worker instructions come from the Kimaki OpenCode plugin. After a Kimaki upgrade, an existing mainmast or worker gets the new instructions at its next message, added after the history, so the prompt cache stays warm.
 - A mainmast turn with nothing for you (an idle reminder, notes of threads you already see) posts nothing: the mainmast answers `IDLE`, which Kimaki hides with no footer, instead of filler like "nothing new".
+- The first answer text to each of your messages (text, voice or queued) is a Discord reply to that message, so you can see where each answer starts when you open the channel from a notification. Tool lines, wake answers and worker threads never reply, and the reply does not ping you.
 - `/new-mainmast` starts a fresh mainmast in the channel.
 - Onboarding answers in the `#kimaki` channel instead of a thread.
 - `kimaki session read <id>` now prints only prompts and final answers. Use `--full` for every tool call. `kimaki session wait` and `kimaki send --wait` print the same short output.

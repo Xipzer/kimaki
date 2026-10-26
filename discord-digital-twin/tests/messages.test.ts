@@ -269,6 +269,20 @@ describe('messages and reactions', () => {
     expect(await discord.channel(channel.id).text({ deterministicFooters: false })).toContain(content)
   })
 
+  test('showReplies names the message a reply answers', async () => {
+    const guild = client.guilds.cache.first()!
+    const channel = await guild.channels.create({ name: 'replies', type: ChannelType.GuildText })
+    const question = await discord.channel(channel.id).user(testUserId).sendMessage({ content: 'What is the answer?' })
+    await channel.send({ content: '42', reply: { messageReference: question.id } })
+    expect(await discord.channel(channel.id).text({ showReplies: true })).toMatchInlineSnapshot(`
+      "--- from: user (TestUser)
+      What is the answer?
+      --- from: assistant (TestBot)
+      [reply to TestUser: What is the answer?]
+      42"
+    `)
+  })
+
   test('getMessageVisibleText flattens Separator and TextDisplay', () => {
     expect(
       getMessageVisibleText({

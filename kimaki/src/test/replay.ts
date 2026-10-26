@@ -74,13 +74,13 @@ export function effectLines(effects: Effect[]): string[] {
     if (effect.type === 'viewed') return []
     if (effect.type === 'typing') return `[typing ${effect.on ? 'on' : 'off'}]`
     if (effect.type === 'attachments') return `[attachments ${effect.files.map((file) => file.name).join(', ')}]`
-    if (effect.type === 'markdown') return `${effect.blankLineBefore ? '\\n' : ''}${effect.text}`
+    if (effect.type === 'markdown') return `${effect.replyTo ? `[reply to ${effect.replyTo}] ` : ''}${effect.blankLineBefore ? '\\n' : ''}${effect.text}`
     if (effect.type === 'show') {
       const reply = effect.replyTo ? ` reply to ${effect.replyTo}` : ''
       return `[show ${effect.key}${reply}] ${effect.messages.map(uiLine).join(' | ')}`
     }
     if (effect.type === 'edit') {
-      const reply = effect.reply === undefined ? [] : [`[reply to ${effect.key}] ${effect.reply}`]
+      const reply = effect.reply === undefined ? [] : [`[reply to ${effect.replyTo ?? effect.key}] ${effect.reply}`]
       return [`[edit ${effect.key}] ${effect.messages.map(uiLine).join(' | ')}`, ...reply]
     }
     // Tests have no git checkout: the branch is always main.
