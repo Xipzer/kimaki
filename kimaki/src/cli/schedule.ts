@@ -49,7 +49,10 @@ export function registerSendCommand(cli: Goke) {
         dataDir: dataDirOrDefault(options.dataDir),
         route: 'send',
         signal: AbortSignal.timeout(25 * 60_000),
-        input: { ...input, wait: options.wait, sendAt: options.sendAt, preRun: options.preRun, allowConcurrency: options.allowConcurrency },
+        input: {
+          ...input, wait: options.wait, sendAt: options.sendAt, preRun: options.preRun, allowConcurrency: options.allowConcurrency,
+          senderSessionId: process.env['OPENCODE_SESSION_ID'] || undefined,
+        },
       })
       if (result instanceof BotNotRunningError) {
         // No local bot (CI, another machine): the bot that owns the channel runs it (remote-send.ts).

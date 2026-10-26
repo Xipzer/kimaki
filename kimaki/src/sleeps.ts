@@ -196,6 +196,8 @@ async function wake(bot: Bot, row: SleepRow): Promise<Error | void> {
         author: { id: bot.discord.user!.id, username: 'kimaki' },
         messageId: deliveryId,
         id: `msg_sleep_${deliveryId}`,
+        // The session asked for this wake itself.
+        sender: { sessionId },
       })
     })()
     if (!(sent instanceof Error)) return settle('consumed')

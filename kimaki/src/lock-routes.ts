@@ -84,6 +84,8 @@ const sendFields = {
   notifyOnly: z.boolean({ error: 'notifyOnly must be boolean' }).optional(),
   // The CLI waits for the run (`--wait`), so its end sends no mainmast note.
   wait: z.boolean({ error: 'wait must be boolean' }).optional(),
+  // OPENCODE_SESSION_ID of the shell that ran `kimaki send`: a mainmast wakes when the runs it prompted end.
+  senderSessionId: text('senderSessionId').optional(),
   permissions: z.array(z.string(), { error: 'Permission rules must be strings' }).optional(),
   prompt: text('prompt'),
   files: z.array(z.object({ uri: z.string(), name: z.string() }), { error: 'files must contain uri and name strings' }).optional(),

@@ -36,7 +36,8 @@ export function promptFilePath(file: { uri: string }): string {
 // file path; the prompt file goes first, because the receiver reads the first attachment.
 export function remoteEnvelope(input: SendInput) {
   const requestId = crypto.randomBytes(8).toString('hex')
-  const { files, prompt, ...options } = input
+  // A session of this machine means nothing to the receiving bot.
+  const { files, prompt, senderSessionId: _sender, ...options } = input
   // A prompt over the message limit travels as an attachment; the content keeps a preview.
   const long = prompt.length > 2000
   const footer = `${REMOTE_SEND_PREFIX}${JSON.stringify({ requestId, options, ...(long && { promptFile: REMOTE_PROMPT_FILE }) })}`

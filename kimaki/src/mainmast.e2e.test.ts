@@ -79,6 +79,8 @@ beforeAll(async () => {
         }),
         { id: 'woken-with-media', priority: 320, when: { latestUserTextIncludes: 'Media uploaded to Discord' }, then: { parts: textParts('Here is the screenshot.') } },
         { id: 'user-steer', priority: 100, when: { latestUserTextIncludes: 'user-steer-marker' }, then: { parts: textParts('Steered job done.') } },
+        { id: 'follow-up', priority: 100, when: { latestUserTextIncludes: 'follow-up-marker' }, then: { parts: textParts('Follow-up done.') } },
+        { id: 'woken-by-follow-up', priority: 340, when: { latestUserTextRegex: '<session-finished[\\s\\S]*Follow-up done' }, then: { parts: textParts('The follow-up finished.') } },
         { id: 'fork', priority: 100, when: { latestUserTextIncludes: 'fork-marker' }, then: { parts: textParts('Fork job done.') } },
         { id: 'slow-job', priority: 100, when: { latestUserTextIncludes: 'slow-job-marker' }, then: { parts: textParts('Slow job done.'), defaultPartDelayMs: 500 } },
         { id: 'woken-by-slow-job', priority: 330, when: { latestUserTextRegex: '<session-finished[\\s\\S]*Slow job done' }, then: { parts: textParts('The slow job finished.') } },
@@ -205,7 +207,7 @@ test('a btw fork of a worker sent with --parent-session wakes the mainmast when 
   if (!worker) throw new Error('no Worker task thread')
   const footers = (await discord.channel(channelId).getMessages()).filter((message) => message.content.startsWith('-# *project')).length
   // What the coordinator runs: kimaki send --thread <worker> --prompt '... btw' --parent-session <mainmast>
-  const forked = await send(bot, { threadId: worker.id, prompt: 'fork-marker related job. btw', parentSessionId: root })
+  const forked = await send(bot, { threadId: worker.id, prompt: 'fork-marker related job. btw', parentSessionId: root, senderSessionId: root })
   if (forked instanceof Error) throw forked
   await waitForFooter({ discord, threadId: forked.threadId })
   await waitForFooter({ discord, threadId: channelId, count: footers + 1 })
@@ -227,7 +229,7 @@ test('the note of a worker that uploaded a file lists its Discord URL; so does s
   const root = bot.store.getState().roots[channelId]!
   fs.writeFileSync(path.join(server.projectDirectory, 'shot.png'), 'png')
   const footers = (await discord.channel(channelId).getMessages()).filter((message) => message.content.startsWith('-# *project')).length
-  const started = await send(bot, { channelId, name: 'Screenshot task', prompt: 'upload-marker take a screenshot', parentSessionId: root })
+  const started = await send(bot, { channelId, name: 'Screenshot task', prompt: 'upload-marker take a screenshot', parentSessionId: root, senderSessionId: root })
   if (started instanceof Error) throw started
   await waitForFooter({ discord, threadId: started.threadId })
   await waitForFooter({ discord, threadId: channelId, count: footers + 1 })
@@ -261,22 +263,49 @@ test('the note of a worker that uploaded a file lists its Discord URL; so does s
   `)
 })
 
-test('a prompt the user writes in a worker thread is in the note', async () => {
+test('a run the user prompts in a worker thread is a silent note; a follow-up the mainmast sends wakes it', async () => {
   const { discord, channelId } = twin
   const root = bot.store.getState().roots[channelId]!
+  const client = await server.client()
   const worker = (await discord.channel(channelId).getThreads()).find((candidate) => candidate.name === 'Worker task')
   if (!worker) throw new Error('no Worker task thread')
-  const footers = (await discord.channel(channelId).getMessages()).filter((message) => message.content.startsWith('-# *project')).length
+  const footers = () => discord.channel(channelId).getMessages().then((messages) => messages.filter((message) => message.content.startsWith('-# *project')).length)
+  const before = await footers()
+  const workerFooters = (await discord.thread(worker.id).getMessages()).filter((message) => message.content.startsWith('-# *project')).length
   await discord.thread(worker.id).user(TEST_USER_ID).sendMessage({ content: 'Also check the logs user-steer-marker' })
-  await waitForFooter({ discord, threadId: channelId, count: footers + 1 })
-
-  const messages = await (await server.client()).message.list({ sessionID: root, order: 'desc', limit: 10 })
-  const note = messages.data.find((message) => message.type === 'synthetic' && message.text.includes('Steered job done.'))
-  expect(note?.type === 'synthetic' && note.text.split('\n').slice(1, 5).join('\n')).toMatchInlineSnapshot(`
-    "<user-prompt username="tommy">
+  await waitForFooter({ discord, threadId: worker.id, count: workerFooters + 1 })
+  const note = await waitFor({
+    label: 'silent note of the steered run',
+    check: async () => {
+      const inbox = await client.session.inbox.list({ sessionID: root })
+      const item = inbox.find((candidate) => candidate.type === 'synthetic' && candidate.payload.text.includes('Steered job done.'))
+      return item?.type === 'synthetic' ? item.payload.text : null
+    },
+  })
+  expect(note.replaceAll(worker.id, 'worker-thread').replace(/ses_\w+/g, 'ses_worker')).toMatchInlineSnapshot(`
+    "<session-finished sessionID="ses_worker" threadID="worker-thread" state="completed" title="Worker task" wake="false">
+    <user-prompt username="tommy">
     Also check the logs user-steer-marker
     </user-prompt>
-    Steered job done."
+    Steered job done.
+    More: kimaki session read ses_worker
+    </session-finished>"
+  `)
+  // Not woken: no new footer in the channel.
+  for (let i = 0; i < 10; i++) {
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    expect(await footers()).toBe(before)
+  }
+
+  // What the coordinator runs: kimaki send --thread <worker> --prompt '...', from its own shell.
+  const followed = await send(bot, { threadId: worker.id, prompt: 'Now the follow-up-marker', senderSessionId: root })
+  if (followed instanceof Error) throw followed
+  await waitForFooter({ discord, threadId: channelId, count: before + 1 })
+  const text = await discord.channel(channelId).text()
+  expect(text.slice(text.lastIndexOf('-# *project', text.lastIndexOf('-# *project') - 1))).toMatchInlineSnapshot(`
+    "-# *project ⋅ main ⋅ Ns ⋅ N% ⋅ deterministic-v2*
+    The follow-up finished.
+    -# *project ⋅ main ⋅ Ns ⋅ N% ⋅ deterministic-v2*"
   `)
 })
 
@@ -393,7 +422,7 @@ test('the mainmast shows typing while a worker runs in the background', async ()
   const root = bot.store.getState().roots[channelId]!
   const footers = (await discord.channel(channelId).getMessages()).filter((message) => message.content.startsWith('-# *project')).length
   discord.channel(channelId).clearTypingEvents()
-  const started = await send(bot, { channelId, name: 'Slow task', prompt: 'slow-job-marker take your time', parentSessionId: root })
+  const started = await send(bot, { channelId, name: 'Slow task', prompt: 'slow-job-marker take your time', parentSessionId: root, senderSessionId: root })
   if (started instanceof Error) throw started
   await discord.channel(channelId).waitForTypingEvent()
   // Read when typing starts: it must come from the running worker, not from the wake after it.

@@ -1,18 +1,21 @@
 // Mainmast notes: when a thread session finishes a run, its mainmast learns
 // about it, so the coordinator always knows what happened in its project.
 //
-//   thread run ends ─▶ `kimaki send --wait` prompt, target still busy?   ─▶ no note: the wait prints the answer
-//                  ├─▶ session started by a mainmast (--parent-session)? ─▶ note + wake that mainmast
-//                  └─▶ else, the thread's channel has a mainmast?        ─▶ silent note (read at next prompt)
+//   thread run ends ─▶ `kimaki send --wait` prompt, target still busy? ─▶ no note: the wait prints the answer
+//                  ├─▶ run prompt sent by a mainmast (`sender`)?      ─▶ note + wake that mainmast
+//                  └─▶ else (user steered, routine), channel mainmast? ─▶ silent note (read at next prompt)
 //
-// The note is a synthetic inbox item, like OpenCode's own subagent completion
-// (core/src/session/subagent-completion.ts): `resume` decides if it wakes the session.
+// Who sent the prompt is in its metadata (`sender`, prompt.ts), read from the
+// run's messages: no state of its own. The note is a synthetic inbox item, like
+// OpenCode's own subagent completion (core/src/session/subagent-completion.ts):
+// `resume` decides if it wakes the session.
 
-import { oc, projectOf, readMarker, threadOfSession, type Bot, type MainmastTimers } from './bot.ts'
+import { oc, projectOf, readMarker, type Bot, type MainmastTimers } from './bot.ts'
 import { parseDuration } from './duration.ts'
 import type { RunEnded } from './event-loop.ts'
 import { createLogger } from './logger.ts'
 import { IDLE_REPLY } from './plugin/mainmast.ts'
+import type { Sender } from './prompt.ts'
 import { finalAnswer, mediaBlock, uploadedMedia, type Message } from './session-events.ts'
 import { escapeAttribute } from './system-prompt.ts'
 
@@ -61,16 +64,28 @@ async function lastRunMessages(bot: Bot, sessionId: string) {
   return messages.reverse()
 }
 
-// The run's prompt when a person wrote it in Discord: only Discord messages
-// have snowflake IDs; `kimaki send`, routines and remote sends use UUIDs.
-function userPrompt(messages: readonly Message[]): { username: string; text: string } | null {
+// Who wrote the run's prompt, from its metadata (prompt.ts): a sender
+// (`kimaki send`, routine, sleep wake) or a person in Discord.
+function runPrompt(messages: readonly Message[]): { sender: Sender | null; user: { username: string; text: string } | null } {
   const prompt = messages.findLast((message) => message.type === 'user')
-  const discord: unknown = prompt?.type === 'user' ? prompt.metadata?.['discord'] : null
-  if (prompt?.type !== 'user' || !discord || typeof discord !== 'object') return null
-  const messageId: unknown = Reflect.get(discord, 'messageId')
-  const username: unknown = Reflect.get(discord, 'username')
-  if (typeof messageId !== 'string' || !/^\d+$/.test(messageId) || typeof username !== 'string') return null
-  return { username, text: prompt.text }
+  if (prompt?.type !== 'user') return { sender: null, user: null }
+  const sender: unknown = prompt.metadata?.['sender']
+  if (sender && typeof sender === 'object') {
+    const sessionId: unknown = Reflect.get(sender, 'sessionId')
+    return { sender: { ...(typeof sessionId === 'string' && { sessionId }), waited: Reflect.get(sender, 'waited') === true }, user: null }
+  }
+  const discord: unknown = prompt.metadata?.['discord']
+  const username: unknown = discord && typeof discord === 'object' ? Reflect.get(discord, 'username') : null
+  return { sender: null, user: typeof username === 'string' ? { username, text: prompt.text } : null }
+}
+
+// The mainmast a session belongs to: the root of its conversation when that is
+// a mainmast channel. The sender may be a subagent of that mainmast.
+async function mainmastOf(bot: Bot, sessionId: string): Promise<string | null> {
+  const { sessionThreads, roots } = bot.store.getState()
+  const conversation = sessionThreads[sessionId]
+  if (!conversation || !(await isMainmastChannel(bot, conversation))) return null
+  return roots[conversation] ?? null
 }
 
 function cut(text: string, max: number): string {
@@ -94,51 +109,47 @@ async function channelOfThread(bot: Bot, threadId: string): Promise<string | nul
 // The run's prompt came from `kimaki send --wait` and the target still runs:
 // it is waiting in that shell call, which prints the answer. A target that is
 // idle lost its wait (shell timeout, interrupt), so it gets the note.
-async function waitedFor(bot: Bot, { sessionId, target }: { sessionId: string; target: string }): Promise<boolean> {
-  const [prompts, active] = await Promise.all([
-    oc(bot, 'message.list', (client) => client.message.list({ sessionID: sessionId, order: 'desc', limit: 1, type: 'user' })),
-    oc(bot, 'session.active', (client) => client.session.active()),
-  ])
+async function isWaiting(bot: Bot, target: string): Promise<boolean> {
+  const active = await oc(bot, 'session.active', (client) => client.session.active())
   // On a failed check the note goes out: a duplicate is better than a lost result.
-  if (prompts instanceof Error) {
-    logger.warn(`wait check of ${sessionId}`, prompts)
-    return false
-  }
   if (active instanceof Error) {
-    logger.warn(`wait check of ${sessionId}`, active)
+    logger.warn(`wait check of ${target}`, active)
     return false
   }
-  const latest = prompts.data[0]
-  return latest?.type === 'user' && latest.metadata?.['waited'] === true && target in active
+  return target in active
 }
 
 async function noteRunEnded(bot: Bot, run: RunEnded): Promise<void> {
   const channelId = await channelOfThread(bot, run.threadId)
   // The mainmast's own runs, and threads outside any project channel.
   if (!channelId || channelId === run.threadId) return
-  const info = await oc(bot, 'session.get', (client) => client.session.get({ sessionID: run.sessionId }))
+  const [info, messages] = await Promise.all([
+    oc(bot, 'session.get', (client) => client.session.get({ sessionID: run.sessionId })),
+    lastRunMessages(bot, run.sessionId),
+  ])
   if (info instanceof Error) return logger.warn(`note of ${run.sessionId}`, info)
+  if (messages instanceof Error) return logger.warn(`answer of ${run.sessionId}`, messages)
   const marker = readMarker(info.metadata)
+  const { sender, user } = runPrompt(messages)
   // TODO: also note sessions on other machines (remote `kimaki send`, OpenCode workspaces).
   // Their bot cannot reach this OpenCode server: relay the note through a Discord envelope
   // in the mainmast channel, like remote-send.ts does for prompts.
-  const parentConversation = marker?.parentSessionId ? threadOfSession(bot, marker.parentSessionId) : null
-  const wake = Boolean(parentConversation && (await isMainmastChannel(bot, parentConversation)))
-  const target = wake ? marker?.parentSessionId : bot.store.getState().roots[channelId]
+  // Only a run a mainmast prompted wakes it. The user steering the thread, routines and
+  // other senders leave a silent note in the channel's mainmast.
+  const sentBy = sender?.sessionId ? await mainmastOf(bot, sender.sessionId) : null
+  const wake = sentBy !== null
+  const target = sentBy ?? bot.store.getState().roots[channelId]
   if (!target || target === run.sessionId) return
-  if (await waitedFor(bot, { sessionId: run.sessionId, target })) return
-  const messages = await lastRunMessages(bot, run.sessionId)
-  if (messages instanceof Error) return logger.warn(`answer of ${run.sessionId}`, messages)
+  if (sender?.waited && (await isWaiting(bot, target))) return
   const answer = run.error ?? finalAnswer(messages) ?? 'Finished without a text answer.'
   const media = mediaBlock(uploadedMedia(messages))
-  const fromUser = userPrompt(messages)
   const state = run.error ? 'error' : 'completed'
   const title = info.title || 'Untitled'
   const routine = marker?.task ? ` routine="#${marker.task.id}"` : ''
   const text = [
     `<session-finished sessionID="${run.sessionId}" threadID="${run.threadId}" state="${state}" title="${escapeAttribute(title)}"${routine} wake="${wake}">`,
     // The user steered this thread directly: the coordinator must know what they asked.
-    ...(fromUser ? [`<user-prompt username="${escapeAttribute(fromUser.username)}">\n${cut(fromUser.text, USER_PROMPT_CHARS)}\n</user-prompt>`] : []),
+    ...(user ? [`<user-prompt username="${escapeAttribute(user.username)}">\n${cut(user.text, USER_PROMPT_CHARS)}\n</user-prompt>`] : []),
     cut(answer, wake ? WAKE_ANSWER_CHARS : NOTE_ANSWER_CHARS),
     ...(media ? [media] : []),
     `More: kimaki session read ${run.sessionId}`,

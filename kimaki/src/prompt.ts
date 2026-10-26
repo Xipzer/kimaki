@@ -53,6 +53,16 @@ import { resolveWorkingDirectory } from './worktrees.ts'
 const logger = createLogger('PROMPT')
 
 
+// Who sent a prompt that no person typed in Discord: `kimaki send`, routines,
+// remote sends, sleep wakes. Stored in the prompt metadata; at the run end
+// mainmast.ts reads it: only a run a mainmast prompted wakes that mainmast.
+export type Sender = {
+  // The session whose shell ran `kimaki send` (OPENCODE_SESSION_ID).
+  sessionId?: string
+  // `kimaki send --wait`: the sender reads the result itself, so no note.
+  waited?: boolean
+}
+
 // Prompt IDs map a Discord message to its inbox item without stored state (spec 9.2.2).
 export function promptIdForMessage(messageId: string): string {
   return `msg_discord_${messageId}`
@@ -72,7 +82,7 @@ export async function prompt(
     skills = [],
     id = promptIdForMessage(messageId),
     echo,
-    waited = false,
+    sender,
   }: {
     sessionId: string
     threadId: string
@@ -89,9 +99,8 @@ export async function prompt(
     // Line the thread shows when OpenCode takes the prompt (queue.ts), for
     // inputs that have no Discord message: wakes, scheduled runs.
     echo?: string
-    // `kimaki send --wait`: the sender reads the result itself, so the run end
-    // sends no <session-finished> note (mainmast.ts).
-    waited?: boolean
+    // Unset: a person typed it in Discord.
+    sender?: Sender
   },
 ): Promise<OpenCodeUnavailableError | OpenCodeError | void> {
   const { attached, attachments } = await splitPromptFiles(files)
@@ -106,7 +115,7 @@ export async function prompt(
       files: attached,
       ...(skills.length > 0 && { skills: skills.map((skill) => ({ id: skill })) }),
       delivery,
-      metadata: { discord: { ...discord, ...(echo && { echo }) }, ...(waited && { waited }) },
+      metadata: { discord: { ...discord, ...(echo && { echo }) }, ...(sender && { sender }) },
     }),
   )
   if (result instanceof Error) return result
@@ -169,7 +178,7 @@ export async function steer(
     files?: readonly PromptFile[]
     skills?: readonly string[]
     echo?: string
-    waited?: boolean
+    sender?: Sender
   },
 ): Promise<OpenCodeUnavailableError | OpenCodeError | void> {
   const cancelled = await cancelPendingUi(bot, input.threadId)
@@ -337,7 +346,7 @@ export async function runInSession(
     messageId,
     files,
     echo,
-    waited,
+    sender,
     model,
   }: {
     sessionId: string
@@ -349,11 +358,11 @@ export async function runInSession(
     messageId: string
     files: readonly PromptFile[]
     echo?: string
-    waited?: boolean
+    sender?: Sender
     model?: ModelChoice | null
   },
 ) {
-  const base = { sessionId, threadId, threadName, author, messageId, files, echo, waited }
+  const base = { sessionId, threadId, threadName, author, messageId, files, echo, sender }
   switch (route.kind) {
     case 'shell':
       return shell(bot, { threadId, sessionId, command: route.command })
@@ -386,7 +395,7 @@ export async function dispatch(
     messageId,
     files = [],
     echo,
-    waited,
+    sender,
     model,
     parentSessionId,
   }: {
@@ -396,7 +405,7 @@ export async function dispatch(
     messageId: string
     files?: readonly PromptFile[]
     echo?: string
-    waited?: boolean
+    sender?: Sender
     model?: ModelChoice | null
     // `kimaki send --parent-session`: only a btw fork records it, the session itself exists.
     parentSessionId?: string
@@ -418,7 +427,7 @@ export async function dispatch(
   if (marked instanceof Error) return marked
   switch (route.kind) {
     case 'btw':
-      return forkBtw(bot, { source: conversation, text: route.text, author, messageId, files, agent: route.agent, parentSessionId, waited })
+      return forkBtw(bot, { source: conversation, text: route.text, author, messageId, files, agent: route.agent, parentSessionId, sender })
     case 'new-session':
       // A fresh conversation in the same channel, with no history.
       return startSession(bot, {
@@ -429,6 +438,7 @@ export async function dispatch(
         messageId,
         startMessageId: null,
         files,
+        sender,
       })
     default:
       return runInSession(bot, {
@@ -441,7 +451,7 @@ export async function dispatch(
         messageId,
         files,
         echo,
-        waited,
+        sender,
         model,
       })
   }
@@ -561,6 +571,8 @@ export async function send(bot: Bot, input: SendInput, { localOnly = false, task
     for (const id of ids) void thread.members.add(id).catch((error: Error) => logger.warn(`add thread member ${id}`, error))
   }
   const messageId = crypto.randomUUID()
+  // Also set without a session (routines, a terminal): it marks the prompt as not typed by a person.
+  const sender: Sender = { ...(input.senderSessionId && { sessionId: input.senderSessionId }), ...(input.wait && { waited: true }) }
   const route = parseTextMessage({ content: input.prompt })
   if (!route) return new ConfigError({ reason: 'Prompt is empty' })
   if (input.agent && (route.kind === 'steer' || route.kind === 'btw')) route.agent = input.agent
@@ -585,7 +597,7 @@ export async function send(bot: Bot, input: SendInput, { localOnly = false, task
       if (switched instanceof Error) return switched
     }
     const echo = task ? formatEcho({ username: author.username, text: routeText(route) }) : undefined
-    const result = await dispatch(bot, { conversation: thread, route, author, messageId, files: input.files, echo, waited: input.wait, parentSessionId: input.parentSessionId })
+    const result = await dispatch(bot, { conversation: thread, route, author, messageId, files: input.files, echo, sender, parentSessionId: input.parentSessionId })
     if (result instanceof Error) return result
     return result ?? { threadId, sessionId: bot.store.getState().roots[threadId]! }
   }
@@ -649,7 +661,7 @@ export async function send(bot: Bot, input: SendInput, { localOnly = false, task
     files: input.files,
     permissions,
     parentSessionId: input.parentSessionId,
-    waited: input.wait,
+    sender,
     task,
     worktree,
     baseBranch: input.baseBranch,

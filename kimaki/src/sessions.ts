@@ -32,7 +32,7 @@ import { SILENT_MESSAGE_FLAGS } from './format-parts.ts'
 import { createLogger } from './logger.ts'
 import { mainmastTimers } from './mainmast.ts'
 import type { OpenCodeClient, OpencodeEndpoint } from './opencode-server.ts'
-import { prompt, runInSession } from './prompt.ts'
+import { prompt, runInSession, type Sender } from './prompt.ts'
 import { formatEcho } from './queue.ts'
 import type { Route } from './routes.ts'
 import * as schema from './schema.ts'
@@ -356,7 +356,7 @@ export async function startSession(
     model: explicitModel,
     permissions,
     parentSessionId,
-    waited,
+    sender,
     task,
     worktree,
     baseBranch,
@@ -383,8 +383,7 @@ export async function startSession(
     model?: ModelChoice
     permissions?: PermissionRules
     parentSessionId?: string
-    // `kimaki send --wait`: see prompt().
-    waited?: boolean
+    sender?: Sender
     // A scheduled run (scheduler.ts): marks the session as started by this task.
     task?: ScheduledRun
     // undefined uses the channel default; false explicitly reuses an existing cwd.
@@ -495,7 +494,7 @@ export async function startSession(
     bot.effects.run(thread.id, [{ type: 'send', text: formatEcho({ username: author.username, text: shown }), echo: true }])
   }
 
-  const base = { sessionId: session.id, threadId: thread.id, threadName, author, messageId, files, waited }
+  const base = { sessionId: session.id, threadId: thread.id, threadName, author, messageId, files, sender }
   // A new session has no run, question or permission to cancel: prompt directly instead of steer().
   const sent = route.kind === 'steer'
     ? await prompt(bot, { ...base, text: route.text, delivery: 'steer' })
@@ -832,7 +831,7 @@ export async function forkBtw(
     files = [],
     agent,
     parentSessionId,
-    waited,
+    sender,
   }: {
     source: Conversation
     text: string
@@ -841,10 +840,9 @@ export async function forkBtw(
     files?: readonly PromptFile[]
     // A voice message asked for this agent.
     agent?: string
-    // Explicit `kimaki send --parent-session`: the fork's finished runs wake it (mainmast.ts).
+    // Explicit `kimaki send --parent-session`, recorded in the fork's marker.
     parentSessionId?: string
-    // `kimaki send --wait`: the waiting sender gets the answer, so no note while it runs.
-    waited?: boolean
+    sender?: Sender
   },
 ): Promise<ConfigError | OpenCodeUnavailableError | OpenCodeError | DiscordError | DbError | { threadId: string; sessionId: string }> {
   const sourceSessionId = rootSession(bot, source.id)
@@ -908,7 +906,7 @@ export async function forkBtw(
     messageId,
     delivery: 'steer',
     files,
-    waited,
+    sender,
   })
   if (sent instanceof Error) return sent
   return { threadId: thread.id, sessionId: forked.id }
