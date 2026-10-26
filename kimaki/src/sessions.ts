@@ -393,7 +393,7 @@ export async function startSession(
     // undefined uses the channel default; false explicitly reuses an existing cwd.
     worktree?: string | false
     baseBranch?: string
-    // false: only set up the thread (/new-worktree), no first input.
+    // false: only set up the thread (/new-worktree, /new-session without a prompt), no first input.
     run?: boolean
   },
 ): Promise<Error | { threadId: string; sessionId: string }> {
@@ -479,9 +479,10 @@ export async function startSession(
   const bound = await bindThread(bot, { threadId: thread.id, sessionId: session.id, channelId, directory, isNew: true })
   if (bound instanceof Error) return bound
   if (!run) {
+    const ready = checkout ? `Worktree ready: \`${directory}\`\nBranch: \`${checkout.branch ?? 'detached'}\`\n` : ''
     const posted = await thread
       .send({
-        content: `Worktree ready: \`${directory}\`\nBranch: \`${checkout?.branch ?? 'detached'}\`\nSend a message to start working.`,
+        content: `${ready}Send a message to start working.`,
         allowedMentions: { parse: [] },
         flags: SILENT_MESSAGE_FLAGS,
       })

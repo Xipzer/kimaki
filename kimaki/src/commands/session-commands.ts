@@ -2,7 +2,8 @@
 // /fork, /fork-subagent. Selects carry only the source session ID; the
 // source thread comes from the interaction channel.
 //
-//   /new-session prompt files? agent?  ─▶ startSession (new thread, no start message)
+//   /new-session prompt? files? agent? ─▶ startSession (new thread, no start message;
+//                                         no prompt: run: false, the first thread message runs it)
 //   /resume session (autocomplete)     ─▶ resume (binding moves to the new thread)
 //   /fork ─▶ select a user message      ─▶ fork({ before })
 //   /fork-subagent ─▶ select a child    ─▶ fork(child)
@@ -60,12 +61,13 @@ export function parseFileList({ value, directory }: { value: string; directory: 
 async function newSession(bot: Bot, interaction: ChatInputCommandInteraction) {
   const target = await resolveTarget(bot, interaction.channelId)
   if (target instanceof Error) return replyError(interaction, target)
-  const text = interaction.options.getString('prompt', true).trim()
-  if (!text) return replyError(interaction, new ConfigError({ reason: 'Write a prompt for the new session' }))
+  const text = interaction.options.getString('prompt')?.trim() ?? ''
   const files = parseFileList({ value: interaction.options.getString('files') ?? '', directory: target.directory })
   if (files instanceof Error) return replyError(interaction, files)
+  if (!text && files.length > 0) return replyError(interaction, new ConfigError({ reason: 'Write a prompt to attach files' }))
   const agent = interaction.options.getString('agent')?.trim()
   await interaction.deferReply()
+  // No prompt: the session waits in the thread for its first message.
   const started = await startSession(bot, {
     channelId: target.channelId,
     directory: target.directory,
@@ -74,6 +76,7 @@ async function newSession(bot: Bot, interaction: ChatInputCommandInteraction) {
     messageId: interaction.id,
     startMessageId: null,
     files,
+    run: Boolean(text),
   })
   if (started instanceof Error) return replyError(interaction, started)
   await interaction.editReply({ content: `Created new session in <#${started.threadId}>` })
@@ -258,7 +261,9 @@ export const sessionRoutes: InteractionRoutes = {
       definition: new SlashCommandBuilder()
         .setName('new-session')
         .setDescription('Start a new OpenCode session')
-        .addStringOption((option) => option.setName('prompt').setDescription('Prompt content for the session').setRequired(true))
+        .addStringOption((option) =>
+          option.setName('prompt').setDescription('Prompt content for the session; empty waits for the first message in the thread'),
+        )
         .addStringOption((option) =>
           option.setName('files').setDescription('Files to attach (comma separated; autocomplete)').setAutocomplete(true).setMaxLength(6000),
         )

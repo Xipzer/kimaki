@@ -32,6 +32,7 @@ function reply(marker: string, text: string, extra: DeterministicMatcher['when']
 const matchers: DeterministicMatcher[] = [
   reply('new-marker', 'saw the file', { rawPromptIncludes: 'file-body-marker' }),
   reply('first-marker', 'first answer'),
+  reply('empty-marker', 'started on the first message'),
   reply('second-marker', 'second answer', {}, 510),
   reply('tui-marker', 'tui answer'),
   reply('resumed-marker', 'resumed answer'),
@@ -145,6 +146,32 @@ test('/new-session starts a thread with attached files and an agent', async () =
   `)
   // A slash command thread has no start message: the user must be added explicitly.
   expect(await discord.channel(thread.id).getMemberIds()).toContain(TEST_USER_ID)
+})
+
+test('/new-session without a prompt waits for the first thread message', async () => {
+  const { discord, channelId } = twin
+  const user = discord.channel(channelId).user(TEST_USER_ID)
+  const client = await server.client()
+  const thread = await newThread(() =>
+    user.runSlashCommand({ name: 'new-session', options: [{ name: 'agent', type: 3, value: 'plan' }] }),
+  )
+  await waitFor({ label: 'ready note', check: async () => (await discord.thread(thread.id).text()).includes('Send a message') })
+  const sessionId = bot.store.getState().roots[thread.id]
+  if (!sessionId) throw new Error('thread has no session')
+  expect((await client.message.list({ sessionID: sessionId, order: 'asc', limit: 10 })).data).toEqual([])
+  await discord.thread(thread.id).user(TEST_USER_ID).sendMessage({ content: 'Go empty-marker' })
+  await waitForFooter({ discord, threadId: thread.id })
+  expect(await discord.thread(thread.id).text()).toMatchInlineSnapshot(`
+    "--- from: assistant (TestBot)
+    Send a message to start working.
+    --- from: user (tommy)
+    Go empty-marker
+    --- from: assistant (TestBot)
+    -# *using deterministic-provider/deterministic-v2 ⋅ plan*
+    started on the first message
+    -# *project ⋅ main ⋅ Ns ⋅ N% ⋅ deterministic-v2 ⋅ plan*"
+  `)
+  expect(thread.name).toBe('Kimaki session')
 })
 
 test('/resume binds an existing session to a new thread and moves the binding', async () => {
