@@ -16,6 +16,10 @@ import valueParser, { type Node as ValueNode } from 'postcss-value-parser'
 const FONTS_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'assets', 'fonts')
 const SCALE = 2
 const PADDING = 24
+// Inherited by every shape without its own width, edges included.
+const STROKE_WIDTH = 1.5
+// Share of the hue in a color class border; the rest is its fill, for soft borders.
+const BORDER_HUE = 0.5
 // Discord shrinks long images until labels are unreadable; a square one reads best.
 // The compact candidate asks pele for the narrowest layout: wrapped labels and `LR`
 // turned into `TB` (https://pele.run/api#narrow-screens).
@@ -54,7 +58,7 @@ type Theme = { colors: Palette; vars: ReadonlyMap<string, string> }
 function theme({ colors, base }: { colors: Palette; base: Record<string, string> }): Theme {
   const vars = new Map(Object.entries({
     ...base,
-    '--pele-radius': '6px',
+    '--pele-radius': '10px',
     '--pele-font': 'Geist, sans-serif',
     '--pele-font-mono': 'Geist Mono, monospace',
     '--pele-series-1': colors.blue.stroke,
@@ -73,13 +77,13 @@ const THEMES: { readonly [name in DiagramTheme]: Theme } = {
   light: theme({
     colors: LIGHT_COLORS,
     base: {
-      '--pele-bg': '#fafbf8',
+      '--pele-bg': '#faf9f5',
       '--pele-fg': '#141413',
       '--pele-muted': '#72736e',
-      '--pele-line': '#72736e',
+      '--pele-line': '#8c8b85',
       '--pele-surface': '#ffffff',
       '--pele-surface-alt': '#efeee5',
-      '--pele-border': '#72736e',
+      '--pele-border': '#d1cfc5',
       '--pele-accent': '#d97757',
       '--pele-critical': LIGHT_COLORS.pink.stroke,
       '--pele-error': LIGHT_COLORS.red.stroke,
@@ -110,7 +114,8 @@ export class DiagramError extends errore.createTaggedError({
 // resvg and librsvg do not support CSS custom properties, which pele uses for
 // every color. This does the browser's job on the parsed SVG: custom properties
 // inherit down the element tree, and every var() and color-mix() in attributes
-// and inline styles is computed to a plain value.
+// and inline styles is computed to a plain value. resvg also ignores rx/ry in
+// style (pele writes rx:var(--_r)), so they move to attributes.
 // TODO: drop this once resvg resolves var(). https://github.com/linebender/resvg/issues/821
 export function computeCustomProperties(svg: string, vars: ReadonlyMap<string, string> = THEMES.light.vars): string {
   const document = parseDocument(svg, { xmlMode: true })
@@ -128,7 +133,10 @@ function visit(node: DomNode, inherited: ReadonlyMap<string, string>) {
     const declarations = postcss.parse(style).nodes.filter((child) => child.type === 'decl')
     // Custom properties first: they apply to this element's own declarations too.
     for (const decl of declarations) if (decl.prop.startsWith('--')) vars.set(decl.prop, computeValue(decl.value, vars))
-    const kept = declarations.filter((decl) => !decl.prop.startsWith('--')).map((decl) => `${decl.prop}:${computeValue(decl.value, vars)}`)
+    for (const decl of declarations) if (decl.prop === 'rx' || decl.prop === 'ry') node.attribs[decl.prop] = computeValue(decl.value, vars)
+    const kept = declarations
+      .filter((decl) => !decl.prop.startsWith('--') && decl.prop !== 'rx' && decl.prop !== 'ry')
+      .map((decl) => `${decl.prop}:${computeValue(decl.value, vars)}`)
     if (kept.length > 0) node.attribs.style = kept.join(';')
     else delete node.attribs.style
   }
@@ -177,11 +185,15 @@ function colorMix([space, first, second]: string[]): string | undefined {
   if (space !== 'in srgb' || !first || !second) return undefined
   const [colorA, percentA] = first.split(/\s+/)
   const [colorB, percentB] = second.split(/\s+/)
-  const a = hexChannels(colorA)
-  const b = hexChannels(colorB)
-  if (!a || !b) return undefined
   const weightA = percentA ? parseFloat(percentA) / 100 : percentB ? 1 - parseFloat(percentB) / 100 : 0.5
-  return `#${a.map((channel, i) => Math.round(channel * weightA + b[i]! * (1 - weightA)).toString(16).padStart(2, '0')).join('')}`
+  return mixHex({ a: colorA, b: colorB, weightA })
+}
+
+function mixHex({ a, b, weightA }: { a: string | undefined; b: string | undefined; weightA: number }): string | undefined {
+  const channelsA = hexChannels(a)
+  const channelsB = hexChannels(b)
+  if (!channelsA || !channelsB) return undefined
+  return `#${channelsA.map((channel, i) => Math.round(channel * weightA + channelsB[i]! * (1 - weightA)).toString(16).padStart(2, '0')).join('')}`
 }
 
 function hexChannels(color: string | undefined): number[] | undefined {
@@ -201,7 +213,7 @@ export function withColorClasses(source: string, theme: DiagramTheme = 'light'):
   const defined = new Set(source.split('\n').flatMap((line) => line.trim().match(/^classDef\s+(\S+)/)?.[1]?.split(',') ?? []))
   const lines = Object.entries(colors)
     .filter(([name]) => !defined.has(name))
-    .map(([name, { fill, stroke }]) => `  classDef ${name} fill:${fill},stroke:${stroke},color:${vars.get('--pele-fg')}`)
+    .map(([name, { fill, stroke }]) => `  classDef ${name} fill:${fill},stroke:${mixHex({ a: stroke, b: fill, weightA: BORDER_HUE })},color:${vars.get('--pele-fg')}`)
   return [source.trimEnd(), ...lines].join('\n')
 }
 
@@ -218,7 +230,8 @@ export function renderDiagram(source: string, { theme = 'light' }: { theme?: Dia
   const fontFiles = fs.readdirSync(FONTS_DIR).filter((file) => file.endsWith('.ttf')).map((file) => path.join(FONTS_DIR, file))
   return errore.try(
     () => {
-      const resvg = new Resvg(computeCustomProperties(result.svg, vars), {
+      const svg = result.svg.replace('<svg ', `<svg stroke-width="${STROKE_WIDTH}" `)
+      const resvg = new Resvg(computeCustomProperties(svg, vars), {
         background: vars.get('--pele-bg'),
         fitTo: { mode: 'zoom', value: SCALE },
         font: { loadSystemFonts: false, fontFiles, defaultFontFamily: 'Geist', sansSerifFamily: 'Geist', monospaceFamily: 'Geist Mono' },

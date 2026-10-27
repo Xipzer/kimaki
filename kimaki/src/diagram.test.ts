@@ -14,7 +14,7 @@ const NESTED = `flowchart LR
 
 test('computes inherited custom properties, fallbacks and color-mix', () => {
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" style="--_a:var(--theme-a,#ffffff);--_b:var(--missing,#000000);width:10px"><g style="--_a:#ff0000"><rect fill="var(--_a)" stroke="color-mix(in srgb,var(--_a) 50%,var(--_b))"/></g><rect fill="var(--_a)" style="rx:var(--_r, 4px)"/></svg>`
-  expect(computeCustomProperties(svg, new Map([['--theme-a', '#00ff00']]))).toMatchInlineSnapshot(`"<svg xmlns="http://www.w3.org/2000/svg" style="width:10px"><g><rect fill="#ff0000" stroke="#800000"/></g><rect fill="#00ff00" style="rx:4px"/></svg>"`)
+  expect(computeCustomProperties(svg, new Map([['--theme-a', '#00ff00']]))).toMatchInlineSnapshot(`"<svg xmlns="http://www.w3.org/2000/svg" style="width:10px"><g><rect fill="#ff0000" stroke="#800000"/></g><rect fill="#00ff00" rx="4px"/></svg>"`)
 })
 
 test('leaves no var() or color-mix() in pele output', () => {
@@ -46,11 +46,11 @@ test('adds built-in color classes the source does not define', () => {
     "flowchart LR
       a:::blue --> b:::teal
       classDef teal,red fill:#000
-      classDef blue fill:#edf5fb,stroke:#5290c8,color:#141413
-      classDef green fill:#eef6f0,stroke:#5f9a6d,color:#141413
-      classDef purple fill:#f3effa,stroke:#8a72c2,color:#141413
-      classDef pink fill:#fbeef3,stroke:#c4688a,color:#141413
-      classDef amber fill:#fbf5e8,stroke:#c99a3e,color:#141413"
+      classDef blue fill:#edf5fb,stroke:#a0c3e2,color:#141413
+      classDef green fill:#eef6f0,stroke:#a7c8af,color:#141413
+      classDef purple fill:#f3effa,stroke:#bfb1de,color:#141413
+      classDef pink fill:#fbeef3,stroke:#e0abbf,color:#141413
+      classDef amber fill:#fbf5e8,stroke:#e2c893,color:#141413"
   `)
   expect(withColorClasses('sequenceDiagram\n  A->>B: hi')).toBe('sequenceDiagram\n  A->>B: hi')
 })
