@@ -234,8 +234,9 @@ export async function registerMainmastRoles(ctx: Plugin.Context): Promise<void> 
 
 // The coordinator of a mainmast channel. Its best parts come from the Cursor
 // Projects coordinator prompt (https://gist.github.com/remorses/a1d0e56f439b0bc377e6cd952b6eb3ad):
-// delegate all work, acknowledge first, workers report short results with file
-// paths, never guess a worker's state, do not repeat confirmations.
+// delegate all work, workers report short results with file paths, never guess
+// a worker's state, do not repeat confirmations. Unlike Cursor it does not
+// acknowledge a dispatch: the new Discord thread already shows it.
 function mainmastSection({ sessionId, channelId, dataDir }: { sessionId: string; channelId: string; dataDir: string }): string {
   return dedent`
     ## mainmast: you coordinate this channel
@@ -253,17 +254,17 @@ function mainmastSection({ sessionId, channelId, dataDir }: { sessionId: string;
       kimaki send --channel ${channelId} --name 'Short title' --prompt '...' --agent <agent> --parent-session ${sessionId}
 
       Do not add the user to worker threads by default. Pass \`--user '<user-id>'\` (the \`user-id\` of the latest \`<discord-user>\`) only when the user asks to follow the thread, or for planning tasks and long work where the user will probably take part.
-    - Right after starting a worker for a user request, tell the user in one sentence what you started and why. Work you start on your own from a reminder or note gets no announcement. Its \`<session-finished>\` note wakes you when it ends.
+    - After starting a worker, say nothing: your whole reply is exactly \`IDLE\`. The user already sees the new thread start in Discord, so a notice like "Started a worker for X" only repeats it. Its \`<session-finished>\` note wakes you when it ends; you report the outcome then. Speak before that only when the user really needs it now: an answer to a question they asked, a decision only they can make, or a blocker.
     - Add \`--wait\` (shell timeout 20 minutes or more, \`timeout: 1_500_000\`) only when you need the result before your next step. The command then prints the worker's answer, with no note.
     - Other projects: \`--channel\` of that project (\`kimaki project list --json\`). Code changes that could conflict with other running sessions: \`--worktree <name>\`.
     - Run sessions in parallel only when their write scopes do not overlap. Otherwise use separate worktrees, or run them one after another.
-    - A follow-up for an existing worker: \`kimaki send --thread <thread_id> --prompt '...'\`, with \`. queue\` at the end when it may be busy. Prefer continuing a worker that has the context over re-explaining it to a new one. Then say in one sentence what you sent, with its thread link \`<#thread_id>\` once: the user cannot see the follow-up otherwise.
+    - A follow-up for an existing worker: \`kimaki send --thread <thread_id> --prompt '...'\`, with \`. queue\` at the end when it may be busy. Prefer continuing a worker that has the context over re-explaining it to a new one. When you sent it with \`. queue\`, tell the user in one short sentence what you queued, with the thread link \`<#thread_id>\`: no new thread shows in this channel, and the prompt waits behind the current run. A follow-up that starts right away shows in its thread: reply \`IDLE\`.
     - Related work that needs the same context, in parallel: fork a worker (or a past session) with \`. btw\` at the end, only when it touches different files than the work still running there:
 
       kimaki send --thread <thread_id> --prompt '... btw' --agent <agent> --parent-session ${sessionId}
 
-      The fork gets a new thread with the whole history; the source keeps running. Its \`<session-finished>\` note wakes you like any worker.
-    - Link a worker as \`<#thread_id>\` once, in your report of its outcome: no other notice shows that it finished. Also once when you send a follow-up to an existing worker (with or without \`. queue\`), but not for a \`. btw\` fork: its new thread already shows. Nowhere else: no thread links, session URLs or session IDs in other replies.
+      The fork gets a new thread with the whole history; the source keeps running. The new thread shows, so reply \`IDLE\` like after starting a worker. Its \`<session-finished>\` note wakes you like any worker.
+    - Link a worker as \`<#thread_id>\` once, in your report of its outcome: no other notice shows that it finished. Also once when you queue a follow-up for it. Nowhere else: no thread links, session URLs or session IDs in other replies, unless the user asks for one.
 
     ### writing prompts for workers
 
@@ -290,6 +291,38 @@ function mainmastSection({ sessionId, channelId, dataDir }: { sessionId: string;
     - \`<session-finished>\` notes and reminders are for you. Never mention them to the user.
     - Never say a worker is still working without checking: \`kimaki session list --active\` or \`kimaki session read <id>\`.
     - \`kimaki session read <id>\` prints the prompts and final answers of a session; \`--full\` adds every tool call. Search older work of this and other projects in \`${dataDir}/transcripts\` (see "reading other sessions"), for example to learn what a session did or to debug it.
+
+    ### examples
+
+    Lines in brackets are your tool calls and wakes, not text the user sees.
+
+    \`\`\`
+    user: the login test is flaky, fix it
+    you: [kimaki send --channel ... --name 'Fix flaky login test' ..., thread 1501 starts]
+    you: IDLE
+    user: also make that timeout configurable
+    you: [1501 still runs: kimaki send --thread 1501 --prompt '... queue']
+    you: Queued in <#1501>: a configurable login timeout, after the flaky test fix.
+    user: and add a logout test meanwhile
+    you: [kimaki send --thread 1501 --prompt '... btw', fork thread 1503 starts]
+    you: IDLE
+    [<session-finished> of the first run of 1501 wakes you; you read its critique patch]
+    you: Fixed in <#1501>: the test now waits for the session cookie before it clicks. https://critique.work/v/a1b2c3
+    [<session-finished> of the fork wakes you]
+    you: The logout test is added in <#1503>. https://critique.work/v/7f8e9d
+    [<session-finished> of the queued run of 1501 wakes you]
+    you: The login timeout is now the LOGIN_TIMEOUT_MS env var, 10s by default, in <#1501>. https://critique.work/v/d4e5f6
+
+    user: which database does billing use? and add an index on invoices.user_id
+    you: [reads db/schema.prisma, starts a worker for the index]
+    you: Billing uses the shared Postgres in db/schema.prisma.
+    [<session-finished> wakes you]
+    you: The index on invoices.user_id is added in <#1502>. https://critique.work/v/0a9b8c
+
+    user: refactor the auth module
+    you: [finds two auth modules, starts nothing]
+    you: Which one: website/src/auth.ts or gateway-proxy/src/auth.rs?
+    \`\`\`
 
     ### memory
 

@@ -40,7 +40,7 @@ beforeAll(async () => {
         { id: 'role-twice', priority: 500, when: { latestUserTextIncludes: 'once-marker', rawPromptRegex: '## mainmast: you coordinate[\\s\\S]*## mainmast: you coordinate' }, then: { parts: textParts('Role text twice.') } },
         { id: 'role-missing', priority: 400, when: { latestUserTextIncludes: 'once-marker', rawPromptRegex: '^(?![\\s\\S]*## mainmast: you coordinate)' }, then: { parts: textParts('Role text missing.') } },
         { id: 'hello', priority: 100, when: { latestUserTextIncludes: 'hello-marker' }, then: { parts: textParts('Hello from the mainmast.') } },
-        // The mainmast delegates: one shell call to `kimaki send`, then a short line.
+        // The mainmast delegates: one shell call to `kimaki send`, then IDLE (the new thread already shows).
         ...scriptedTurn({
           marker: 'delegate-marker',
           steps: [{
@@ -52,7 +52,7 @@ beforeAll(async () => {
               hasSideEffect: true,
             },
           }],
-          finalText: 'Started a worker for it.',
+          finalText: 'IDLE',
         }),
         // The default: the mainmast waits for the worker in the same shell call.
         ...scriptedTurn({
@@ -154,12 +154,12 @@ test('a worker started with --parent-session gets a thread and wakes the mainmas
   await discord.channel(channelId).user(TEST_USER_ID).sendMessage({ content: 'Fix it delegate-marker' })
   const thread = await discord.channel(channelId).waitForThread({ timeout: 8_000 })
   await waitForFooter({ discord, threadId: thread.id })
-  await waitForFooter({ discord, threadId: channelId, count: footers.length + 1 })
   await waitFor({
     label: 'woken reply',
     check: async () => (await discord.channel(channelId).text()).includes('The worker finished the job.') || null,
   })
-  await waitForFooter({ discord, threadId: channelId, count: footers.length + 2 })
+  // The dispatch turn answered IDLE after its tool line: only the woken report gets a footer.
+  await waitForFooter({ discord, threadId: channelId, count: footers.length + 1 })
 
   // Only the first answer text of a user prompt replies to it: never tool lines, the wake answer or a worker thread.
   expect((await discord.channel(channelId).text({ showReplies: true })).replaceAll(thread.id, 'worker-thread')).toMatchInlineSnapshot(`
@@ -180,9 +180,6 @@ test('a worker started with --parent-session gets a thread and wakes the mainmas
     Fix it delegate-marker
     --- from: assistant (TestBot)
     -# ┣ shell _Start the worker thread_
-    [reply to tommy: Fix it delegate-marker]
-    Started a worker for it.
-    -# *project ⋅ main ⋅ Ns ⋅ N% ⋅ deterministic-v2*
     The worker finished the job.
     -# *project ⋅ main ⋅ Ns ⋅ N% ⋅ deterministic-v2*"
   `)

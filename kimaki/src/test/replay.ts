@@ -46,6 +46,7 @@ export function replay({
       channelId: 'channel',
       directory: '/project',
       isNew: true,
+      mainmast: false,
     })
   return events.reduce<{ view: ThreadView; effects: Effect[] }>(
     (acc, event) => {

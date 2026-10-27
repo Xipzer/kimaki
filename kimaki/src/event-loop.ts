@@ -232,7 +232,7 @@ export function createEventLoop({
       return
     }
     if (!store.getState().threads[threadId]) {
-      const view = emptyView({ sessionId, channelId: loaded.channelId, directory: loaded.directory, isNew: false })
+      const view = emptyView({ sessionId, channelId: loaded.channelId, directory: loaded.directory, isNew: false, mainmast: threadId === loaded.channelId })
       commit({ threadId, update: (current) => ({ threads: { ...current.threads, [threadId]: view } }) })
     }
     for (const event of entry.events) fold(threadId, event)
@@ -411,7 +411,7 @@ export function createEventLoop({
         update: (current) => ({
           roots: { ...current.roots, [threadId]: sessionId },
           sessionThreads: { ...current.sessionThreads, [sessionId]: threadId },
-          threads: { ...current.threads, [threadId]: emptyView({ sessionId, channelId, directory, isNew }) },
+          threads: { ...current.threads, [threadId]: emptyView({ sessionId, channelId, directory, isNew, mainmast: threadId === channelId }) },
         }),
       })
       // Same synchronous turn as the routing change: no live event can come first.

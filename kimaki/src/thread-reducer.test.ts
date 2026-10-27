@@ -84,6 +84,43 @@ test('any turn that answers IDLE posts no text and no footer, not only idle nudg
   expect(visible).toEqual([])
 })
 
+test('a mainmast turn with tool lines but no text (or only IDLE) posts no footer; a thread turn does', () => {
+  const events = loadFixture('tools.events.jsonl')
+  const idle = events.map((event) => (event.type === 'session.text.ended' ? { ...event, data: { ...event.data, text: 'IDLE' } } : event))
+  const silent = events.filter((event) => !event.type.startsWith('session.text.'))
+  const sessionId = rootSessionId(events.filter((event): event is V2Event => !event.type.startsWith('kimaki.')))
+  const shown = (input: ThreadEvent[], mainmast: boolean) =>
+    replay({ events: input, view: emptyView({ sessionId, channelId: 'channel', directory: '/project', isNew: true, mainmast }) }).effects.flatMap((effect) =>
+      effect.type === 'footer' ? ['footer'] : effect.type === 'send' && effect.text.includes('┣') ? ['tool'] : [],
+    )
+  expect({ mainmastIdle: shown(idle, true), mainmastNoText: shown(silent, true), threadIdle: shown(idle, false) }).toMatchInlineSnapshot(`
+    {
+      "mainmastIdle": [
+        "tool",
+        "tool",
+        "tool",
+        "tool",
+        "tool",
+      ],
+      "mainmastNoText": [
+        "tool",
+        "tool",
+        "tool",
+        "tool",
+        "tool",
+      ],
+      "threadIdle": [
+        "tool",
+        "tool",
+        "tool",
+        "tool",
+        "tool",
+        "footer",
+      ],
+    }
+  `)
+})
+
 test('kimaki sleep in a turn makes its footer silent, the next turn notifies again', () => {
   const turn = loadFixture('tools.events.jsonl').filter((event) => !event.type.startsWith('session.tool.'))
   const end = turn.findIndex((event) => event.type === 'session.execution.succeeded')
@@ -118,7 +155,7 @@ test('execution failure shows the error and no footer, interrupt shows nothing',
   const events = loadFixture('abort.events.jsonl')
   const sessionID = rootSessionId(events)
   const started = events.find((event) => event.type === 'session.execution.started')!
-  const view = emptyView({ sessionId: sessionID, channelId: 'channel', directory: '/project', isNew: false })
+  const view = emptyView({ sessionId: sessionID, channelId: 'channel', directory: '/project', isNew: false, mainmast: false })
   const busy = reduce({ view, event: started, prefs: DEFAULT_PREFS }).view
   const failed = reduce({
     view: busy,
@@ -228,7 +265,7 @@ test('only these event types produce effects for the root session', () => {
   for (const file of files) {
     const events = loadFixture(file)
     const sessionId = rootSessionId(events)
-    let view = emptyView({ sessionId, channelId: 'channel', directory: '/project', isNew: true })
+    let view = emptyView({ sessionId, channelId: 'channel', directory: '/project', isNew: true, mainmast: false })
     for (const event of events) {
       const result = reduce({ view, event, prefs: DEFAULT_PREFS })
       view = result.view
@@ -294,7 +331,7 @@ test('only these event types produce effects for the root session', () => {
 test('retry notices are throttled to one per 10s', () => {
   const events = loadFixture('abort.events.jsonl')
   const sessionID = rootSessionId(events)
-  const view = emptyView({ sessionId: sessionID, channelId: 'channel', directory: '/project', isNew: false })
+  const view = emptyView({ sessionId: sessionID, channelId: 'channel', directory: '/project', isNew: false, mainmast: false })
   const retry = (created: number, attempt: number): V2Event => ({
     id: `evt_retry_${attempt}`,
     created,
@@ -474,7 +511,7 @@ test('snapshot closes the ack of an item promoted while disconnected, without an
 test('execute: final metadata shows inner calls whose progress was missed, then failures', () => {
   const events = loadFixture('abort.events.jsonl')
   const sessionID = rootSessionId(events)
-  const view = emptyView({ sessionId: sessionID, channelId: 'channel', directory: '/project', isNew: false })
+  const view = emptyView({ sessionId: sessionID, channelId: 'channel', directory: '/project', isNew: false, mainmast: false })
   const base = { created: 1_000 }
   const durable = <V extends number>(version: V) => ({ aggregateID: sessionID, seq: 1, version })
   const call = { sessionID, assistantMessageID: 'msg_a', id: 'call_1' }

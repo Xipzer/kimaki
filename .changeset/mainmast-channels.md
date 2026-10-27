@@ -8,11 +8,11 @@ Add **mainmast** channels, the new default. A project channel is now a chat with
 ```
 #my-app
   you: fix the flaky login test
-  Started a worker for the flaky login test.
+  (thread "Fix flaky login test" starts)
   Fixed in #fix-flaky-login-test: the test now awaits the session cookie.
 ```
 
-- The mainmast starts workers in the background and says in one line what it started. A follow-up it sends to an existing worker also gets one line with that thread's link (not for btw forks, whose thread already shows). When a run the mainmast prompted ends (a worker it started, a follow-up or a fork it sent), its final answer wakes the mainmast, which reports the outcome with one link to the thread. Kimaki posts no other finish notice.
+- The mainmast starts workers in the background and says nothing about it: you already see the new thread start. A btw fork it starts is silent too. A follow-up it queues for a busy worker gets one short line with that thread's link, because no new thread shows in the channel and the prompt waits behind the current run. It speaks before a run ends only when you need it now: an answer to your question, a decision or a blocker. When a run the mainmast prompted ends (a worker it started, a follow-up or a fork it sent), its final answer wakes the mainmast, which reports the outcome with one link to the thread. Kimaki posts no other finish notice.
 - For related work that needs the same context, the mainmast can fork a worker or a past session with `kimaki send --thread <id> --prompt '... btw' --parent-session <mainmast>`, when the fork touches different files. `--parent-session` now also applies to btw forks, and the fork wakes the mainmast when it ends, like any worker.
 - Before it reports, the mainmast reviews the real change: it reads each critique diff as a patch (`<critique url>.patch`) and the changed files when needed.
 - The mainmast report of a worker includes its critique diff URLs (one per commit) and media. When a worker reports changes or commit hashes without diff URLs, the mainmast makes them itself. `kimaki upload-to-discord` now prints the Discord URL of each uploaded file (`{"uploaded":[{"name","url"}]}`). The `<session-finished>` note and `kimaki session read` list the media a run uploaded, so the mainmast posts the same URLs, with previews, instead of uploading again.

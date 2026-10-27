@@ -70,6 +70,8 @@ export type Turn = {
   slept: boolean
   // Discord message the next answer text replies to (a mainmast prompt, queue.ts). Taken by the first text.
   replyTo: string | null
+  // The current answer posted model text. A mainmast answer without it gets no footer.
+  texted: boolean
 }
 
 export type Child = {
@@ -101,6 +103,8 @@ export type ThreadView = {
   sessionId: string
   // Project channel of the thread: its verbosity applies.
   channelId: string
+  // The view is a mainmast channel itself, not a thread.
+  mainmast: boolean
   // Current working directory of the root session (session.moved changes it).
   directory: string
   // True only for sessions this bot created: the first step shows a banner.
@@ -210,15 +214,18 @@ export function emptyView({
   channelId,
   directory,
   isNew,
+  mainmast,
 }: {
   sessionId: string
   channelId: string
   directory: string
   isNew: boolean
+  mainmast: boolean
 }): ThreadView {
   return {
     sessionId,
     channelId,
+    mainmast,
     directory,
     bannerPending: isNew,
     turn: null,
@@ -238,7 +245,7 @@ export function emptyView({
 }
 
 function newTurn(startedAt: number): Turn {
-  return { startedAt, model: null, agent: null, tokens: 0, slept: false, replyTo: null }
+  return { startedAt, model: null, agent: null, tokens: 0, slept: false, replyTo: null, texted: false }
 }
 
 export function isBusy(view: ThreadView): boolean {
@@ -261,7 +268,7 @@ export function conversationTyping({ threads, threadId }: { threads: Readonly<Re
   const view = threads[threadId]
   if (!view || waitsForUser(view)) return false
   if (isBusy(view)) return true
-  if (view.channelId !== threadId) return false
+  if (!view.mainmast) return false
   return Object.entries(threads).some(([id, thread]) => id !== threadId && thread.channelId === threadId && isTyping(thread))
 }
 
@@ -330,6 +337,8 @@ function emitFooter({ draft, prefs, emit, turn, at, notify }: Context & { turn: 
   if (!turn.model) return
   // The answer posted no text or tool line (e.g. an IDLE_REPLY, only hidden tools).
   if (draft.lastKind === null) return
+  // A mainmast answer with only tool lines (it started a worker, then answered IDLE): its thread shows the work.
+  if (draft.mainmast && !turn.texted) return
   // A child still runs: the answer comes later.
   if (Object.values(draft.children).some((child) => child.running)) return
   emit({
@@ -446,7 +455,10 @@ function applyRoot(context: Context & { event: V2Event }) {
       const replyTo = draft.turn?.replyTo ?? null
       // The reply header already sets the text apart from the tool lines above.
       emit({ type: 'markdown', text, blankLineBefore: draft.lastKind === 'tool' && !replyTo, replyTo })
-      if (draft.turn) draft.turn.replyTo = null
+      if (draft.turn) {
+        draft.turn.replyTo = null
+        draft.turn.texted = true
+      }
       draft.lastKind = 'text'
       return
     }
@@ -514,6 +526,7 @@ function applyRoot(context: Context & { event: V2Event }) {
         emitFooter({ ...context, turn: draft.turn, at: event.created, notify: false })
         draft.turn.startedAt = event.created
         draft.turn.slept = false
+        draft.turn.texted = false
         draft.lastKind = null
       }
       return deliverQueued({ draft, emit, inboxID: event.data.inboxID })
