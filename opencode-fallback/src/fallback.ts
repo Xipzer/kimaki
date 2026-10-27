@@ -40,10 +40,11 @@ export const DEFAULT_BLOCK_MS: Record<BlockReason, number> = {
 // Best first. Entries a user has no provider for are skipped at runtime.
 export const DEFAULT_MODELS = [
   'anthropic/claude-opus-5-5',
-  'openai/gpt-6-sol',
-  'xai/grok-4.6',
+  'openai/gpt-6.1-sol',
+  'xai/grok-4.7',
+  'opencode-go/kimi-k3',
   'opencode-go/grok-4.7',
-  'github-copilot/gpt-6-sol',
+  'github-copilot/gpt-6.1-sol',
   'anthropic/claude-sonnet-5-5',
   'openai/gpt-5.5',
   'opencode-go/glm-5.3-flash',
