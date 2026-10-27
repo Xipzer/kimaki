@@ -71,13 +71,13 @@ beforeAll(async () => {
         { id: 'waited-worker', priority: 100, when: { latestUserTextIncludes: 'waited-worker-marker' }, then: { parts: textParts('Waited job done.') } },
         // Slow enough that the delegating run ends first: the note then wakes an idle mainmast.
         { id: 'worker', priority: 100, when: { latestUserTextIncludes: 'worker-marker' }, then: { parts: textParts('Job done in the worker.'), defaultPartDelayMs: 300 } },
-        // A worker that uploads a screenshot; its note carries the URL for the coordinator.
+        // A worker that uploads a screenshot; session read lists its URL, the note does not.
         ...scriptedTurn({
           marker: 'upload-marker',
           steps: [{ id: 'call-upload', tool: 'shell', input: { command: 'kimaki upload-to-discord shot.png', description: 'Upload the screenshot', hasSideEffect: true } }],
           finalText: 'Took the screenshot.',
         }),
-        { id: 'woken-with-media', priority: 320, when: { latestUserTextIncludes: 'Media uploaded to Discord' }, then: { parts: textParts('Here is the screenshot.') } },
+        { id: 'woken-with-media', priority: 320, when: { latestUserTextRegex: '<session-finished[\\s\\S]*Took the screenshot' }, then: { parts: textParts('Here is the screenshot.') } },
         { id: 'user-steer', priority: 100, when: { latestUserTextIncludes: 'user-steer-marker' }, then: { parts: textParts('Steered job done.') } },
         { id: 'follow-up', priority: 100, when: { latestUserTextIncludes: 'follow-up-marker' }, then: { parts: textParts('Follow-up done.') } },
         { id: 'woken-by-follow-up', priority: 340, when: { latestUserTextRegex: '<session-finished[\\s\\S]*Follow-up done' }, then: { parts: textParts('The follow-up finished.') } },
@@ -221,7 +221,7 @@ test('a btw fork of a worker sent with --parent-session wakes the mainmast when 
   expect((await roleTexts(fork.id)).at(-1)).toContain('## worker of a mainmast')
 })
 
-test('the note of a worker that uploaded a file lists its Discord URL; so does session read', async () => {
+test('session read lists the Discord URL of a file a worker uploaded; its note does not', async () => {
   const { discord, channelId } = twin
   const root = bot.store.getState().roots[channelId]!
   fs.writeFileSync(path.join(server.projectDirectory, 'shot.png'), 'png')
@@ -243,10 +243,8 @@ test('the note of a worker that uploaded a file lists its Discord URL; so does s
   expect(note?.type === 'synthetic' && note.text.replaceAll(started.sessionId!, 'ses_worker').replaceAll(started.threadId, 'worker-thread')).toMatchInlineSnapshot(`
     "<session-finished sessionID="ses_worker" threadID="worker-thread" state="completed" title="Screenshot task" wake="true">
     Took the screenshot.
-    Media uploaded to Discord:
-    - data:application/octet-stream;base64,cG5n
     More: kimaki session read ses_worker
-    The user sees nothing else about this. When it is work they asked for, a failure or a decision they must make, tell them the outcome in a few plain sentences, with the thread link <#worker-thread> once and the media URLs above. Otherwise reply exactly IDLE.
+    The user sees nothing else about this. When it is work they asked for, a failure or a decision they must make, tell them the outcome in a few plain sentences, with the thread link <#worker-thread> once. Otherwise reply exactly IDLE.
     </session-finished>"
   `)
   const read = await readSessionMarkdown({ client, sessionId: started.sessionId! })
@@ -257,6 +255,13 @@ test('the note of a worker that uploaded a file lists its Discord URL; so does s
     - data:application/octet-stream;base64,cG5n
 
     "
+  `)
+  // --full and transcripts hide tool outputs but keep the uploaded media on the tool line.
+  const full = await readSessionMarkdown({ client, sessionId: started.sessionId!, full: true, thinking: true })
+  expect(full instanceof Error ? full : full.slice(full.indexOf('tool shell'), full.indexOf('finish: tool-calls')).trim()).toMatchInlineSnapshot(`
+    "tool shell [completed] {"command":"kimaki upload-to-discord shot.png","description":"Upload the screenshot","hasSideEffect":true}
+    Media uploaded to Discord:
+    - data:application/octet-stream;base64,cG5n"
   `)
 })
 

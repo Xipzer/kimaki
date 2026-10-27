@@ -60,16 +60,16 @@ test('independent Discord CLI lists threads and users, uploads a file, and reads
     -# *using deterministic-provider/deterministic-v2 ⋅ build*
     ok
     -# *project ⋅ main ⋅ Ns ⋅ deterministic-v2*
-    [file: attachment://report.txt]
+    [file: data:application/octet-stream;base64,cmVwb3J0]
     [attachment: report.txt]
     -# 1. \`b.png\`
-    [media: attachment://b.png]
+    [media: data:application/octet-stream;base64,cG5n]
     -# 2. \`report.txt\`
-    [file: attachment://report.txt]
+    [file: data:application/octet-stream;base64,cmVwb3J0]
     -# 3. \`my shot.png\`
-    [media: attachment://my_shot.png]
+    [media: data:application/octet-stream;base64,cG5n]
     -# 4. \`b.png\`
-    [media: attachment://4-b.png]
+    [media: data:application/octet-stream;base64,cG5n]
     [attachment: b.png]
     [attachment: report.txt]
     [attachment: my_shot.png]

@@ -113,7 +113,20 @@ async function readMessageBody(request: Request): Promise<RESTPostAPIChannelMess
     const uri = `data:${file.type || 'application/octet-stream'};base64,${Buffer.from(await file.arrayBuffer()).toString('base64')}`
     uploadedAttachments.push({ id: generateSnowflake(), filename: file.name, size: file.size, content_type: file.type, url: uri, proxy_url: uri })
   }
-  return { ...body, uploadedAttachments }
+  // Like Discord, components get the uploaded URL in place of each attachment://<filename>.
+  // Discord also returns `attachments: []` for Components V2 messages; the twin keeps them for text().
+  const components = body.components && resolveAttachmentUrls(body.components, uploadedAttachments)
+  return { ...body, ...(components && { components }), uploadedAttachments }
+}
+
+function resolveAttachmentUrls<T>(value: T, attachments: readonly APIAttachment[]): T {
+  if (typeof value === 'string' && value.startsWith('attachment://')) {
+    const attachment = attachments.find((candidate) => `attachment://${candidate.filename}` === value)
+    return (attachment?.url ?? value) as T
+  }
+  if (Array.isArray(value)) return value.map((item) => resolveAttachmentUrls(item, attachments)) as T
+  if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, resolveAttachmentUrls(item, attachments)])) as T
+  return value
 }
 
 export interface ServerComponents {

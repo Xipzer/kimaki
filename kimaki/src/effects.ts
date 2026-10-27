@@ -119,6 +119,16 @@ function uploadMessage({ files, first, numbered }: { files: readonly UploadFile[
   return { files: attachments, components, flags: MessageFlags.IsComponentsV2 | SILENT_MESSAGE_FLAGS }
 }
 
+// Components V2 messages come back with an empty `attachments` list: Discord
+// resolves each attachment:// URL inside the components instead, in upload order.
+function mediaUrls(components: readonly APIMessageTopLevelComponent[]): string[] {
+  return components.flatMap((component) => {
+    if (component.type === ComponentType.MediaGallery) return component.items.map((item) => item.media.url)
+    if (component.type === ComponentType.File) return [component.file.url]
+    return []
+  })
+}
+
 // Effects that will never run: an upload still waits for its answer.
 function drop(effects: readonly Effect[]) {
   for (const effect of effects) {
@@ -189,7 +199,7 @@ export function createEffectsRunner({ discord, markViewed }: { discord: Client; 
         .send({ ...uploadMessage({ files: batch, first, numbered: files.length > 1 }), allowedMentions: { parse: [] } })
         .catch((cause: Error) => new DiscordError({ operation: `upload of ${batch.map((file) => file.name).join(', ')} (${cause.message})`, cause }))
       if (sent instanceof Error) return sent
-      urls.push(...sent.attachments.map((attachment) => attachment.url))
+      urls.push(...mediaUrls(sent.components.map((component) => component.toJSON())))
       first += batch.length
     }
     return urls

@@ -150,6 +150,8 @@ export function baseInstructions({
 
       kimaki upload-to-discord --session ${sessionId} <file1> [file2] ...
 
+      Never pipe or redirect its output (no \`| tail\`, \`| jq\`, \`> /dev/null\`): Kimaki reads the uploaded file URLs from it for \`kimaki session read\` and transcripts.
+
       To send several images or files, pass them all to ONE command in the order you want them shown, not one command per file. Discord shows them in argument order with numbered labels (\`1. a.png\`, \`2. b.pdf\`), so you and the user can refer to them by number (for example "screenshot 2"). Name them in your text with the same numbers.
 
       Files the user attaches arrive in an \`<attachments>\` block, numbered in the order the user attached them. When the user says "the second image", use that numbering.

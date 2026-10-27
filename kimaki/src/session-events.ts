@@ -127,7 +127,9 @@ function renderMessage(message: Message, options: { thinking?: boolean; verbose?
       const input = options.verbose ? JSON.stringify(state.input ?? {}) : JSON.stringify(state.input ?? {}).slice(0, TOOL_INPUT_LIMIT)
       const error = state.status === 'error' ? `\nerror: ${JSON.stringify(state).slice(0, 500)}` : ''
       const output = options.verbose && state.status === 'completed' ? `\n${JSON.stringify(state.content)}` : ''
-      return `tool ${part.name} [${state.status}] ${input}${error}${output}`
+      // Without --verbose tool outputs are hidden, but uploaded media stays findable.
+      const media = options.verbose ? '' : mediaBlock(uploadedMedia(part))
+      return `tool ${part.name} [${state.status}] ${input}${error}${output}${media && `\n${media}`}`
     }
     return ''
   })
@@ -147,26 +149,25 @@ export function finalAnswer(messages: readonly Message[]): string | null {
   return null
 }
 
+type MessagePart = Extract<Message, { type: 'assistant' }>['content'][number]
+
 const UPLOAD_RESULT_PREFIX = '{"uploaded":'
 // `"url":"..."` of each file in that JSON line (upload in prompt.ts). A regex, not zod:
 // this module loads on every CLI start. Discord URLs have no quotes or backslashes.
 const UPLOAD_URL = /"url":"([^"\\]+)"/g
 
-// Discord URLs of the files the last turn posted with `kimaki upload-to-discord`,
-// from the result line that command printed into its shell output. The session
-// history holds them, so this needs no Discord read and survives restarts.
-// Oldest-first input.
-export function uploadedMedia(messages: readonly Message[]): string[] {
-  const turn = messages.slice(messages.findLastIndex((message) => message.type === 'user') + 1)
-  const lines = turn.flatMap((message) => (message.type === 'assistant' ? message.content : []))
-    .flatMap((part) => (part.type === 'tool' && part.state.status === 'completed' ? part.state.content : []))
+// Discord URLs of the files a `kimaki upload-to-discord` call posted, from the result
+// line it printed into the shell output (the system prompt says never to pipe it).
+// The session history holds them, so this needs no Discord read and survives restarts.
+function uploadedMedia(part: MessagePart): string[] {
+  if (part.type !== 'tool' || part.state.status !== 'completed') return []
+  return part.state.content
     .flatMap((content) => (content.type === 'text' ? content.text.split('\n') : []))
     .filter((line) => line.startsWith(UPLOAD_RESULT_PREFIX))
-  return lines.flatMap((line) => [...line.matchAll(UPLOAD_URL)].map((match) => match[1]!))
+    .flatMap((line) => [...line.matchAll(UPLOAD_URL)].map((match) => match[1]!))
 }
 
-// The block a coordinator reposts: the files already show in the worker thread.
-export function mediaBlock(urls: readonly string[]): string {
+function mediaBlock(urls: readonly string[]): string {
   return urls.length === 0 ? '' : `Media uploaded to Discord:\n${urls.map((url) => `- ${url}`).join('\n')}`
 }
 
@@ -178,7 +179,7 @@ function renderAnswers({ session, messages }: { session: Pick<Session, 'id' | 't
   const flush = () => {
     const answer = finalAnswer(turn)
     const last = turn.findLast((message) => message.type === 'assistant')
-    const media = mediaBlock(uploadedMedia(turn))
+    const media = mediaBlock(turn.flatMap((message) => (message.type === 'assistant' ? message.content.flatMap(uploadedMedia) : [])))
     if (answer && last?.type === 'assistant') blocks.push(`## assistant ${new Date(last.time.created).toISOString()} (${last.agent}, ${last.model.providerID}/${last.model.id})\n\n${answer}${media && `\n\n${media}`}`)
     turn = []
   }

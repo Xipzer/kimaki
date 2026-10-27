@@ -16,7 +16,7 @@ import type { RunEnded } from './event-loop.ts'
 import { createLogger } from './logger.ts'
 import { IDLE_REPLY } from './plugin/mainmast.ts'
 import type { Sender } from './prompt.ts'
-import { finalAnswer, mediaBlock, uploadedMedia, type Message } from './session-events.ts'
+import { finalAnswer, type Message } from './session-events.ts'
 import { escapeAttribute } from './system-prompt.ts'
 
 const logger = createLogger('MAINMAST')
@@ -142,7 +142,6 @@ async function noteRunEnded(bot: Bot, run: RunEnded): Promise<void> {
   if (!target || target === run.sessionId) return
   if (sender?.waited && (await isWaiting(bot, target))) return
   const answer = run.error ?? finalAnswer(messages) ?? 'Finished without a text answer.'
-  const media = mediaBlock(uploadedMedia(messages))
   const state = run.error ? 'error' : 'completed'
   const title = info.title || 'Untitled'
   const routine = marker?.task ? ` routine="#${marker.task.id}"` : ''
@@ -151,9 +150,8 @@ async function noteRunEnded(bot: Bot, run: RunEnded): Promise<void> {
     // The user steered this thread directly: the coordinator must know what they asked.
     ...(user ? [`<user-prompt username="${escapeAttribute(user.username)}">\n${cut(user.text, USER_PROMPT_CHARS)}\n</user-prompt>`] : []),
     cut(answer, wake ? WAKE_ANSWER_CHARS : NOTE_ANSWER_CHARS),
-    ...(media ? [media] : []),
     `More: kimaki session read ${run.sessionId}`,
-    ...(wake ? [`The user sees nothing else about this. When it is work they asked for, a failure or a decision they must make, tell them the outcome in a few plain sentences, with the thread link <#${run.threadId}> once${media ? ' and the media URLs above' : ''}. Otherwise reply exactly ${IDLE_REPLY}.`] : []),
+    ...(wake ? [`The user sees nothing else about this. When it is work they asked for, a failure or a decision they must make, tell them the outcome in a few plain sentences, with the thread link <#${run.threadId}> once. Otherwise reply exactly ${IDLE_REPLY}.`] : []),
     '</session-finished>',
   ].join('\n')
   const sent = await oc(bot, 'session.synthetic', (client) =>
