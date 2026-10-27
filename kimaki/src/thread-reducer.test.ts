@@ -443,7 +443,7 @@ test('prompts from other clients echo, except the expanded prompt of a command K
   expect(echoes([command, { type: 'kimaki.command-failed' }])).toEqual(echoes([]))
 })
 
-test('mainmast: the first answer text of each prompt replies to its Discord message, threads never reply', () => {
+test('mainmast: a prompt reply goes to its Discord message, a queued one gets "Queued message sent" even when it answers IDLE', () => {
   // The fixture's prompts get Discord metadata, like prompt.ts writes it: messages 101, 102, 103.
   const withDiscord = (threadId: string) => {
     let next = 101
@@ -465,19 +465,30 @@ test('mainmast: the first answer text of each prompt replies to its Discord mess
       "[reply to 101] Done.",
       "[silent] -# *project ⋅ main ⋅ 10s ⋅ 6% ⋅ gpt-6-luna*",
       "[edit queue:msg_0f20347e1001nsJ7W4hOvhBpQb] -# Queued",
-      "[reply to 102] apple",
+      "[reply to 102] -# Queued message sent",
+      "apple",
       "[silent] -# *project ⋅ main ⋅ 2s ⋅ 6% ⋅ gpt-6-luna*",
       "[edit queue:msg_0f20347e500196F4o0voD7LGMV] -# Queued",
-      "[reply to 103] cherry",
+      "[reply to 103] -# Queued message sent",
+      "cherry",
       "[typing off]",
       "-# *project ⋅ main ⋅ 2s ⋅ 6% ⋅ gpt-6-luna*",
+    ]
+  `)
+  // A coordinator that starts a worker answers IDLE: the queued prompt still shows that it started.
+  const idle = withDiscord('channel').map((event) => (event.type === 'session.text.ended' && event.data.text.trim() === 'apple' ? { ...event, data: { ...event.data, text: 'IDLE' } } : event))
+  expect(effectLines(replay({ events: idle }).effects).filter((line) => line.includes('queue:msg_0f20347e1001') || line.startsWith('[reply to 102]'))).toMatchInlineSnapshot(`
+    [
+      "[show queue:msg_0f20347e1001nsJ7W4hOvhBpQb reply to 102] -# Queued at position 1. Delete the original message to remove it, or use /clear-queue position:1",
+      "[edit queue:msg_0f20347e1001nsJ7W4hOvhBpQb] -# Queued",
+      "[reply to 102] -# Queued message sent",
     ]
   `)
   const thread = replay({ events: withDiscord('thread') }).effects
   expect(thread.filter((effect) => effect.type === 'markdown').map((effect) => effect.replyTo)).toEqual([null, null, null])
 })
 
-test('snapshot closes the ack of an item promoted while disconnected, without an echo', () => {
+test('snapshot marks an item promoted while disconnected as started, without an echo', () => {
   const events = loadFixture('queue-plain.events.jsonl')
   const index = events.findIndex((event) => event.type === 'session.inbox.enqueued' && event.data.item.delivery === 'queue')
   const enqueued = events[index]
@@ -499,8 +510,8 @@ test('snapshot closes the ack of an item promoted while disconnected, without an
   const hydrated = reduce({ view, event: snapshot, prefs: DEFAULT_PREFS })
   expect(effectLines(hydrated.effects)).toMatchInlineSnapshot(`
     [
-      "[edit queue:msg_0f20347e1001nsJ7W4hOvhBpQb] -# » **user:** QUEUED-1: reply with the word apple.
-    -# Queued message sent",
+      "[edit queue:msg_0f20347e1001nsJ7W4hOvhBpQb] -# » **user:** QUEUED-1: reply with the word apple.",
+      "[reply to queue:msg_0f20347e1001nsJ7W4hOvhBpQb] -# Queued message sent",
     ]
   `)
   expect(hydrated.effects.map((effect) => effect.type)).toEqual(['edit'])

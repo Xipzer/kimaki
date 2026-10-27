@@ -255,7 +255,7 @@ test('voice in a busy thread: queue waits, btw forks, new-session starts a threa
   await waitForFooter({ discord: twin.discord, threadId: thread.id, count: 2 })
 
   const hide = (text: string) => text.replace(/<#\d+>/g, '<#THREAD>')
-  expect(hide(await twin.discord.thread(thread.id).text())).toMatchInlineSnapshot(`
+  expect(hide(await twin.discord.thread(thread.id).text({ showReplies: true }))).toMatchInlineSnapshot(`
     "--- from: user (tommy)
     Long work slow-marker
     --- from: assistant (TestBot)
@@ -263,20 +263,27 @@ test('voice in a busy thread: queue waits, btw forks, new-session starts a threa
     --- from: user (tommy)
     [attachment: voice-message.ogg]
     --- from: assistant (TestBot)
+    [reply to tommy: ]
     -# » **tommy:** Afterwards voice-queue
+    [reply to tommy: ]
     -# Queued
     --- from: user (tommy)
     [attachment: voice-message.ogg]
     --- from: assistant (TestBot)
+    [reply to tommy: ]
     -# » **tommy:** Side voice-btw
+    [reply to tommy: ]
     Session forked! Continue in <#THREAD>
     --- from: user (tommy)
     [attachment: voice-message.ogg]
     --- from: assistant (TestBot)
+    [reply to tommy: ]
     -# » **tommy:** Fresh start voice-new
+    [reply to tommy: ]
     Started a new session in <#THREAD>
     slow-done
     -# *project ⋅ main ⋅ Ns ⋅ N% ⋅ deterministic-v2*
+    [reply to tommy: ]
     -# Queued message sent
     voice queue ok
     -# *project ⋅ main ⋅ Ns ⋅ N% ⋅ deterministic-v2*"

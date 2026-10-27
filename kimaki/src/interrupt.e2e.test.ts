@@ -112,7 +112,7 @@ test('/abort stops the run and clears the queue', async () => {
   await waitForBotMessageContaining({ discord: twin.discord, threadId: thread.id, text: 'Removed from queue' })
   await expectNever({ threadId: thread.id, text: 'slow-done' })
   await expectNever({ threadId: thread.id, text: 'queued one ok' })
-  expect(await twin.discord.thread(thread.id).text()).toMatchInlineSnapshot(`
+  expect(await twin.discord.thread(thread.id).text({ showReplies: true })).toMatchInlineSnapshot(`
     "--- from: user (tommy)
     Abort me slow-marker
     --- from: assistant (TestBot)
@@ -120,6 +120,7 @@ test('/abort stops the run and clears the queue', async () => {
     --- from: user (tommy)
     Never runs queued-one. queue
     --- from: assistant (TestBot)
+    [reply to tommy: Never runs queued-one. queue]
     -# Removed from queue
     Request **aborted**, cleared 1 queued message"
   `)
@@ -134,7 +135,7 @@ test('a restarted bot still echoes and runs the queue it did not see', async () 
   bot = await startTestBot({ dataDir, twin, server })
   await waitForBotMessageContaining({ discord: twin.discord, threadId: thread.id, text: 'queued one ok' })
   await waitForFooter({ discord: twin.discord, threadId: thread.id })
-  expect(await twin.discord.thread(thread.id).text()).toMatchInlineSnapshot(`
+  expect(await twin.discord.thread(thread.id).text({ showReplies: true })).toMatchInlineSnapshot(`
     "--- from: user (tommy)
     Restart during queue slow-marker
     --- from: assistant (TestBot)
@@ -142,8 +143,10 @@ test('a restarted bot still echoes and runs the queue it did not see', async () 
     --- from: user (tommy)
     Survives restart queued-one. queue
     --- from: assistant (TestBot)
+    [reply to tommy: Survives restart queued-one. queue]
     -# Queued at position 1. Delete the original message to remove it, or use /clear-queue position:1
     slow-done
+    [reply to tommy: Survives restart queued-one. queue]
     -# Queued message sent
     queued one ok
     -# *project ⋅ main ⋅ Ns ⋅ N% ⋅ deterministic-v2*"

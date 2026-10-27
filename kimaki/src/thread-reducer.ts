@@ -521,7 +521,8 @@ function applyRoot(context: Context & { event: V2Event }) {
       const item = draft.inbox.find((candidate) => candidate.inboxID === event.data.inboxID)
       const queued = item?.delivery === 'queue'
       // Each user prompt the run takes gets its own reply; synthetic items keep the current one.
-      if (item && draft.turn) draft.turn.replyTo = item.replyTo
+      // An acked item's "Queued message sent" reply already marks where its answer starts.
+      if (item && draft.turn) draft.turn.replyTo = item.acked ? null : item.replyTo
       if (queued && draft.turn?.model) {
         emitFooter({ ...context, turn: draft.turn, at: event.created, notify: false })
         draft.turn.startedAt = event.created

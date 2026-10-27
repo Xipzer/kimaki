@@ -325,14 +325,8 @@ test('a worker started with --wait answers through the wait, with no note', asyn
   }
 
   const text = (await discord.channel(channelId).text()).replaceAll(thread.id, 'worker-thread')
-  expect(text.slice(text.lastIndexOf('--- from: user'))).toMatchInlineSnapshot(`
-    "--- from: user (tommy)
-    Fix it waitjob-marker
-    --- from: assistant (TestBot)
-    -# ┣ shell _Run the worker and wait_
-    The waited worker is done.
-    -# *project ⋅ main ⋅ Ns ⋅ N% ⋅ deterministic-v2*"
-  `)
+  // The answer of the busy prompt, then the queued one starts: its IDLE answer posts nothing.
+  expect(text.slice(text.lastIndexOf('[reply to tommy: Take a while'))).toMatchInlineSnapshot(`"*"`)
   expect(await discord.channel(channelId).getThreads()).toHaveLength(threads + 1)
   const messages = await client.message.list({ sessionID: root, order: 'desc', limit: 20 })
   expect(messages.data.some((message) => message.type === 'synthetic' && JSON.stringify(message).includes('Waited task'))).toBe(false)

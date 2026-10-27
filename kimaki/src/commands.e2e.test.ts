@@ -275,15 +275,17 @@ test('/queue-command queues an OpenCode command after the current run', async ()
   })
   await waitForBotMessageContaining({ discord, threadId: thread.id, text: 'queued command reply' })
   await waitForFooter({ discord, threadId: thread.id, count: 2 })
-  expect(await discord.thread(thread.id).text()).toMatchInlineSnapshot(`
+  expect(await discord.thread(thread.id).text({ showReplies: true })).toMatchInlineSnapshot(`
     "--- from: user (tommy)
     Long run slow-marker
     --- from: assistant (TestBot)
     -# *using deterministic-provider/deterministic-v2 ⋅ plan*
     -# » **tommy:** /later please
+    [reply to TestBot: -# » **tommy:** /later please]
     -# Queued
     slow-done
     -# *project ⋅ main ⋅ Ns ⋅ N% ⋅ deterministic-v2 ⋅ plan*
+    [reply to TestBot: -# » **tommy:** /later please]
     -# Queued message sent
     queued command reply
     -# *project ⋅ main ⋅ Ns ⋅ N% ⋅ deterministic-v2 ⋅ plan*"

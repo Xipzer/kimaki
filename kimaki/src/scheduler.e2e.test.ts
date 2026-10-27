@@ -12,10 +12,13 @@ import {
   manualClock,
   schedulingKit,
   seedProjectChannel,
+  slowTextMatcher,
   startOpencodeTestServer,
   startTestBot,
   startTwin,
   tempDataDir,
+  textParts,
+  waitForBotMessageContaining,
   waitForFooter,
   warmUp,
   type OpencodeTestServer,
@@ -30,7 +33,10 @@ let bot: BotHandle
 const { cli, schedule, tick, listTasks, request } = schedulingKit({ suite: () => ({ bot, twin, server }), dataDir, clock })
 
 beforeAll(async () => {
-  ;[server, twin] = await Promise.all([startOpencodeTestServer(), startTwin()])
+  ;[server, twin] = await Promise.all([startOpencodeTestServer({ matchers: [
+    slowTextMatcher({ marker: 'slow-marker', text: 'slow-done', delayMs: 800 }),
+    { id: 'report', priority: 50, when: { latestUserTextIncludes: 'Report when done' }, then: { parts: textParts('report ok') } },
+  ] }), startTwin()])
   await seedProjectChannel({ dataDir, channelId: twin.channelId, guildId: twin.discord.guildId, directory: server.projectDirectory })
   bot = await startTestBot({ dataDir, twin, server, clock, schedulerIntervalMs: null })
   await warmUp({ server })
@@ -177,4 +183,26 @@ test('recurring worktree routines get a fresh checkout on every run', async () =
   expect(new Set(directories).size).toBe(2)
   expect(directories.every((directory) => directory !== server.projectDirectory)).toBe(true)
   await request('task.delete', { id: task.routineId })
+})
+
+// Without --allow-concurrency a thread routine waits until the thread is idle, then runs at once.
+test('a . queue routine with --allow-concurrency that fires while its thread is busy waits in the queue, then gets its reply', async () => {
+  const started = await send(bot, { channelId: twin.channelId, prompt: 'Long work slow-marker' })
+  if (started instanceof Error) throw started
+  await waitForBotMessageContaining({ discord: twin.discord, threadId: started.threadId, text: '*using ' })
+  await request('send', { threadId: started.threadId, prompt: 'Report when done. queue', sendAt: '2030-01-01T19:00:00Z', allowConcurrency: true })
+  expect(await tick('2030-01-01T19:00:00Z')).toEqual([])
+  await waitForFooter({ discord: twin.discord, threadId: started.threadId, count: 2 })
+  expect(await twin.discord.thread(started.threadId).text({ showReplies: true })).toMatchInlineSnapshot(`
+    "--- from: assistant (TestBot)
+    -# » **CLI:** Long work slow-marker
+    -# *using deterministic-provider/deterministic-v2 ⋅ build*
+    -# » **routine #8:** Report when done
+    slow-done
+    -# *project ⋅ main ⋅ Ns ⋅ N% ⋅ deterministic-v2*
+    [reply to TestBot: -# » **routine #8:** Report when done]
+    -# Queued message sent
+    report ok
+    -# *project ⋅ main ⋅ Ns ⋅ N% ⋅ deterministic-v2*"
+  `)
 })

@@ -4,10 +4,11 @@
 //
 //   inbox.enqueued (queue, while busy) ─▶ "Queued at position N" ack
 //   inbox.enqueued (steer, echo)       ─▶ the echo line (wakes, scheduled runs, TUI prompts)
-//   inbox.delivered                    ─▶ "Queued message sent" reply to the user message, ack says "Queued"
+//   inbox.delivered (or promoted)      ─▶ "Queued message sent" reply to the user message, ack says "Queued"
 //   inbox.cancelled                    ─▶ ack says "Removed from queue"
 //
-// The prompt text is never posted again on delivery. Prompts without a Discord
+// Every acked item gets that reply when it starts, in threads and mainmast
+// channels alike. The prompt text is never posted again. Prompts without a Discord
 // message (CLI, routines, TUI) have nothing for the ack to reply to: the ack
 // shows the full prompt, and the "Queued message sent" reply goes to the ack.
 //
@@ -36,6 +37,7 @@ export type PendingInput = {
   messageId: string | null
   // The first answer text replies to this message. Only in a mainmast channel:
   // a thread holds one conversation, so turns need no extra delimiter there.
+  // Not for acked items: their "Queued message sent" reply marks the start.
   replyTo: string | null
   // An ack was posted; only acked items get an echo when they start.
   acked: boolean
@@ -136,6 +138,14 @@ function closeAck({ emit }: Slice, item: PendingInput, status: string) {
   if (item.acked) emit({ type: 'edit', key: ackKey(item.inboxID), messages: [textOnly(ackContent(item, status))] })
 }
 
+// An acked item starts running. The user message (or the ack without one)
+// already shows the prompt: a reply to it marks where it runs, instead of a
+// second copy. Also in a mainmast, where the answer may post no text (IDLE).
+function markStarted({ emit }: Slice, item: PendingInput) {
+  const ack = textOnly(ackContent(item, item.messageId ? 'Queued' : null))
+  emit({ type: 'edit', key: ackKey(item.inboxID), messages: [ack], reply: asSubtext('Queued message sent'), replyTo: item.messageId })
+}
+
 // Removes the item from the inbox; returns it when it was still queued.
 function takeQueued({ draft }: Slice, inboxID: string): PendingInput | null {
   const item = draft.inbox.find((candidate) => candidate.inboxID === inboxID)
@@ -176,15 +186,7 @@ export function deliverQueued(slice: Slice & { inboxID: string }) {
   const item = takeQueued(slice, slice.inboxID)
   if (!item || (!item.acked && !item.echo)) return
   slice.draft.lastKind = null
-  // The user message (or the ack without one) already shows the prompt: a
-  // reply to it marks where it runs, instead of a second copy. In a mainmast
-  // channel the answer itself replies to the user message (`replyTo`).
-  if (item.acked) {
-    const ack = textOnly(ackContent(item, item.messageId ? 'Queued' : null))
-    const reply = item.replyTo ? {} : { reply: asSubtext('Queued message sent'), replyTo: item.messageId }
-    slice.emit({ type: 'edit', key: ackKey(item.inboxID), messages: [ack], ...reply })
-    return
-  }
+  if (item.acked) return markStarted(slice, item)
   slice.emit({ type: 'send', text: item.echo ?? formatEcho(item), echo: true })
 }
 
@@ -197,7 +199,7 @@ export function cancelQueued(slice: Slice & { inboxID: string }) {
 export function promoteQueued(slice: Slice & { inboxID: string }) {
   const item = slice.draft.inbox.find((candidate) => candidate.inboxID === slice.inboxID)
   if (item?.delivery !== 'queue') return
-  closeAck(slice, { ...item }, 'Queued message sent')
+  if (item.acked) markStarted(slice, { ...item })
   item.delivery = 'steer'
 }
 
@@ -215,7 +217,10 @@ export function hydrateQueue(slice: Slice & { inbox: readonly SessionInboxInfo[]
   draft.inbox = users.map((item): PendingInput => {
     const existing = known.get(item.id)
     if (existing?.delivery === item.delivery) return existing
-    if (existing?.delivery === 'queue' && item.delivery === 'steer') closeAck(slice, existing, 'Queued message sent')
+    if (existing?.delivery === 'queue' && item.delivery === 'steer') {
+      if (existing.acked) markStarted(slice, existing)
+      return { ...existing, delivery: 'steer' }
+    }
     const { external: _external, ...fields } = inputFields({ payload: item.payload, channelId: draft.channelId })
     return { inboxID: item.id, delivery: item.delivery, ...fields, acked: item.delivery === 'queue' }
   })
