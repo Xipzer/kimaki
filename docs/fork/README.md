@@ -16,6 +16,7 @@ Rules for fork commits:
 | `feat(voice): post long voice transcripts in full…` | Long voice transcripts are echoed in full over several messages, not cut at 1,900 chars | `echo-chunks.ts` (+test, +e2e) | `ingress.ts`, `sessions.ts` |
 | `fix(commands): keep other apps' slash commands…` | Guild registration keeps commands that another app registered on the same bot (for example `/assistant`, `/whisper-*`) | `foreign-commands.ts` (+test, +e2e) | `slash-commands.ts` (`registerGuild`), digital twin GET route |
 | `feat(cli): keep kimaki session search…` | `kimaki session search` (removed upstream in 1.1); existing scripts call it | `cli/session-search.ts` (+e2e) | `cli.ts` (2 lines), help snapshot |
+| `feat(voice): Local Whisper transcriber` | `KIMAKI_WHISPER_URL` sends voice notes to a standard `/v1/audio/transcriptions` server, keyless, local only unless `KIMAKI_WHISPER_FALLBACK=1` | `local-whisper.ts` (+test, +e2e) | `voice.ts` (transcriber list, 7 lines), `voice-env.ts`, test harness option |
 
 ## Inventory of `tailored/main` and old branches against upstream 1.2
 

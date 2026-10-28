@@ -7,3 +7,4 @@ foreign-commands	fix(commands): keep other apps' slash commands	kimaki/src/slash
 session-search	feat(cli): keep kimaki session search	kimaki/src/cli.ts,kimaki/src/cli/session.ts	present	command\('session search	kimaki/src/cli
 model-precedence	fix(models): keep the session model	kimaki/src/sessions.ts,kimaki/src/prompt.ts,kimaki/src/commands/preference-commands.ts	present	info\.agent === selected\.agent|reselect	kimaki/src/sessions.ts
 thinking-status	feat(reasoning): live thinking status line	kimaki/src/thread-reducer.ts,kimaki/src/effects.ts	present	session\.reasoning\.delta	kimaki/src/thread-reducer.ts
+local-whisper	feat(voice): Local Whisper transcriber	kimaki/src/voice.ts,kimaki/src/test/harness.ts	present	audio/transcriptions	kimaki/src/voice.ts
