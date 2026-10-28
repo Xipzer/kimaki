@@ -16,6 +16,17 @@ Rules for fork commits:
 | `fix(commands): keep other apps' slash commands…` | Guild registration keeps commands that another app registered on the same bot (for example `/assistant`, `/whisper-*`) | `foreign-commands.ts` (+test, +e2e) | `slash-commands.ts` (`registerGuild`), digital twin GET route |
 | `feat(voice): Local Whisper transcriber` | `KIMAKI_WHISPER_URL` sends voice notes to a standard `/v1/audio/transcriptions` server, keyless, local only unless `KIMAKI_WHISPER_FALLBACK=1` | `local-whisper.ts` (+test, +e2e) | `voice.ts` (transcriber list, 7 lines), `cli/bot.ts` (2 lines), test harness option |
 
+## Upstream pull requests
+
+| Fork feature | Issue | PR |
+|---|---|---|
+| Local Whisper | #244 | #248 |
+| Keep the session model | #245 | #249 |
+| Long voice transcripts in full | #246 | #250 |
+| Live thinking status line | #247 | #251 |
+
+A fork commit is dropped when its PR is merged (rebase onto the release that contains it).
+
 ## Inventory of `tailored/main` and old branches against upstream 1.2
 
 | Enhancement (old ref) | Decision | Reason |
