@@ -32,6 +32,7 @@ import {
 import { credentialsFromRow, gatewayUrlsFromEnv } from './credentials.ts'
 import type { KimakiDb } from './db.ts'
 import { ConfigError, DbError } from './errors.ts'
+import { transcribeViaLocalWhisper, type LocalWhisper } from './local-whisper.ts'
 import { createLogger } from './logger.ts'
 import type { Route } from './routes.ts'
 import * as schema from './schema.ts'
@@ -561,7 +562,7 @@ async function projectFileTree(directory: string): Promise<string> {
   return result?.stdout.split('\n').slice(0, 400).join('\n') ?? ''
 }
 
-export type TranscriptionBaseUrls = { chatgpt?: string; openai?: string; gemini?: string }
+export type TranscriptionBaseUrls = { chatgpt?: string; openai?: string; gemini?: string; localWhisper?: LocalWhisper }
 
 // Usable audio API keys, best first: any OpenAI key (stored, then env) before any Gemini key.
 // Gemini's content filter blocks harmless voice messages, so a stored Gemini key must not win over env OpenAI.
@@ -580,6 +581,7 @@ type Transcriber =
   | { kind: 'openai' | 'gemini'; apiKey: string }
   | { kind: 'chatgpt'; credential: ChatGPTCredential }
   | { kind: 'gateway'; clientId: string; clientSecret: string }
+  | { kind: 'local-whisper'; whisper: LocalWhisper }
 
 // Best first: OpenAI key (routing tool call), ChatGPT subscription and Gemini key, then hosted Whisper.
 // ChatGPT and Whisper only transcribe, so the route is always steer.
@@ -631,14 +633,17 @@ export async function transcribe({
   agents: ReadonlyArray<{ name: string; description: string }>
   inSession: boolean
 }): Promise<DbError | NoTranscriptionKeyError | TranscriptionFailure | TranscriptionResult> {
-  const list = await transcribers({ db, token, opencodeDbFile })
-  if (list instanceof Error) return list
+  const local = baseUrls.localWhisper
+  const cloud = local && !local.fallback ? [] : await transcribers({ db, token, opencodeDbFile })
+  if (cloud instanceof Error) return cloud
+  const list: Transcriber[] = [...(local ? [{ kind: 'local-whisper' as const, whisper: local }] : []), ...cloud]
   const tool = buildTranscriptionTool({ agentNames: agents.map((agent) => agent.name), inSession })
   const prompt = list.some((entry) => entry.kind === 'openai' || entry.kind === 'gemini')
     ? transcriptionPrompt({ fileTree: await projectFileTree(directory), agents })
     : ''
   const run = (entry: Transcriber) => {
     if (entry.kind === 'gateway') return transcribeViaGateway({ audio, mediaType, ...entry })
+    if (entry.kind === 'local-whisper') return withRetries(() => transcribeViaLocalWhisper({ whisper: entry.whisper, audio, mediaType }))
     if (entry.kind === 'chatgpt') return withRetries(() => transcribeViaChatGPT({ credential: entry.credential, baseUrl: baseUrls.chatgpt ?? CHATGPT_BASE_URL, audio, mediaType }))
     const request = { apiKey: entry.apiKey, prompt, audio, mediaType, tool }
     if (entry.kind === 'openai') return withRetries(() => requestOpenAI({ ...request, baseUrl: baseUrls.openai ?? OPENAI_BASE_URL }))

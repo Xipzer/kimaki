@@ -30,6 +30,7 @@ import { GATEWAY_APP_ID, saveCredentials, type Credentials } from '../credential
 import { openDb, verbosityToV1, type Verbosity } from '../db.ts'
 import type { ToolInput } from '../format-parts.ts'
 import * as schema from '../schema.ts'
+import type { LocalWhisper } from '../local-whisper.ts'
 import { startLockServer } from '../lock-server.ts'
 import { startBot, type BotHandle } from '../main.ts'
 import type { LockRouteInput, LockRouteName } from '../lock-routes.ts'
@@ -492,6 +493,7 @@ export async function startTestBot({
   geminiBaseUrl,
   openaiBaseUrl,
   chatgptBaseUrl,
+  localWhisper,
   opencodeDbFile = server.dbFile,
   realtimeBaseUrls,
   lockPort,
@@ -508,6 +510,8 @@ export async function startTestBot({
   openaiBaseUrl?: string
   // ChatGPT subscription transcription against startFakeChatGPT(), with the credential in opencodeDbFile.
   chatgptBaseUrl?: string
+  // Fork: Local Whisper transcription against a fake /audio/transcriptions server.
+  localWhisper?: LocalWhisper
   opencodeDbFile?: string
   // Voice calls against startFakeLive().
   realtimeBaseUrls?: RealtimeBaseUrls
@@ -552,6 +556,7 @@ export async function startTestBot({
       ...(geminiBaseUrl && { gemini: geminiBaseUrl }),
       ...(openaiBaseUrl && { openai: openaiBaseUrl }),
       ...(chatgptBaseUrl && { chatgpt: chatgptBaseUrl }),
+      ...(localWhisper && { localWhisper }),
     },
   })
   if (bot instanceof Error) throw bot

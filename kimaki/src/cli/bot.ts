@@ -110,6 +110,7 @@ export function registerStartCommand(cli: Goke) {
         { opencodeConfigDir, opencodeDbFile },
         { defaultMachineName },
         { ensureVoiceChannels, parseRealtimeVoice, saveVoiceCallVoice },
+        { localWhisperFromEnv },
       ] = await Promise.all([
         import('../main.ts'),
         import('../onboarding.ts'),
@@ -119,6 +120,7 @@ export function registerStartCommand(cli: Goke) {
         import('../opencode-server.ts'),
         import('../project.ts'),
         import('../voice-call.ts'),
+        import('../local-whisper.ts'),
       ])
       // Non-TTY hosts get the failure as an `error` event too (programmatic onboarding).
       // Explicit type: TS narrows after a `never` call only for annotated consts.
@@ -223,6 +225,7 @@ export function registerStartCommand(cli: Goke) {
         allowAllUsers: Boolean(options.allowAllUsers),
         disabledSkills,
         disabledPrompt,
+        transcriptionBaseUrls: { localWhisper: localWhisperFromEnv() },
       })
       if (bot instanceof Error) failStartup(bot)
       // exit() keeps process.exitCode: the restart route sets RESTART_EXIT_CODE before its SIGTERM.
