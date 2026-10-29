@@ -133,7 +133,7 @@ export default Plugin.define({
       })
     }
     await registerMainmastRoles(ctx)
-    const stopCompaction = await registerMainmastCompaction(ctx)
+    const stopTimers = await registerMainmastTimers(ctx)
     // File edits feed `kimaki session editors` (v1-compatible JSONL index).
     await ctx.tool.hook('execute.after', async (event) => {
       if (event.status !== 'completed' || !fileEditTool(event.tool)) return
@@ -143,6 +143,6 @@ export default Plugin.define({
       const recorded = await recordToolEdits({ dataDir, directory: ctx.location.directory, sessionId: event.sessionID, tool: event.tool, input: event.input })
       if (recorded instanceof Error) return
     })
-    return stopCompaction
+    return stopTimers
   },
 })
