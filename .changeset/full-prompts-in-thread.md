@@ -7,3 +7,5 @@ Show `kimaki send` prompts and voice transcriptions in full in the Discord threa
 Long model text is also split more cleanly: at line breaks first, then sentences, then words, and without doubled spaces where a paragraph was split by words.
 
 Fixes #246
+Closes #250
+Voice transcript part contributed by [@Xipzer](https://github.com/Xipzer) in #250.
