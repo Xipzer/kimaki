@@ -87,6 +87,16 @@ ChatGPT and Whisper only transcribe: **queue, chat, and agent instructions are i
 
 OpenAI keys use `gpt-audio-1.5`. Gemini keys use `gemini-flash-latest`.
 
+### Local Whisper server
+
+To keep audio on your machine, point Kimaki at your own **Whisper** server. Any server with the standard `/v1/audio/transcriptions` API works: speaches, faster-whisper-server, whisper.cpp server, LocalAI.
+
+```bash
+KIMAKI_WHISPER_URL=http://127.0.0.1:8000/v1 kimaki
+```
+
+When `KIMAKI_WHISPER_URL` is set it is the **only** transcriber. If the server fails, you see the error and the audio never goes to a cloud provider. Optional: `KIMAKI_WHISPER_MODEL` (default `whisper-1`) and `KIMAKI_WHISPER_API_KEY`. Like ChatGPT, Whisper only transcribes: queue, chat, and agent instructions are ignored.
+
 ### Gateway mode without a key
 
 With the shared Kimaki bot (`--gateway`) and no key, Kimaki uses a free hosted Whisper transcription on kimaki.dev. Whisper only transcribes speech: **queue, chat, and agent instructions are ignored**, and the text is always handled as a normal message.

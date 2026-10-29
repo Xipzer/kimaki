@@ -738,14 +738,15 @@ export async function startFakeOpenAI({ result }: { result: FakeTranscription })
 
 export type FakeChatGPT = {
   baseUrl: string
-  // Each POST /transcribe, as ChatGPT received it.
-  requests: Array<{ authorization: string | null; accountId: string | null; filename: string; type: string; audio: Buffer }>
+  // Each POST, as the server received it.
+  requests: Array<{ path: string; authorization: string | null; accountId: string | null; model: string | null; filename: string; type: string; audio: Buffer }>
   // Reply status; tests set 401 to check the API key fallback.
   status: number
   stop: () => Promise<void>
 }
 
 // chatgpt.com/backend-api/transcribe: multipart `file` in, `{ text }` out.
+// Also a local Whisper server (/audio/transcriptions), which takes the same shape plus `model`.
 export async function startFakeChatGPT({ text }: { text: string }): Promise<FakeChatGPT> {
   const fake: Omit<FakeChatGPT, 'baseUrl' | 'stop'> = { requests: [], status: 200 }
   const server = http.createServer((request, response) => {
@@ -756,9 +757,12 @@ export async function startFakeChatGPT({ text }: { text: string }): Promise<Fake
       const form = await new Request('http://fake/transcribe', { method: 'POST', headers, body: Buffer.concat(chunks) }).formData()
       const file = form.get('file')
       if (!(file instanceof File)) throw new Error('fake ChatGPT: no file field')
+      const model = form.get('model')
       fake.requests.push({
+        path: request.url ?? '',
         authorization: headers.get('authorization'),
         accountId: headers.get('chatgpt-account-id'),
+        model: typeof model === 'string' ? model : null,
         filename: file.name,
         type: file.type,
         audio: Buffer.from(await file.arrayBuffer()),
