@@ -9,6 +9,7 @@ import { ComponentType } from 'discord-api-types/v10'
 import { afterAll, beforeAll, expect, onTestFinished, test } from 'vitest'
 
 import type { BotHandle } from './main.ts'
+import { send } from './prompt.ts'
 import * as schema from './schema.ts'
 import {
   TEST_USER_ID,
@@ -593,5 +594,54 @@ test('/model with all channels scope sets the model of channels without their ow
     "**Set Model Preference**
     **Current (global):** \`deterministic-provider/deterministic-thinker (low)\`
     Select a provider:"
+  `)
+})
+
+// https://github.com/remorses/kimaki/issues/245: agents pass --agent <current_agent> on every send.
+test('naming the current agent again keeps the session model, and --model wins over the agent model', async () => {
+  const { discord, channelId } = twin
+  const thread = await newThread(channelId, 'Model kept thread')
+  const sessionId = bot.store.getState().roots[thread.id]!
+  const sendAndWait = async (input: { prompt: string; agent: string; model?: string }, count: number) => {
+    const sent = await send(bot, { sessionId, ...input })
+    if (sent instanceof Error) throw sent
+    await waitForFooter({ discord, threadId: thread.id, count })
+    return sessionModel(thread.id)
+  }
+  const explicit = await sendAndWait({ prompt: 'Explicit model', agent: 'thinker', model: 'deterministic-provider/deterministic-v2' }, 2)
+  // Like /model in the thread.
+  await (await server.client()).session.switchModel({ sessionID: sessionId, model: { providerID: 'deterministic-provider', id: 'deterministic-thinker', variant: 'low' } })
+  const kept = await sendAndWait({ prompt: 'Same agent again', agent: 'thinker' }, 3)
+  expect(await discord.thread(thread.id).text()).toMatchInlineSnapshot(`
+    "--- from: user (tommy)
+    Model kept thread
+    --- from: assistant (TestBot)
+    -# *using deterministic-provider/deterministic-v2 ⋅ build*
+    ok
+    -# *project ⋅ main ⋅ Ns ⋅ deterministic-v2*
+    ok
+    -# *project ⋅ main ⋅ Ns ⋅ deterministic-v2 ⋅ thinker*
+    ok
+    -# *project ⋅ main ⋅ Ns ⋅ deterministic-thinker ⋅ thinker*"
+  `)
+  expect({ explicit, kept }).toMatchInlineSnapshot(`
+    {
+      "explicit": {
+        "agent": "thinker",
+        "model": {
+          "id": "deterministic-v2",
+          "providerID": "deterministic-provider",
+          "variant": "default",
+        },
+      },
+      "kept": {
+        "agent": "thinker",
+        "model": {
+          "id": "deterministic-thinker",
+          "providerID": "deterministic-provider",
+          "variant": "low",
+        },
+      },
+    }
   `)
 })
