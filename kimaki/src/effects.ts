@@ -27,6 +27,7 @@ import {
 
 import { DISCORD_MEDIA_URL, embedFlags, formatFooter, SILENT_MESSAGE_FLAGS, type UiMessage } from './format-parts.ts'
 import { createLogger } from './logger.ts'
+import { echoPayloads } from './queue.ts'
 import { markdownPayloads, segmentPayloads, type DiscordPayload } from './markdown/components.ts'
 import { DISCORD_TEXT_LIMIT, renderMarkdown } from './markdown/render-markdown.ts'
 import { DiscordError } from './errors.ts'
@@ -312,11 +313,12 @@ export function createEffectsRunner({ discord, markViewed }: { discord: Client; 
       }
       const text = effect.type === 'send' ? effect.text : await footerText(effect)
       const notify = effect.notify === true
-      const mentions = !(effect.type === 'send' && effect.echo)
+      const echo = effect.type === 'send' && effect.echo === true
+      const mentions = !echo
       // A line over the limit (a long prompt echo) is split like model markdown.
       if (text.length > DISCORD_TEXT_LIMIT) {
         await flush()
-        for (const payload of markdownPayloads(text)) {
+        for (const payload of echo ? echoPayloads(text) : markdownPayloads(text)) {
           if (!live()) return drop(batch.slice(index + 1))
           await post({ threadId, options: payload, notify, mentions })
         }
