@@ -30,6 +30,7 @@ import type {
 } from '@opencode/client'
 
 import type { Verbosity } from './db.ts'
+import { thinkingDelta, thinkingEnded, thinkingStarted, type Thinking, type ThinkingEffect } from './thinking-status.ts'
 import {
   asSubtext,
   button,
@@ -130,6 +131,8 @@ export type ThreadView = {
   // without Discord metadata is its expanded prompt, shown as the typed command.
   // `echo` is set when no Discord message shows the command (CLI, routines).
   commandPending: { text: string; username: string; messageId: string | null; echo: string | null } | null
+  // Fork: the root reasoning block with a live status line (thinking-status.ts).
+  thinking: Thinking | null
   // Questions and permission requests waiting for the user (root and children).
   forms: Readonly<Record<string, PendingForm>>
   permissions: Readonly<Record<string, PendingPermission>>
@@ -146,6 +149,7 @@ export type Effect =
   // `replyTo`: the first message replies to this Discord message.
   | { type: 'markdown'; text: string; blankLineBefore: boolean; replyTo: string | null }
   | { type: 'typing'; on: boolean }
+  | ThinkingEffect
   // Files from `kimaki upload-to-discord` (never from the reducer). `settle`
   // answers the waiting CLI call: the Discord URL of each file once posted, or why not.
   | { type: 'attachments'; files: readonly UploadFile[]; settle: (result: Error | string[]) => void }
@@ -239,6 +243,7 @@ export function emptyView({
     compacted: false,
     inbox: [],
     commandPending: null,
+    thinking: null,
     forms: {},
     permissions: {},
   }
@@ -395,6 +400,13 @@ function applyOpencode({ draft, event, prefs, emit }: Context & { event: V2Event
   applyRoot({ draft, prefs, emit, event })
 }
 
+// Fork: a run that ends mid-reasoning finalizes its status line.
+function closeThinking({ draft, emit }: Context) {
+  if (!draft.thinking) return
+  emit(thinkingEnded(draft.thinking, null))
+  draft.thinking = null
+}
+
 function applyRoot(context: Context & { event: V2Event }) {
   const { draft, event, prefs, emit } = context
   switch (event.type) {
@@ -448,6 +460,24 @@ function applyRoot(context: Context & { event: V2Event }) {
       draft.cached = { tokens: tokens.cache.read + tokens.cache.write, at: event.created }
       return
     }
+    case 'session.reasoning.started': {
+      const started = thinkingStarted(`thinking:${event.data.assistantMessageID}:${event.data.ordinal}`)
+      draft.thinking = started.thinking
+      emit(started.effect)
+      return
+    }
+    case 'session.reasoning.delta': {
+      if (draft.thinking?.key !== `thinking:${event.data.assistantMessageID}:${event.data.ordinal}`) return
+      const update = thinkingDelta(draft.thinking, event.data.delta)
+      if (update) emit(update)
+      return
+    }
+    case 'session.reasoning.ended': {
+      if (draft.thinking?.key !== `thinking:${event.data.assistantMessageID}:${event.data.ordinal}`) return
+      emit(thinkingEnded(draft.thinking, event.data.text ?? null))
+      draft.thinking = null
+      return
+    }
     case 'session.text.ended': {
       const text = event.data.text.trim()
       // A mainmast turn with nothing for the user (idle nudge, a note) answers IDLE_REPLY: Discord shows nothing.
@@ -492,6 +522,7 @@ function applyRoot(context: Context & { event: V2Event }) {
     case 'session.compaction.failed':
       return toolLine(context, formatError(`compaction failed: ${event.data.error.message}`))
     case 'session.execution.succeeded': {
+      closeThinking(context)
       endCompaction(context)
       if (draft.turn) emitFooter({ ...context, turn: draft.turn, at: event.created, notify: !draft.turn.slept })
       draft.turn = null
@@ -500,6 +531,7 @@ function applyRoot(context: Context & { event: V2Event }) {
       return
     }
     case 'session.execution.failed':
+      closeThinking(context)
       endCompaction(context)
       draft.turn = null
       draft.lastKind = null
@@ -507,6 +539,7 @@ function applyRoot(context: Context & { event: V2Event }) {
       emit({ type: 'viewed', sessionId: draft.sessionId, idle: event.created })
       return
     case 'session.execution.interrupted':
+      closeThinking(context)
       endCompaction(context)
       draft.turn = null
       draft.lastKind = null
