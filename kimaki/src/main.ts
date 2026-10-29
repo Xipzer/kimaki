@@ -54,8 +54,9 @@ export type StartBotOptions = {
   // OpenCode's SQLite file (opencodeDbFile()): voice transcription reads the ChatGPT credential from it.
   // Required, so tests never read the developer's real credentials.
   opencodeDbFile: string
-  // Shell command that runs this Kimaki install (given to agents), from kimakiShellCommand().
-  kimakiCommand: string
+  // Command that runs this Kimaki install, for the <dataDir>/bin/kimaki shim agents call.
+  // No --data-dir: the shim sets KIMAKI_DATA_DIR, and not every command takes the flag.
+  kimakiArgv: readonly string[]
   // Product analytics sink (createAnalytics or disabledAnalytics).
   analytics: Analytics
   // Voice transcription API base URLs; tests point Gemini at a local fake.
@@ -173,7 +174,7 @@ export async function startBot(options: StartBotOptions): Promise<Error | BotHan
     onDisconnect: eventLoop.onDisconnect,
   })
   cleanup.defer(() => opencode.stop())
-  const shim = await installShim({ dataDir: options.dataDir, command: options.kimakiCommand })
+  const shim = await installShim({ dataDir: options.dataDir, argv: options.kimakiArgv })
   if (shim instanceof Error) return shim
   // The features that non-interaction code reaches through bot.features.
   const agentUi = createAgentUi({ store, eventLoop, opencode })

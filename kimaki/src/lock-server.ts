@@ -28,17 +28,33 @@ export { DEFAULT_LOCK_PORT }
 // Exit code that tells the supervisor of the root `kimaki` command (cli/bot.ts) to start the bot again.
 export const RESTART_EXIT_CODE = 75
 
-export async function installShim({ dataDir, command }: { dataDir: string; command: string }): Promise<ConfigError | void> {
+export function shellQuote(arg: string): string {
+  return /^[\w@%+=:,./-]+$/.test(arg) ? arg : `'${arg.replaceAll("'", `'\\''`)}'`
+}
+
+// cmd.exe quoting for batch files: Windows paths cannot contain `"`, and `%` expands variables.
+function cmdQuote(arg: string): string {
+  return `"${arg.replaceAll('%', '%%')}"`
+}
+
+// Writes `<dataDir>/bin/kimaki`, which runs `argv` (this Kimaki install). On Windows also
+// `kimaki.cmd` for PowerShell and cmd.exe; Git Bash only finds the extensionless sh script.
+export async function installShim({ dataDir, argv }: { dataDir: string; argv: readonly string[] }): Promise<ConfigError | void> {
   const directory = path.join(dataDir, 'bin')
   const created = await fs.promises.mkdir(directory, { recursive: true }).catch((cause) => new ConfigError({ reason: 'Cannot create Kimaki shim directory', cause }))
   if (created instanceof Error) return created
-  const file = path.join(directory, process.platform === 'win32' ? 'kimaki.cmd' : 'kimaki')
+  const windows = process.platform === 'win32'
   // Bind the shim to its data dir through the env: not every command takes --data-dir.
-  const script = process.platform === 'win32'
-    ? `@echo off\r\nset "KIMAKI_DATA_DIR=${dataDir}"\r\n${command} %*\r\n`
-    : `#!/bin/sh\nexport KIMAKI_DATA_DIR='${dataDir.replaceAll("'", "'\\''")}'\nexec ${command} "$@"\n`
-  return fs.promises.writeFile(file, script, { mode: 0o700 }).then(() => fs.promises.chmod(file, 0o700))
-    .catch((cause) => new ConfigError({ reason: 'Cannot install Kimaki command shim', cause }))
+  // MSYS sh runs `C:/...` paths; backslashes in a Windows path are not portable there.
+  const posixArgv = windows ? argv.map((arg) => arg.replaceAll('\\', '/')) : argv
+  const shims = [{ file: 'kimaki', script: `#!/bin/sh\nexport KIMAKI_DATA_DIR='${dataDir.replaceAll("'", "'\\''")}'\nexec ${posixArgv.map(shellQuote).join(' ')} "$@"\n` }]
+  if (windows) shims.push({ file: 'kimaki.cmd', script: `@echo off\r\nset "KIMAKI_DATA_DIR=${dataDir.replaceAll('%', '%%')}"\r\n${argv.map(cmdQuote).join(' ')} %*\r\n` })
+  for (const shim of shims) {
+    const file = path.join(directory, shim.file)
+    const written = await fs.promises.writeFile(file, shim.script, { mode: 0o700 }).then(() => fs.promises.chmod(file, 0o700))
+      .catch((cause) => new ConfigError({ reason: 'Cannot install Kimaki command shim', cause }))
+    if (written instanceof Error) return written
+  }
 }
 
 export type LockServer = {

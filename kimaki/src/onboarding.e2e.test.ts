@@ -13,7 +13,8 @@ import { ChannelType } from 'discord.js'
 import { afterAll, beforeAll, expect, test } from 'vitest'
 
 import type { BotHandle } from './main.ts'
-import { kimakiShellCommand, runOnboarding } from './onboarding.ts'
+import { shellQuote } from './lock-server.ts'
+import { runOnboarding } from './onboarding.ts'
 import {
   TEST_USER_ID,
   scriptedTurn,
@@ -40,9 +41,7 @@ beforeAll(async () => {
   dataDir = tempDataDir()
   twin = await startTwin({ gateway: true })
   const require = createRequire(import.meta.url)
-  kimaki = kimakiShellCommand({
-    command: [process.execPath, require.resolve('tsx/cli'), path.join(import.meta.dirname, 'cli.ts')],
-  })
+  kimaki = [process.execPath, require.resolve('tsx/cli'), path.join(import.meta.dirname, 'cli.ts')].map(shellQuote).join(' ')
   otherProject = path.join(dataDir, 'other-project')
   fs.mkdirSync(otherProject)
   execFileSync('git', ['init', '-q'], { cwd: otherProject })
@@ -90,7 +89,7 @@ async function guildChannels() {
 test('onboarding thread adds a project channel through the kimaki CLI, which answers at once', async () => {
   const { discord } = twin
   const guild = bot.discord.guilds.cache.get(discord.guildId)!
-  const onboarded = await runOnboarding({ bot, dataDir, guild, kimaki, gateway: true, installerId: TEST_USER_ID, machine: 'test-machine' })
+  const onboarded = await runOnboarding({ bot, dataDir, guild, gateway: true, installerId: TEST_USER_ID, machine: 'test-machine' })
   if (!onboarded || onboarded instanceof Error) throw new Error(`onboarding failed: ${onboarded?.message}`, { cause: onboarded })
   await waitForFooter({ discord, threadId: onboarded.threadId })
 
@@ -143,7 +142,7 @@ test('onboarding thread adds a project channel through the kimaki CLI, which ans
   await waitForFooter({ discord, threadId: thread.id })
 
   // Second start: nothing is created again.
-  expect(await runOnboarding({ bot, dataDir, guild, kimaki, gateway: true, machine: 'test-machine' })).toBe(null)
+  expect(await runOnboarding({ bot, dataDir, guild, gateway: true, machine: 'test-machine' })).toBe(null)
   await waitFor({ label: 'no extra channels', check: async () => (await guildChannels()).length === 6 })
 
   // An empty default channel means an earlier onboarding failed: retry in the same channel.
@@ -151,7 +150,7 @@ test('onboarding thread adds a project channel through the kimaki CLI, which ans
   const channel = await bot.discord.channels.fetch(defaultChannel.channel_id)
   if (channel?.type !== ChannelType.GuildText) throw new Error('default channel is not a text channel')
   for (const message of (await channel.messages.fetch()).values()) await message.delete()
-  const retried = await runOnboarding({ bot, dataDir, guild, kimaki, gateway: true, installerId: TEST_USER_ID, machine: 'test-machine' })
+  const retried = await runOnboarding({ bot, dataDir, guild, gateway: true, installerId: TEST_USER_ID, machine: 'test-machine' })
   if (retried instanceof Error || !retried) throw new Error(`expected a retried onboarding, got ${retried}`)
   expect(retried.channelId).toBe(defaultChannel.channel_id)
   await waitForFooter({ discord, threadId: retried.threadId })
@@ -163,7 +162,6 @@ test('an upgraded setup with project mappings skips onboarding without selecting
   expect(await runOnboarding({
     bot,
     dataDir: path.join(dataDir, 'upgraded-layout'),
-    kimaki,
     gateway: true,
     machine: 'test-machine',
   })).toBe(null)

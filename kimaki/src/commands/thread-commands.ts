@@ -28,7 +28,7 @@ import {
   type InteractionRoutes,
   type SessionTarget,
 } from '../interaction-context.ts'
-import { shellQuote } from '../onboarding.ts'
+import { shellQuote } from '../lock-server.ts'
 import { abort, clearQueue, dispatch, redo, undo } from '../prompt.ts'
 import type { Route } from '../routes.ts'
 import { endMainmast, forkBtw } from '../sessions.ts'

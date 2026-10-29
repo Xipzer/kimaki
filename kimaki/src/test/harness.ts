@@ -541,7 +541,7 @@ export async function startTestBot({
   if (lock instanceof Error) throw lock
   const bot = await startBot({
     dataDir,
-    kimakiCommand: `'${process.execPath}' --import '${createRequire(import.meta.url).resolve('tsx')}' '${path.resolve('src/cli.ts')}'`,
+    kimakiArgv: [process.execPath, '--import', createRequire(import.meta.url).resolve('tsx'), path.resolve('src/cli.ts')],
     token: credentials.token,
     appId: credentials.appId,
     lock,

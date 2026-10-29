@@ -107,7 +107,7 @@ export function registerStartCommand(cli: Goke) {
       // Bot code loads only here: the other subcommands start without it.
       const [
         { startBot },
-        { ensureOpencode, kimakiShellCommand, runOnboarding, startCaffeinate },
+        { ensureOpencode, runOnboarding, startCaffeinate },
         { emitEvent, gatewayCredentials, gatewayUrlsFromEnv, installUrlFor, readSavedCredentials, resolveCredentials, restApiUrl },
         { openDb },
         { createAnalytics },
@@ -206,14 +206,12 @@ export function registerStartCommand(cli: Goke) {
       // commands skip the tsx loader also when the bot runs from src.
       const distCli = distCliEntry()
       const node = stableNodePath()
-      const kimaki = kimakiShellCommand({
-        command: fs.existsSync(distCli)
-          ? [node, distCli]
-          : [node, ...process.execArgv, process.argv[1] ?? 'kimaki'],
-      })
+      const kimakiArgv = fs.existsSync(distCli)
+        ? [node, distCli]
+        : [node, ...process.execArgv, process.argv[1] ?? 'kimaki']
 
       const bot = await startBot({
-        kimakiCommand: kimaki,
+        kimakiArgv,
         dataDir,
         token: credentials.token,
         appId: credentials.appId,
@@ -241,7 +239,7 @@ export function registerStartCommand(cli: Goke) {
       process.once('disconnect', shutdown)
 
       const gateway = credentials.mode === 'gateway'
-      const onboarded = await runOnboarding({ bot, dataDir, guildId: options.guild ?? install?.guildId, installUrl, kimaki, gateway, installerId: install?.installerId, machine })
+      const onboarded = await runOnboarding({ bot, dataDir, guildId: options.guild ?? install?.guildId, installUrl, gateway, installerId: install?.installerId, machine })
       // The bot keeps running; the next start retries onboarding.
       if (onboarded instanceof Error) {
         logger.error(`onboarding failed`, onboarded)

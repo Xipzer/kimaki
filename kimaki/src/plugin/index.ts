@@ -97,6 +97,12 @@ export default Plugin.define({
     await ctx.session.hook('context', shapeRequest)
     await ctx.session.hook('compaction', shapeRequest)
     await ctx.session.hook('generate', shapeRequest)
+    // On Windows the shell is often PowerShell or cmd.exe, which cannot run the POSIX
+    // prefix, and Git Bash splits a `C:\...` PATH entry on `:`. There shell create.before
+    // swaps the prefix for env vars, which every shell inherits (MSYS converts the
+    // Windows PATH itself). That hook has no session or tool call, so the prefixed
+    // command, unique per tool call, is the key.
+    const windowsShells = new Map<string, { command: string; bin: string; env: Record<string, string> }>()
     await ctx.tool.hook('execute.before', async (event) => {
       if (event.tool !== 'shell' || !event.input || typeof event.input !== 'object' || Array.isArray(event.input)) return
       const info = await marker(event.sessionID)
@@ -105,10 +111,29 @@ export default Plugin.define({
       if (typeof dataDir !== 'string' || typeof lockPort !== 'number') return
       if (!('command' in event.input) || typeof event.input.command !== 'string') return
       const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`
-      event.input.command = `export PATH=${quote(path.join(dataDir, 'bin'))}:"$PATH" KIMAKI_DATA_DIR=${quote(dataDir)} KIMAKI_LOCK_PORT=${quote(String(lockPort))} KIMAKI_TOOL_CALL=${quote(`${event.messageID}:${event.id}`)}; ${event.input.command}`
+      const bin = path.join(dataDir, 'bin')
+      const env = { KIMAKI_DATA_DIR: dataDir, KIMAKI_LOCK_PORT: String(lockPort), KIMAKI_TOOL_CALL: `${event.messageID}:${event.id}` }
+      const command = event.input.command
+      const prefixed = `export PATH=${quote(bin)}:"$PATH" ${Object.entries(env).map(([key, value]) => `${key}=${quote(value)}`).join(' ')}; ${command}`
+      event.input.command = prefixed
+      if (process.platform === 'win32') windowsShells.set(prefixed, { command, bin, env })
     })
+    if (process.platform === 'win32') {
+      await ctx.shell.hook('create.before', (event) => {
+        const pending = windowsShells.get(event.command)
+        if (!pending) return
+        windowsShells.delete(event.command)
+        event.command = pending.command
+        // Spread from process.env, so the key keeps its Windows case (usually `Path`).
+        const keys = Object.keys(event.env).filter((key) => key.toUpperCase() === 'PATH')
+        for (const key of keys.length > 0 ? keys : ['Path']) {
+          event.env[key] = [pending.bin, event.env[key]].filter(Boolean).join(path.delimiter)
+        }
+        Object.assign(event.env, pending.env)
+      })
+    }
     await registerMainmastRoles(ctx)
-    const stopTimers = await registerMainmastTimers(ctx)
+    const stopCompaction = await registerMainmastCompaction(ctx)
     // File edits feed `kimaki session editors` (v1-compatible JSONL index).
     await ctx.tool.hook('execute.after', async (event) => {
       if (event.status !== 'completed' || !fileEditTool(event.tool)) return
@@ -118,6 +143,6 @@ export default Plugin.define({
       const recorded = await recordToolEdits({ dataDir, directory: ctx.location.directory, sessionId: event.sessionID, tool: event.tool, input: event.input })
       if (recorded instanceof Error) return
     })
-    return stopTimers
+    return stopCompaction
   },
 })

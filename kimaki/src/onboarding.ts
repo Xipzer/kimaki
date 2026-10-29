@@ -130,11 +130,7 @@ export function startCaffeinate(): void {
   child.unref()
 }
 
-export function shellQuote(arg: string): string {
-  return /^[\w@%+=:,./-]+$/.test(arg) ? arg : `'${arg.replaceAll("'", `'\\''`)}'`
-}
-
-export function onboardingPrompt({ kimaki }: { kimaki: string }): string {
+export function onboardingPrompt(): string {
   return dedent`
     This is the Kimaki onboarding thread. Kimaki maps Discord channels to project folders on this computer:
     a message in a project channel starts a coding session in that folder.
@@ -145,19 +141,13 @@ export function onboardingPrompt({ kimaki }: { kimaki: string }): string {
        searching for git repositories on this computer.
     2. If they agree, search. Only list folders that exist, most recently changed first, at most 15:
        \`find ~/Documents ~/Projects ~/projects ~/code ~/dev ~/src ~/repos ~/GitHub ~/github -maxdepth 3 -name .git -prune 2>/dev/null\`
-       Skip folders that already have a channel: \`${kimaki} project list\`
+       Skip folders that already have a channel: \`kimaki project list\`
     3. Show the folders as a numbered list and ask the user to reply with the numbers to add.
-    4. Add each chosen folder with its absolute path: \`${kimaki} project add <absolute-directory>\`
+    4. Add each chosen folder with its absolute path: \`kimaki project add <absolute-directory>\`
        The command prints the new channel as a mention like <#123>. Reply with the list of new channels.
 
     Never add a channel the user did not choose. Keep every message short.
   `
-}
-
-// The shell command the agent runs to call this Kimaki install.
-// No --data-dir: agent shells get KIMAKI_DATA_DIR from the plugin, and not every command takes the flag.
-export function kimakiShellCommand({ command }: { command: readonly string[] }): string {
-  return command.map(shellQuote).join(' ')
 }
 
 class GitInitError extends errore.createTaggedError({
@@ -191,7 +181,6 @@ export async function runOnboarding({
   guild,
   guildId,
   installUrl,
-  kimaki,
   gateway,
   installerId,
   machine,
@@ -201,8 +190,6 @@ export async function runOnboarding({
   guild?: Guild
   guildId?: string
   installUrl?: string
-  // Shell command for `kimaki`, from kimakiShellCommand().
-  kimaki: string
   gateway: boolean
   // --machine-name, else defaultMachineName().
   machine: string
@@ -279,7 +266,7 @@ export async function runOnboarding({
   if (welcome instanceof Error) return welcome
 
   const author = { id: owner.id, username: owner.user.username }
-  const route = { kind: 'steer' as const, text: onboardingPrompt({ kimaki }) }
+  const route = { kind: 'steer' as const, text: onboardingPrompt() }
   const session = bot.mainmast
     ? await startMainmast(bot, { channel: textChannel, route, author, messageId: welcome.id })
     : await startSession(bot, { channelId: channel.channelId, directory, route, author, messageId: welcome.id, threadName: 'Kimaki onboarding', worktree: false })
