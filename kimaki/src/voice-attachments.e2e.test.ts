@@ -201,6 +201,37 @@ test('a text sent while a voice message is transcribed waits for it', async () =
   `)
 })
 
+// https://github.com/remorses/kimaki/issues/246
+test('a long voice transcript is echoed in full over several messages, in a channel and in a thread', async () => {
+  const words = Array.from({ length: 450 }, (_, index) => `w${index}`)
+  const transcription = `Long voice-steer ${words.join(' ')}`
+  const voice = { url: voiceUrl({ transcription, route: 'steer' }) }
+  const thread = await newThread(() => twin.discord.channel(twin.channelId).user(TEST_USER_ID).sendVoiceMessage(voice))
+  await waitForFooter({ discord: twin.discord, threadId: thread.id })
+  await twin.discord.thread(thread.id).user(TEST_USER_ID).sendVoiceMessage(voice)
+  await waitForFooter({ discord: twin.discord, threadId: thread.id, count: 2 })
+  const text = await twin.discord.thread(thread.id).text()
+  expect(text.replace(/w\d+( w\d+)*/g, (run) => `<${run.split(' ')[0]}..${run.split(' ').at(-1)}>`)).toMatchInlineSnapshot(`
+    "--- from: user (tommy)
+    [attachment: voice-message.ogg]
+    --- from: assistant (TestBot)
+    -# » **tommy:** Long voice-steer <w0..w414>
+    -# <w415..w449>
+    -# *using deterministic-provider/deterministic-v2 ⋅ build*
+    voice steer ok
+    -# *project ⋅ main ⋅ Ns ⋅ N% ⋅ deterministic-v2*
+    --- from: user (tommy)
+    [attachment: voice-message.ogg]
+    --- from: assistant (TestBot)
+    -# » **tommy:** Long voice-steer <w0..w414>
+    -# <w415..w449>
+    voice steer ok
+    -# *project ⋅ main ⋅ Ns ⋅ N% ⋅ deterministic-v2*"
+  `)
+  const echoed = (await twin.discord.thread(thread.id).getMessages()).map((message) => message.content).filter((content) => /\bw\d/.test(content))
+  expect(echoed.join(' ').replaceAll('-# ', '')).toBe(`» **tommy:** ${transcription} » **tommy:** ${transcription}`)
+})
+
 // https://github.com/remorses/kimaki/issues/235
 test('uploaded audio files with odd Discord media types are transcribed', async () => {
   const user = twin.discord.channel(twin.channelId).user(TEST_USER_ID)
@@ -311,6 +342,16 @@ test('voice in a busy thread: queue waits, btw forks, new-session starts a threa
   // The transcription request offers btw and queue only inside a session thread.
   expect(gemini.requests.map((request) => request.routes)).toMatchInlineSnapshot(`
     [
+      [
+        "steer",
+        "new-session",
+      ],
+      [
+        "steer",
+        "queue",
+        "btw",
+        "new-session",
+      ],
       [
         "steer",
         "new-session",

@@ -23,6 +23,7 @@ import type { Draft } from 'immer'
 import type { Bot } from './bot.ts'
 import { asSubtext, textOnly } from './format-parts.ts'
 import { stripTurnContext } from './system-prompt.ts'
+import { markdownPayloads, type DiscordPayload } from './markdown/components.ts'
 import { DISCORD_TEXT_LIMIT } from './markdown/render-markdown.ts'
 import type { Emit, ThreadView } from './thread-reducer.ts'
 
@@ -97,8 +98,13 @@ export function formatEcho(input: { username: string | null; text: string }): st
   return subtext(echoLine(input))
 }
 
-// A reply that stands in for a user message (slash commands, voice messages)
-// is one Discord message: long text is cut.
+// A long echo (formatEcho) as several messages, split like model markdown.
+// Each piece gets its `-# ` again: a line cut at a word break would lose it.
+export function echoPayloads(echo: string): DiscordPayload[] {
+  return markdownPayloads(echo).map((payload) => ('content' in payload ? { content: subtext(payload.content.trim()) } : payload))
+}
+
+// A slash command reply stands in for the user message: one Discord message, long text is cut.
 export function formatEchoReply(input: { username: string | null; text: string }): string {
   return cut(formatEcho(input), DISCORD_TEXT_LIMIT)
 }
