@@ -84,6 +84,7 @@ export function effectLines(effects: Effect[]): string[] {
       const reply = effect.reply === undefined ? [] : [`[reply to ${effect.replyTo ?? effect.key}] ${effect.reply}`]
       return [`[edit ${effect.key}] ${effect.messages.map(uiLine).join(' | ')}`, ...reply]
     }
+    if (effect.type === 'thinking') return `[thinking ${effect.phase} ${effect.key}]${effect.headline ? ` ${effect.headline}` : ''}`
     // Tests have no git checkout: the branch is always main.
     if (effect.type === 'footer') {
       const footer = formatFooter({ ...effect, folder: path.basename(effect.directory), branch: 'main' })
