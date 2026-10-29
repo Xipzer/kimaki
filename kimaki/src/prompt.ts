@@ -597,14 +597,16 @@ export async function send(
       return !project && !localOnly ? remoteSend(bot, input) : new ConfigError({ reason: 'No local session for this thread' })
     }
     addMembers(thread, userIds)
-    if (input.model) {
-      const model = parseModel(input.model, null)
-      if (!model) return new ConfigError({ reason: 'Use --model provider/model' })
-      const switched = await switchModel(bot, { sessionId, model: { ...model, variant: null } })
+    const explicit = input.model ? parseModel(input.model, null) : null
+    if (input.model && !explicit) return new ConfigError({ reason: 'Use --model provider/model' })
+    const model = explicit ? { ...explicit, variant: null } : null
+    if (model) {
+      const switched = await switchModel(bot, { sessionId, model })
       if (switched instanceof Error) return switched
     }
     const echo = shownIn ? undefined : formatEcho({ username: author.username, text: routeText(route) })
-    const result = await dispatch(bot, { conversation: thread, route, author, messageId, files: input.files, echo, sender, parentSessionId: input.parentSessionId })
+    // --model reaches the agent switch too, so an agent with its own model cannot replace it.
+    const result = await dispatch(bot, { conversation: thread, route, author, messageId, files: input.files, echo, sender, parentSessionId: input.parentSessionId, model })
     if (result instanceof Error) return result
     return result ?? { threadId, sessionId: bot.store.getState().roots[threadId]! }
   }
