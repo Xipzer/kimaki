@@ -18,6 +18,7 @@ import dedent from 'string-dedent'
 
 import { oc, type Bot } from '../bot.ts'
 import { ConfigError, DiscordError } from '../errors.ts'
+import { formatDuration } from '../format-parts.ts'
 import {
   authorOf,
   replyError,
@@ -196,18 +197,73 @@ async function redoCommand(bot: Bot, interaction: ChatInputCommandInteraction, {
 
 // --- Info
 
+type StatusStep = {
+  time: { created: number; streamed?: number; completed?: number }
+  content: ReadonlyArray<
+    | { type: 'text' }
+    | { type: 'reasoning'; time?: { created: number; completed?: number } }
+    | { type: 'tool'; name: string; time: { created: number; ran?: number; completed?: number } }
+  >
+}
+
+// Whether the session is working, from OpenCode's own timestamps: is a run active, is it
+// in a reasoning block right now, and when did anything last happen. `steps` are the
+// latest assistant messages, newest first. Times render in the reader's timezone (<t:…>).
+function formatSessionStatus({ running, lastPrompt, steps, now }: {
+  running: boolean
+  lastPrompt: number | null
+  steps: readonly StatusStep[]
+  now: number
+}): string[] {
+  const latest = steps[0]
+  const answered = Boolean(latest && lastPrompt !== null && latest.time.created >= lastPrompt)
+  if (!running) {
+    const ended = latest?.time.completed ?? latest?.time.created
+    if (lastPrompt !== null && !answered) return [`**Status:** idle, the last prompt (<t:${Math.floor(lastPrompt / 1000)}:R>) has no reply`]
+    return ended ? [`**Status:** idle since <t:${Math.floor(ended / 1000)}:R>`] : ['**Status:** idle']
+  }
+  const since = lastPrompt === null ? '' : ` for ${formatDuration(now - lastPrompt)}`
+  if (!latest || !answered) return [`**Status:** running${since}, waiting for the first model response`]
+  const thinking = latest.content.findLast((part) => part.type === 'reasoning')
+  const reasoning = thinking?.type === 'reasoning' && thinking.time && thinking.time.completed === undefined ? thinking.time.created : null
+  const activity = [
+    { at: latest.time.created, what: 'model step' },
+    { at: latest.time.streamed, what: 'model output' },
+    ...latest.content.flatMap((part) => {
+      if (part.type === 'reasoning') return [{ at: part.time?.completed ?? part.time?.created, what: 'thinking' }]
+      if (part.type === 'tool') return [{ at: part.time.completed ?? part.time.ran ?? part.time.created, what: part.name }]
+      return []
+    }),
+  ].reduce<{ at: number; what: string }>((last, entry) => (entry.at !== undefined && entry.at > last.at ? { at: entry.at, what: entry.what } : last), { at: 0, what: '' })
+  return [
+    `**Status:** running${since}${reasoning === null ? '' : `, thinking for ${formatDuration(now - reasoning)}`}`,
+    `**Last activity:** ${formatDuration(now - activity.at)} ago, ${activity.what}`,
+  ]
+}
+
 async function contextUsageCommand(bot: Bot, interaction: ChatInputCommandInteraction, { sessionId, directory }: SessionTarget) {
   await interaction.deferReply()
-  const [info, messages, models] = await Promise.all([
+  const [info, messages, models, prompts, active] = await Promise.all([
     oc(bot, 'session.get', (client) => client.session.get({ sessionID: sessionId })),
     oc(bot, 'message.list', (client) => client.message.list({ sessionID: sessionId, type: 'assistant', order: 'desc', limit: 20 })),
     oc(bot, 'model.list', (client) => client.model.list({ location: { directory } })),
+    oc(bot, 'message.list', (client) => client.message.list({ sessionID: sessionId, type: 'user', order: 'desc', limit: 1 })),
+    oc(bot, 'session.active', (client) => client.session.active()),
   ])
   if (info instanceof Error) return replyError(interaction, info)
   if (messages instanceof Error) return replyError(interaction, messages)
+  const status =
+    active instanceof Error || prompts instanceof Error
+      ? []
+      : formatSessionStatus({
+          running: sessionId in active,
+          lastPrompt: prompts.data.find((message) => message.type === 'user')?.time.created ?? null,
+          steps: messages.data.flatMap((message) => (message.type === 'assistant' ? [message] : [])),
+          now: Date.now(),
+        })
   const last = messages.data.find((message) => message.type === 'assistant' && message.tokens)
   if (!last || last.type !== 'assistant' || !last.tokens) {
-    await interaction.editReply({ content: 'Token usage not available for this session yet' })
+    await interaction.editReply({ content: ['Token usage not available for this session yet', ...status].join('\n') })
     return
   }
   const { tokens, model } = last
@@ -220,6 +276,7 @@ async function contextUsageCommand(bot: Bot, interaction: ChatInputCommandIntera
       : `**Context usage:** ${formatted} tokens (context limit unavailable)`,
     `**Model:** ${model.providerID}/${model.id}`,
     ...(info.cost > 0 ? [`**Session cost:** $${info.cost.toFixed(4)}`] : []),
+    ...status,
   ]
   await interaction.editReply({ content: lines.join('\n') })
 }
@@ -325,7 +382,7 @@ export const threadRoutes: InteractionRoutes = {
       run: diffCommand,
     },
     'context-usage': {
-      definition: new SlashCommandBuilder().setName('context-usage').setDescription('Show token usage and context window percentage'),
+      definition: new SlashCommandBuilder().setName('context-usage').setDescription('Show token usage, context window percentage and session status'),
       run: inThread(contextUsageCommand),
     },
     'session-id': {
