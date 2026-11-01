@@ -33,6 +33,21 @@ const matchers: DeterministicMatcher[] = [
     then: { parts: textParts('## Objective\n- Test compaction') },
   },
   { id: 'usage', priority: 500, when: { latestUserTextIncludes: 'usage-marker' }, then: { parts: textParts('counted') } },
+  {
+    id: 'slow-thinking',
+    priority: 500,
+    when: { latestUserTextIncludes: 'thinking-marker' },
+    then: {
+      parts: [
+        { type: 'reasoning-start', id: 'r1' },
+        { type: 'reasoning-end', id: 'r1' },
+        { type: 'text-start', id: 't1' },
+        { type: 'text-delta', id: 't1', delta: 'thought it through' },
+        { type: 'text-end', id: 't1' },
+      ],
+      partDelaysMs: [0, 4_000, 0, 0, 0],
+    },
+  },
   ...scriptedTurn({
     marker: 'write-marker',
     steps: [{ id: 'call-write-1', tool: 'write', input: { path: 'undo.txt', content: 'written by the agent\n' } }],
@@ -80,7 +95,7 @@ test('/diff with a clean working tree and /context-usage after a turn', async ()
   const thread = await newThread('Hello usage-marker')
   await command(thread.id, 'diff', 'No changes')
   await command(thread.id, 'context-usage', 'Context usage')
-  expect(await twin.discord.thread(thread.id).text()).toMatchInlineSnapshot(`
+  expect((await twin.discord.thread(thread.id).text()).replace(/<t:\d+:R>/g, '<t:N:R>')).toMatchInlineSnapshot(`
     "--- from: user (tommy)
     Hello usage-marker
     --- from: assistant (TestBot)
@@ -89,8 +104,25 @@ test('/diff with a clean working tree and /context-usage after a turn', async ()
     -# *project ⋅ main ⋅ Ns ⋅ N% ⋅ deterministic-v2*
     No changes to show
     **Context usage:** 0%, 2 / 200,000 tokens
-    **Model:** deterministic-provider/deterministic-v2"
+    **Model:** deterministic-provider/deterministic-v2
+    **Status:** idle since <t:N:R>"
   `)
+})
+
+test('/context-usage while the model thinks shows the run and the reasoning time', async () => {
+  const { discord, channelId } = twin
+  const before = new Set((await discord.channel(channelId).getThreads()).map((candidate) => candidate.id))
+  await discord.channel(channelId).user(TEST_USER_ID).sendMessage({ content: 'Ponder this thinking-marker' })
+  const thread = await discord.channel(channelId).waitForThread({ timeout: 8_000, predicate: (candidate) => !before.has(candidate.id) })
+  await new Promise((resolve) => setTimeout(resolve, 2_000))
+  const reply = await command(thread.id, 'context-usage', 'Status:')
+  expect(reply.content.replace(/\d+s/g, 'Ns').split('\n').filter((line) => line.startsWith('**Status') || line.startsWith('**Last'))).toMatchInlineSnapshot(`
+    [
+      "**Status:** running for Ns, thinking for Ns",
+      "**Last activity:** Ns ago, thinking",
+    ]
+  `)
+  await waitForFooter({ discord, threadId: thread.id })
 })
 
 test('/compact summarizes the history without a footer', async () => {
