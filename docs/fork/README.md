@@ -13,7 +13,7 @@ Rules for fork commits:
 | Commit | Feature | Fork files | Upstream files touched |
 |---|---|---|---|
 | `fix(commands): keep other apps' slash commands…` | Guild registration keeps commands that another app registered on the same bot (for example `/assistant`, `/whisper-*`) | `foreign-commands.ts` (+test, +e2e) | `slash-commands.ts` (`registerGuild`), digital twin GET route |
-| `feat(reasoning): live thinking status line…` | `-# thinking · 12s · <heading>` while a reasoning block runs over 4 s, edited every 5 s; `thought for Ns` before the answer | `thinking-status.ts` (+test, +e2e) | `thread-reducer.ts` (3 events, `thinking` view field), `effects.ts` (executor), test replay |
+| `feat(reasoning): live thinking status line…` | `-# thinking · 12s · <heading>` while a reasoning block runs over 4 s, edited every 5 s, deleted when the block ends. Fork-only by choice: upstream declined in-thread thinking output (#251) and took the on-demand version instead (#253, `/context-usage` status) | `thinking-status.ts` (+test, +e2e) | `thread-reducer.ts` (3 events, `thinking` view field), `effects.ts` (executor), test replay |
 
 ## Upstream pull requests
 
@@ -22,7 +22,7 @@ Rules for fork commits:
 | Local Whisper | #244 | #248 | Merged upstream as `80aa7d98` (co-authored, simplified: no `KIMAKI_WHISPER_FALLBACK`). Fork commit dropped |
 | Keep the session model | #245 | #249 | Merged upstream as `104d2a2b` (co-authored). Fork commit dropped |
 | Long voice transcripts in full | #246 | #250 | Merged upstream as `7db24a8b` (co-authored; main already covered the first-input part). Fork commit dropped |
-| Live thinking status line | #247 | #251 | Open. Fork commit kept |
+| Live thinking status line | #247 | #251 | Closed: maintainer won't show thinking in threads. Replaced upstream by #253 (`/context-usage` status, commit on `Xipzer:pr/context-usage-status`; new PRs are collaborators-only). Fork keeps a self-deleting line |
 
 A fork commit is dropped when its PR is merged (rebase onto the release that contains it).
 
