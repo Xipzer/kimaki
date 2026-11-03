@@ -1,6 +1,6 @@
 # Tailored Kimaki fork (`tailored/v1`)
 
-Branch `tailored/v1` = upstream `remorses/kimaki` main (kimaki 1.4.0, OpenCode V2) plus a few small, isolated commits. The fork exists only to produce pull requests for upstream: generic features any Kimaki user would want, nothing kept for a single private caller. A commit leaves the fork when upstream merges it or covers it. `tailored/main` is the frozen V1-era fork and stays as the reference.
+Branch `tailored/v1` = upstream `remorses/kimaki` main (kimaki 1.7.1, OpenCode V2) plus a few small, isolated commits. The fork exists only to produce pull requests for upstream: generic features any Kimaki user would want, nothing kept for a single private caller. A commit leaves the fork when upstream merges it or covers it. `tailored/main` is the frozen V1-era fork and stays as the reference.
 
 Rules for fork commits:
 - One feature per commit. New code goes in its own file; upstream files get only thin hooks.
@@ -23,6 +23,8 @@ Rules for fork commits:
 | Keep the session model | #245 | #249 | Merged upstream as `104d2a2b` (co-authored). Fork commit dropped |
 | Long voice transcripts in full | #246 | #250 | Merged upstream as `7db24a8b` (co-authored; main already covered the first-input part). Fork commit dropped |
 | Live thinking status line | #247 | #251 | Closed: maintainer won't show thinking in threads. Replaced upstream by #253 (`/context-usage` status, commit on `Xipzer:pr/context-usage-status`; new PRs are collaborators-only). Fork keeps a self-deleting line |
+| `/context-usage` session status | #253 | — (commit linked on the issue) | Merged upstream as `884b37f1` (rewritten, no co-author line). Fork commit dropped |
+| Answer before `kimaki sleep` / buttons | #256 | — (commit linked on the issue) | Merged upstream as `df671e71` (rewritten, links our commit, no co-author line). Fork commit dropped |
 
 A fork commit is dropped when its PR is merged (rebase onto the release that contains it).
 
@@ -38,7 +40,7 @@ A fork commit is dropped when its PR is merged (rebase onto the release that con
 | Sticky/lockable session model (`0474c39d`) | Dropped, covered in practice | V2 keeps the model on the session. `switchAgent` only switches the model when the agent itself configures one, and the owner's `opencode.json` configures none. |
 | `session status --json`, `read --json`, `recover` (`0474c39d`) | Not ported (deferred) | Built on the V1 SDK. 1.x has `session list` with native status, `session read`, `/undo`/`/redo`, and the reducer shows errors. External callers can use `session list` / `session read` instead. Rebuild on V2 only if a real caller needs it. |
 | Stale-question fix for status (`134152c6`) | Dropped | Depends on the dropped `session status`; V2 questions are reduced from events. |
-| OAuth account archive and atomic store (`b86cbc2f`) | Dropped, obsolete | OpenCode V2 owns credentials (`kimaki login credential`); Kimaki's account-store files are gone. Still open upstream: the same refresh token used on several machines (TODO in `plugin/anthropic/index.ts`, no single-flight refresh). |
+| OAuth account archive and atomic store (`b86cbc2f`) | Dropped, obsolete | OpenCode V2 owns credentials (`kimaki login credential`); Kimaki's old account-store files are no longer used. OpenCode 2.2.5 coordinates refreshes across locations and processes sharing its database. Copies on separate machines remain uncoordinated, and pool-wide background renewal is not implemented. |
 | Echo split (live dist patch `kimaki-whisper/patches/kimaki-echo-split.patch`) | **Ported** as a feature | Covers both echo sites the patch changed, plus e2e coverage. |
 | `session search` (in 1.0, removed in 1.1) | Dropped | Upstream replaced it with `session sync` + rg; callers moved to that. |
 | `/whisper*` commands, `whisper start/stop/status/setup`, built-in local whisper, Pro GPU tier (`feat/whisper-*` branches) | Dropped | A separate local transcription service owns `/whisper-*` and the transcription endpoint; the in-bot whisper was superseded before V2. |
