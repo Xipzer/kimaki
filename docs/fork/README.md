@@ -23,6 +23,8 @@ Rules for fork commits:
 | Keep the session model | #245 | #249 | Merged upstream as `104d2a2b` (co-authored). Fork commit dropped |
 | Long voice transcripts in full | #246 | #250 | Merged upstream as `7db24a8b` (co-authored; main already covered the first-input part). Fork commit dropped |
 | Live thinking status line | #247 | #251 | Closed: maintainer won't show thinking in threads. Replaced upstream by #253 (`/context-usage` status, commit on `Xipzer:pr/context-usage-status`; new PRs are collaborators-only). Fork keeps a self-deleting line |
+| `/context-usage` session status | #253 | — (commit linked on the issue) | Merged upstream as `884b37f1` (rewritten, no co-author line). Fork commit dropped |
+| Answer before `kimaki sleep` / buttons | #256 | — (commit linked on the issue) | Merged upstream as `df671e71` (rewritten, links our commit, no co-author line). Fork commit dropped |
 
 A fork commit is dropped when its PR is merged (rebase onto the release that contains it).
 
