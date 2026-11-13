@@ -44,6 +44,7 @@ import { cancelQueuedPrompt, dispatch, requeueEdited, send } from './prompt.ts'
 import { REMOTE_PROMPT_FILE, REMOTE_RESULT_PREFIX, REMOTE_SEND_PREFIX } from './remote-send.ts'
 import { echoPayloads, formatEcho, queuedItemFor } from './queue.ts'
 import { parseTextMessage, type Route } from './routes.ts'
+import { retranscribeTarget } from './retranscribe.ts'
 import { primaryAgents, startCoordinator, startSession } from './sessions.ts'
 import { isVoiceAttachment, parseVoiceMessage, transcribe, voiceMediaType, type AttachmentLike } from './voice.ts'
 
@@ -293,6 +294,9 @@ async function handleMessage(bot: Bot, { message, statusMessage = null }: { mess
     logger.log(`ignoring ${message.author.username}: no Kimaki permission`)
     return
   }
+  // Fork: a `retranscribe` reply handles the replied voice message again (retranscribe.ts).
+  const replied = statusMessage ? null : await retranscribeTarget(message)
+  if (replied) return handleMessage(bot, { message: replied })
   // A coordinator channel has its root session under the channel ID.
   const coordinator = !thread && isCoordinatorChannel(bot, channelId)
   const sessionId = bot.store.getState().roots[thread?.id ?? (coordinator ? channelId : '')]

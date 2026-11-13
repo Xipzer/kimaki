@@ -232,6 +232,49 @@ test('a long voice transcript is echoed in full over several messages, in a chan
   expect(echoed.join(' ').replaceAll('-# ', '')).toBe(`» **tommy:** ${transcription} » **tommy:** ${transcription}`)
 })
 
+test('a "retranscribe" reply handles a voice message sent while the bot was down; other replies are plain text', async () => {
+  const thread = await newThread(() => twin.discord.channel(twin.channelId).user(TEST_USER_ID).sendMessage({ content: 'Start order-start' }))
+  await waitForFooter({ discord: twin.discord, threadId: thread.id })
+  const user = twin.discord.thread(thread.id).user(TEST_USER_ID)
+  await bot.stop()
+  const missed = await user.sendVoiceMessage({ url: voiceUrl({ transcription: 'Missed note voice-steer', route: 'steer' }) })
+  bot = await startTestBot({ dataDir, twin, server, geminiBaseUrl: gemini.baseUrl })
+  await user.sendMessage({ content: 'Retranscribe', messageReference: { message_id: missed.id, channel_id: thread.id } })
+  await waitForFooter({ discord: twin.discord, threadId: thread.id, count: 2 })
+  const typed = await user.sendMessage({ content: 'Typed order-text' })
+  await waitForFooter({ discord: twin.discord, threadId: thread.id, count: 3 })
+  await user.sendMessage({ content: 'retranscribe', messageReference: { message_id: typed.id, channel_id: thread.id } })
+  await waitForFooter({ discord: twin.discord, threadId: thread.id, count: 4 })
+  expect(await twin.discord.thread(thread.id).text({ showReplies: true })).toMatchInlineSnapshot(`
+    "--- from: user (tommy)
+    Start order-start
+    --- from: assistant (TestBot)
+    -# *using deterministic-provider/deterministic-v2 ⋅ build*
+    order start ok
+    -# *main ⋅ Ns ⋅ N% ⋅ deterministic-v2*
+    --- from: user (tommy)
+    [attachment: voice-message.ogg]
+    [reply to tommy: ]
+    Retranscribe
+    --- from: assistant (TestBot)
+    [reply to tommy: ]
+    -# » **tommy:** Missed note voice-steer
+    voice steer ok
+    -# *main ⋅ Ns ⋅ N% ⋅ deterministic-v2*
+    --- from: user (tommy)
+    Typed order-text
+    --- from: assistant (TestBot)
+    order text ok
+    -# *main ⋅ Ns ⋅ N% ⋅ deterministic-v2*
+    --- from: user (tommy)
+    [reply to tommy: Typed order-text]
+    retranscribe
+    --- from: assistant (TestBot)
+    order start ok
+    -# *main ⋅ Ns ⋅ N% ⋅ deterministic-v2*"
+  `)
+})
+
 // https://github.com/remorses/kimaki/issues/235
 test('uploaded audio files with odd Discord media types are transcribed', async () => {
   const user = twin.discord.channel(twin.channelId).user(TEST_USER_ID)
@@ -301,6 +344,12 @@ test('voice in a busy thread: queue waits, btw forks, new-session starts a threa
     --- from: user (tommy)
     [attachment: voice-message.ogg]
     --- from: assistant (TestBot)
+    slow-done
+    -# *main ⋅ Ns ⋅ N% ⋅ deterministic-v2*
+    [reply to tommy: ]
+    -# Queued message sent
+    voice queue ok
+    -# *main ⋅ Ns ⋅ N% ⋅ deterministic-v2*
     [reply to tommy: ]
     -# » **tommy:** Side voice-btw
     [reply to tommy: ]
@@ -311,13 +360,7 @@ test('voice in a busy thread: queue waits, btw forks, new-session starts a threa
     [reply to tommy: ]
     -# » **tommy:** Fresh start voice-new
     [reply to tommy: ]
-    -# Started a new session in <#THREAD>
-    slow-done
-    -# *main ⋅ Ns ⋅ N% ⋅ deterministic-v2*
-    [reply to tommy: ]
-    -# Queued message sent
-    voice queue ok
-    -# *main ⋅ Ns ⋅ N% ⋅ deterministic-v2*"
+    -# Started a new session in <#THREAD>"
   `)
   expect([btw.name, fresh.name]).toMatchInlineSnapshot(`
     [
@@ -354,6 +397,12 @@ test('voice in a busy thread: queue waits, btw forks, new-session starts a threa
       ],
       [
         "steer",
+        "new-session",
+      ],
+      [
+        "steer",
+        "queue",
+        "btw",
         "new-session",
       ],
       [
