@@ -10,6 +10,7 @@ import { afterAll, beforeAll, expect, test } from 'vitest'
 import type { BotHandle } from './main.ts'
 import { TRANSCRIPTION_KEY_MODAL } from './voice.ts'
 import {
+  OTHER_USER_ID,
   TEST_USER_ID,
   seedProjectChannel,
   slowTextMatcher,
@@ -230,6 +231,49 @@ test('a long voice transcript is echoed in full over several messages, in a chan
   `)
   const echoed = (await twin.discord.thread(thread.id).getMessages()).map((message) => message.content).filter((content) => /\bw\d/.test(content))
   expect(echoed.join(' ').replaceAll('-# ', '')).toBe(`» **tommy:** ${transcription} » **tommy:** ${transcription}`)
+})
+
+test('a "retranscribe" reply to a voice message handles it again; other replies are plain text', async () => {
+  const thread = await newThread(() => twin.discord.channel(twin.channelId).user(TEST_USER_ID).sendMessage({ content: 'Start order-start' }))
+  await waitForFooter({ discord: twin.discord, threadId: thread.id })
+  const user = twin.discord.thread(thread.id).user(TEST_USER_ID)
+  // A voice message the bot never handled, like one sent while it was offline: ingress ignores users without Kimaki permission.
+  const missed = await twin.discord.thread(thread.id).user(OTHER_USER_ID).sendVoiceMessage({ url: voiceUrl({ transcription: 'Missed note voice-steer', route: 'steer' }) })
+  await user.sendMessage({ content: 'Retranscribe', messageReference: { message_id: missed.id, channel_id: thread.id } })
+  await waitForFooter({ discord: twin.discord, threadId: thread.id, count: 2 })
+  const typed = await user.sendMessage({ content: 'Typed order-text' })
+  await waitForFooter({ discord: twin.discord, threadId: thread.id, count: 3 })
+  await user.sendMessage({ content: 'retranscribe', messageReference: { message_id: typed.id, channel_id: thread.id } })
+  await waitForFooter({ discord: twin.discord, threadId: thread.id, count: 4 })
+  expect(await twin.discord.thread(thread.id).text({ showReplies: true })).toMatchInlineSnapshot(`
+    "--- from: user (tommy)
+    Start order-start
+    --- from: assistant (TestBot)
+    -# *using deterministic-provider/deterministic-v2 ⋅ build*
+    order start ok
+    -# *main ⋅ Ns ⋅ N% ⋅ deterministic-v2*
+    --- from: user (stranger)
+    [attachment: voice-message.ogg]
+    --- from: user (tommy)
+    [reply to stranger: ]
+    Retranscribe
+    --- from: assistant (TestBot)
+    [reply to tommy: Retranscribe]
+    -# » **tommy:** Missed note voice-steer
+    voice steer ok
+    -# *main ⋅ Ns ⋅ N% ⋅ deterministic-v2*
+    --- from: user (tommy)
+    Typed order-text
+    --- from: assistant (TestBot)
+    order text ok
+    -# *main ⋅ Ns ⋅ N% ⋅ deterministic-v2*
+    --- from: user (tommy)
+    [reply to tommy: Typed order-text]
+    retranscribe
+    --- from: assistant (TestBot)
+    order start ok
+    -# *main ⋅ Ns ⋅ N% ⋅ deterministic-v2*"
+  `)
 })
 
 // https://github.com/remorses/kimaki/issues/235

@@ -12,7 +12,8 @@
 // registered before login so the replayed events are not missed.
 //
 // Attachments become prompt files; voice messages are transcribed into the
-// same Route as text. Edits and deletes of queued messages update the queue.
+// same Route as text; a "retranscribe" reply to a voice message transcribes it
+// again. Edits and deletes of queued messages update the queue.
 
 import fs from 'node:fs'
 import path from 'node:path'
@@ -171,6 +172,16 @@ async function voiceRoute(
   return parseVoiceMessage(result)
 }
 
+// "retranscribe" as a reply to a voice message handles that message again, as if
+// it had just arrived: for one sent while the bot was offline or whose transcription failed.
+const RETRANSCRIBE = /^\s*retranscribe\s*$/i
+
+async function repliedVoice(message: Message): Promise<Attachment | undefined> {
+  if (!message.reference?.messageId || message.attachments.size > 0 || !RETRANSCRIBE.test(message.content)) return undefined
+  const replied = await message.fetchReference().catch(() => null)
+  return replied?.attachments.find((attachment) => isVoiceAttachment(attachmentLike(attachment)))
+}
+
 // A remote send envelope another machine's `kimaki send` posted in a channel this bot owns.
 async function handleRemoteEnvelope(bot: Bot, { message, channelId, threadId }: { message: Message; channelId: string; threadId: string | null }) {
   const footer = message.embeds[0]?.footer?.text
@@ -248,7 +259,7 @@ async function handleMessage(bot: Bot, message: Message) {
   }
 
   const attachments = [...message.attachments.values()]
-  const voice = attachments.find((attachment) => isVoiceAttachment(attachmentLike(attachment)))
+  const voice = attachments.find((attachment) => isVoiceAttachment(attachmentLike(attachment))) ?? (await repliedVoice(message))
   const files = await saveAttachments({
     dataDir: bot.dataDir,
     messageId: message.id,
