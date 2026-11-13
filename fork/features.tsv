@@ -3,3 +3,4 @@
 # probe=present: upstream covers it when the pattern appears. probe=absent: upstream covers it when the pattern disappears.
 foreign-commands	fix(commands): keep other apps' slash commands	kimaki/src/slash-commands.ts	absent	\.set\(built\.commands	kimaki/src/slash-commands.ts
 thinking-status	feat(reasoning): live thinking status line	kimaki/src/thread-reducer.ts,kimaki/src/effects.ts	present	session\.reasoning\.delta	kimaki/src/thread-reducer.ts
+prompt-metadata	fix(plugin): per-message context on OpenCode 2.2	kimaki/src/plugin/index.ts	present	MIN_OPENCODE_VERSION = .2\.([3-9]|[1-9][0-9])	kimaki/src/opencode-server.ts
