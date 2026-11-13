@@ -9,6 +9,7 @@ import { autostartBot } from '../autostart.ts'
 import { readBuiltinSkills } from '../builtin-skills.ts'
 import { fileEditTool, recordToolEdits } from '../file-edit-log.ts'
 import { registerCoordinatorRoles, registerWarmup } from './coordinator.ts'
+import { createStoredMetadata } from './message-metadata.ts'
 import { turnContext } from '../system-prompt.ts'
 
 const exec = promisify(execFile)
@@ -83,6 +84,7 @@ export default Plugin.define({
     // Runs for every request kind: turns (context), compaction and generate (OpenCode
     // `warming` keep-alive requests). All kinds must get the same system text, tools
     // and messages, or the provider prompt cache misses.
+    const storedMetadata = createStoredMetadata((sessionID) => ctx.session.context({ sessionID }))
     const shapeRequest = async (event: SessionContext) => {
       // The only prompt change for every session, TUI included. The ID never
       // changes in a session, so the cached prompt prefix stays stable.
@@ -94,8 +96,10 @@ export default Plugin.define({
       // prompt prefix stays stable.
       for (const message of event.messages) {
         if (message.role !== 'user') continue
-        const gap = message.metadata?.[GAP_KEY]
-        for (const text of [typeof gap === 'number' ? `[${formatGap(gap)} since your last message]` : null, turnContext(message.metadata)]) {
+        // Fork: OpenCode 2.2.x leaves metadata out of hook messages (plugin/message-metadata.ts).
+        const metadata = message.metadata ?? (message.id ? await storedMetadata(event.sessionID, message.id) : undefined)
+        const gap = metadata?.[GAP_KEY]
+        for (const text of [typeof gap === 'number' ? `[${formatGap(gap)} since your last message]` : null, turnContext(metadata)]) {
           // TODO: build a new Message once plugins can import OpenCode's Message class;
           // a copy from another module instance may fail its instanceof checks.
           if (text) Array.prototype.push.call(message.content, { type: 'text', text })

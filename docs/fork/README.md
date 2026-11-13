@@ -14,6 +14,7 @@ Rules for fork commits:
 |---|---|---|---|
 | `fix(commands): keep other apps' slash commands…` | Guild registration keeps commands that another app registered on the same bot (for example `/assistant`, `/whisper-*`) | `foreign-commands.ts` (+test, +e2e) | `slash-commands.ts` (`registerGuild`), digital twin GET route |
 | `feat(reasoning): live thinking status line…` | `-# thinking · 12s · <heading>` while a reasoning block runs over 4 s, edited every 5 s, deleted when the block ends. Fork-only by choice: upstream declined in-thread thinking output (#251) and took the on-demand version instead (#253, `/context-usage` status) | `thinking-status.ts` (+test, +e2e) | `thread-reducer.ts` (3 events, `thinking` view field), `effects.ts` (executor), test replay |
+| `fix(plugin): per-message context on OpenCode 2.2…` | OpenCode 2.2.x hands request hooks messages without their prompt metadata, so the `<discord-user>` line and the time-gap line were never added. The plugin reads the metadata from the session history by message ID (cached, one read per new prompt). Temporary: OpenCode 2.3.0 passes it again (anomalyco/opencode#63590); drop this commit when Kimaki requires 2.3 | `plugin/message-metadata.ts` (+test) | `plugin/index.ts` (`shapeRequest`) |
 
 ## Upstream pull requests
 
