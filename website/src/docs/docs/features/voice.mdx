@@ -49,6 +49,18 @@ A new chat or a side chat does not interrupt the current thread. Its pending que
 
 Queue and side chat only work in a session thread. In a project channel, every voice message starts a new thread anyway.
 
+## Transcribe a voice message again
+
+A voice message you sent while the bot was offline, or one whose transcription failed, is not lost. **Reply to it** with the single word `retranscribe`:
+
+```diagram
+  voice message (0:24)        sent while the bot was down
+    ↳ retranscribe            your reply
+  » Tommy: <text>             Kimaki transcribes it and runs it
+```
+
+Kimaki handles the voice message as if it had just arrived, with the same queue, new chat and agent rules. The word `retranscribe` is not sent to the agent. It works on any voice message in the thread, old or new.
+
 ## Pick an agent
 
 Say **"use the plan agent"** (or any primary agent of the project) to switch to that agent for this request. This works with a normal message, a new chat, or a side chat. A queued voice message does not switch the agent, because that would change the running turn.
