@@ -130,14 +130,42 @@ export async function catalogReady(bot: Pick<Bot, 'opencode'>, directory: string
   if (ready instanceof Error) return ready
 }
 
+type Agent = Awaited<ReturnType<OpenCodeClient['agent']['list']>>['data'][number]
+
+// A location that is still booting lists no agents, or only some, and integration.list
+// does not wait for it on OpenCode 2.2.7. Even OpenCode's built-in agents are missing
+// then, so an empty list always means "not loaded yet".
+const AGENT_WAIT_MS = 5_000
+const AGENT_POLL_MS = 250
+
+// Every agent of a location, asked again until `ready` holds or `waitMs` has passed.
+export async function listAgents(
+  bot: Pick<Bot, 'opencode'>,
+  directory: string,
+  { ready = (agents: Agent[]) => agents.length > 0, waitMs = AGENT_WAIT_MS }: { ready?: (agents: Agent[]) => boolean; waitMs?: number } = {},
+) {
+  const loaded = await catalogReady(bot, directory)
+  if (loaded instanceof Error) return loaded
+  const deadline = Date.now() + waitMs
+  for (;;) {
+    const agents = await oc(bot, 'agent.list', (client) => client.agent.list({ location: { directory } }))
+    if (agents instanceof Error) return agents
+    if (ready(agents.data) || Date.now() >= deadline) return agents.data
+    await sleep(AGENT_POLL_MS)
+  }
+}
+
+const isPrimary = (agent: Agent) => agent.mode !== 'subagent' && !agent.hidden
+const isNamed = (agent: Agent, name: string) => agent.id.toLowerCase() === name.toLowerCase() || agent.name.toLowerCase() === name.toLowerCase()
+
 // Agents a session may switch to (not subagents, not hidden ones). OpenCode lists
 // its default agent (`default_agent`, else build) first: core/src/agent.ts `list`.
-export async function primaryAgents(bot: Pick<Bot, 'opencode'>, directory: string) {
-  const ready = await catalogReady(bot, directory)
-  if (ready instanceof Error) return ready
-  const agents = await oc(bot, 'agent.list', (client) => client.agent.list({ location: { directory } }))
+// With `agent`, waits until that agent is listed (a user agent can load after the built-in ones).
+export async function primaryAgents(bot: Pick<Bot, 'opencode'>, directory: string, { agent, waitMs }: { agent?: string; waitMs?: number } = {}) {
+  const ready = agent ? (agents: Agent[]) => agents.some((candidate) => isPrimary(candidate) && isNamed(candidate, agent)) : undefined
+  const agents = await listAgents(bot, directory, { ready, waitMs })
   if (agents instanceof Error) return agents
-  return agents.data.filter((agent) => agent.mode !== 'subagent' && !agent.hidden)
+  return agents.filter(isPrimary)
 }
 
 // What a new session of the channel starts with: its project folder, and the channel agent or OpenCode's default agent.
@@ -154,9 +182,9 @@ export async function channelDefaults(bot: Pick<Bot, 'db' | 'opencode'>, channel
 }
 
 export async function agentSelection(bot: Bot, { directory, agent }: { directory: string; agent: string }) {
-  const agents = await primaryAgents(bot, directory)
+  const agents = await primaryAgents(bot, directory, { agent })
   if (agents instanceof Error) return agents
-  const selected = agents.find((candidate) => candidate.id.toLowerCase() === agent.toLowerCase() || candidate.name.toLowerCase() === agent.toLowerCase())
+  const selected = agents.find((candidate) => isNamed(candidate, agent))
   if (!selected) return new ConfigError({ reason: `Agent \`${agent}\` is not available in this project. Use /agent to select one.` })
   const model: ModelChoice | null = selected.model ? { ...selected.model, variant: selected.model.variant ?? null } : null
   return { agent: selected.id, model }

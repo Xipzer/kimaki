@@ -76,7 +76,7 @@ import { dispatch } from './prompt.ts'
 import { createQuestionHandlers } from './questions.ts'
 import type { Route } from './routes.ts'
 import { taskRoutes } from './scheduler.ts'
-import { catalogReady, startSession } from './sessions.ts'
+import { listAgents, startSession } from './sessions.ts'
 
 const logger = createLogger('COMMANDS')
 
@@ -166,19 +166,17 @@ export type Catalog = {
 }
 
 async function readCatalog(bot: Pick<Bot, 'opencode'>, directory: string): Promise<Error | Catalog> {
-  // Waits for plugin activation, so a cold location returns its full catalog.
-  const ready = await catalogReady(bot, directory)
-  if (ready instanceof Error) return ready
+  // Waits until a cold location has loaded its agents, so commands and skills are loaded too.
+  const agents = await listAgents(bot, directory)
+  if (agents instanceof Error) return agents
   const location = { directory }
-  const [agents, commands, skills] = await Promise.all([
-    oc(bot, 'agent.list', (client) => client.agent.list({ location })),
+  const [commands, skills] = await Promise.all([
     oc(bot, 'command.list', (client) => client.command.list({ location })),
     oc(bot, 'skill.list', (client) => client.skill.list({ location })),
   ])
-  if (agents instanceof Error) return agents
   if (commands instanceof Error) return commands
   if (skills instanceof Error) return skills
-  return { agents: agents.data, commands: commands.data, skills: skills.data.filter((skill) => !isBuiltinSkill(skill.id)) }
+  return { agents, commands: commands.data, skills: skills.data.filter((skill) => !isBuiltinSkill(skill.id)) }
 }
 
 // Autocomplete keeps the whole project catalog reachable beyond Discord's shortcut limit.

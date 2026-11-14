@@ -23,7 +23,7 @@ import { oc, type Bot, type PromptFile } from '../bot.ts'
 import { ConfigError } from '../errors.ts'
 import { selectRow, truncate } from '../format-parts.ts'
 import { authorOf, replyError, resolveTarget, respondChoices, type InteractionRoutes } from '../interaction-context.ts'
-import { fork, resume, startSession } from '../sessions.ts'
+import { fork, primaryAgents, resume, startSession } from '../sessions.ts'
 import { stripTurnContext } from '../system-prompt.ts'
 import { resolveWorkingDirectory } from '../worktrees.ts'
 
@@ -228,12 +228,13 @@ async function sessionAutocomplete(bot: Bot, interaction: AutocompleteInteractio
     )
   }
   if (focused.name === 'agent') {
-    const agents = await oc(bot, 'agent.list', (client) => client.agent.list({ location }))
+    // Discord drops autocomplete answers after 3 s.
+    const agents = await primaryAgents(bot, location.directory, { waitMs: 2_000 })
     if (agents instanceof Error) return respondChoices(interaction, agents)
     return respondChoices(
       interaction,
-      agents.data
-        .filter((agent) => agent.mode !== 'subagent' && !agent.hidden && agent.id.includes(query.toLowerCase()))
+      agents
+        .filter((agent) => agent.id.includes(query.toLowerCase()))
         .map((agent) => ({ name: agent.name, value: agent.id })),
     )
   }
