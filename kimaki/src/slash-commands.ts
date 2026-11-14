@@ -427,7 +427,8 @@ export function registerSlashCommands(
       dynamic.set(guild.id, guildDynamic)
       return
     }
-    if (registered.has(guild.id) && !same) logger.warn(`commands in guild ${guild.id} changed outside this bot, registering again`)
+    // Only when this bot's own list is unchanged: a catalog change also differs from the live list.
+    if (registered.get(guild.id) === signature && !same) logger.warn(`commands in guild ${guild.id} changed outside this bot, registering again`)
     const result = await discord.rest
       .put(Routes.applicationGuildCommands(appId, guild.id), { body: merged.commands })
       .catch((e) => new DiscordError({ operation: `register commands in ${guild.id}`, cause: e }))
