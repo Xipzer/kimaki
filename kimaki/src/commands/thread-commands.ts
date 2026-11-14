@@ -176,7 +176,8 @@ async function btwCommand(bot: Bot, interaction: ChatInputCommandInteraction, { 
 async function btwAgentChoices(bot: Bot, interaction: AutocompleteInteraction) {
   const target = await resolveTarget(bot, interaction.channelId)
   if (target instanceof Error) return respondChoices(interaction, target)
-  const agents = await primaryAgents(bot, target.directory)
+  // Discord drops autocomplete answers after 3 s.
+  const agents = await primaryAgents(bot, target.directory, { waitMs: 2_000 })
   if (agents instanceof Error) return respondChoices(interaction, agents)
   const query = interaction.options.getFocused().toLowerCase()
   return respondChoices(
