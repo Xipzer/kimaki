@@ -16,6 +16,8 @@ export type Block = {
   modelID: string
   until: number
   reason: BlockReason
+  // The limit a rejected Claude subscription request names (five_hour, seven_day, seven_day_opus ...).
+  claim?: string
 }
 
 export type FailedRequest = {
@@ -182,6 +184,15 @@ export function resetAt({
   return undefined
 }
 
+// Claude subscription limits that cover every model of the account. The other
+// claims (seven_day_opus, seven_day_sonnet ...) cap one model family.
+const ACCOUNT_CLAIMS = /^(five_hour|seven_day|overage)$/
+
+// A login whose refresh token is gone: no retry or wait brings it back.
+export function isDeadLogin(message: string): boolean {
+  return /invalid_grant|refresh token|returned 40[013]\b|revoked|unauthorized_client/i.test(message)
+}
+
 const QUOTA_TEXT = /usage_limit_reached|usage[-_\s]limit|insufficient[-_\s]quota|quota[-_\s]exceeded|credit balance|spending[-_\s]limit/i
 
 // Account limits OpenCode types itself (2.3+): ChatGPT sign-in, OpenCode Go, free tier, Console budget.
@@ -202,7 +213,7 @@ export function classify({ failed, now }: { failed: FailedRequest; now: number }
     if (error.type === 'provider.auth' || CHATGPT_DEAD_LOGIN.test(body)) return 'auth'
     if (QUOTA_TYPES.includes(error.type) || error.type === 'provider.model-budget-limit' || CHATGPT_LIMIT.test(body)) return 'quota'
     if (error.type === 'provider.rate-limit') {
-      // Subscription windows (Claude Pro/Max, Codex) cover every model of the account.
+      // Subscription windows (Claude Pro/Max, Codex), not a per-minute rate.
       if (QUOTA_TEXT.test(text) || headers['anthropic-ratelimit-unified-status'] === 'rejected') return 'quota'
       return 'rate-limit'
     }
@@ -211,14 +222,24 @@ export function classify({ failed, now }: { failed: FailedRequest; now: number }
   })()
   if (!reason) return undefined
   const reset = reason === 'auth' ? undefined : resetAt({ headers, body, retryAfterMs: error.retryAfterMs, now })
-  // Quota and auth belong to the account, except a Console spend limit set on one model.
-  const account = reason === 'auth' || (reason === 'quota' && error.type !== 'provider.model-budget-limit')
+  // A rejected Claude subscription request names the limit that was hit. Only the
+  // account limits block every model: a model family's weekly cap (Fable, Opus)
+  // leaves the other models of the same account usable. Without the name, block
+  // the failed model only: a wrong guess costs one more failed request, while a
+  // whole account blocked by mistake is skipped until its weekly reset.
+  // A Console spend limit set on one model also blocks that model only.
+  const claim = headers['anthropic-ratelimit-unified-representative-claim']
+  const subscription = headers['anthropic-ratelimit-unified-status'] === 'rejected'
+  const everyModel =
+    reason === 'auth' ||
+    (reason === 'quota' && error.type !== 'provider.model-budget-limit' && (!subscription || (claim !== undefined && ACCOUNT_CLAIMS.test(claim))))
   return {
     providerID: model.providerID,
     credentialID,
-    modelID: account ? '*' : model.id,
+    modelID: everyModel ? '*' : model.id,
     until: reset !== undefined && reset > now ? reset : now + DEFAULT_BLOCK_MS[reason],
     reason,
+    ...(claim !== undefined && { claim }),
   }
 }
 
