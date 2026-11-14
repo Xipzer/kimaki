@@ -98,6 +98,9 @@ async function loginDiscord({ discord, token }: { discord: Client; token: string
   await ready
 }
 
+// How long the start waits for the slash commands of every guild.
+const COMMANDS_WAIT_MS = 20_000
+
 export async function startBot(options: StartBotOptions): Promise<Error | BotHandle> {
   // Each resource registers its cleanup when acquired; disposal runs in reverse
   // (commands and scheduler first, the db and the lock port last). A startup
@@ -252,7 +255,17 @@ export async function startBot(options: StartBotOptions): Promise<Error | BotHan
   const commands = registerSlashCommands(bot, createInteractionRegistry(), { globalDirectory: options.opencodeConfigDir })
   cleanup.defer(() => commands.stop())
   // Awaited so the handle is only returned once every guild has its commands.
-  await commands.registerAll()
+  // Not forever: Discord can hold a registration for hours (daily limit on new
+  // commands), and routines must not wait for that.
+  discord.rest.on('rateLimited', (limit) => {
+    if (limit.timeToReset > 10_000) logger.warn(`Discord rate limit on ${limit.method} ${limit.route}: waiting ${Math.round(limit.timeToReset / 1000)}s`)
+  })
+  const waited = new AbortController()
+  const late = sleep(COMMANDS_WAIT_MS, 'late' as const, { signal: waited.signal }).catch(() => null)
+  if ((await Promise.race([commands.registerAll(), late])) === 'late') {
+    logger.warn(`slash commands are still registering after ${COMMANDS_WAIT_MS / 1000}s, starting without them`)
+  }
+  waited.abort()
   // After Discord and OpenCode are ready: a due task needs both.
   const scheduling = await scheduler.start()
   if (scheduling instanceof Error) return scheduling
