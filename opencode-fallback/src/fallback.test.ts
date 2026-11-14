@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest'
-import { classify, loginKey, parseModel, pick, type Block, type FailedRequest } from './fallback.ts'
+import { classify, isDeadLogin, loginKey, parseModel, pick, type Block, type FailedRequest } from './fallback.ts'
 
 const now = Date.parse('2026-10-02T12:00:00Z')
 const iso = (time: number | undefined) => (time === undefined ? undefined : new Date(time).toISOString())
@@ -115,7 +115,7 @@ describe('classify', () => {
         },
         "anthropicSubscription": {
           "credentialID": "cred_a",
-          "modelID": "*",
+          "modelID": "claude-opus-5-5",
           "providerID": "anthropic",
           "reason": "quota",
           "until": "2026-10-02T15:00:00.000Z",
@@ -215,6 +215,58 @@ test('loginKey matches two saved logins of the same user', () => {
       "opaque": undefined,
       "other": "https://auth.openai.com user-2",
       "second": "https://auth.openai.com user-1",
+    }
+  `)
+})
+
+test('a Claude subscription rejection blocks every model only for an account limit', () => {
+  const rejected = (claim: string | undefined) =>
+    block({
+      model: { providerID: 'anthropic', id: 'claude-fable-5-2' },
+      error: { type: 'provider.rate-limit', status: 429, message: "This request would exceed your account's rate limit. Please try again later." },
+      headers: {
+        'anthropic-ratelimit-unified-status': 'rejected',
+        'anthropic-ratelimit-unified-reset': String(now / 1000 + 7 * 86400),
+        ...(claim !== undefined && { 'anthropic-ratelimit-unified-representative-claim': claim }),
+      },
+    })
+  const scope = (claim: string | undefined) => {
+    const result = rejected(claim)
+    return `${result?.reason} ${result?.modelID} ${result?.claim}`
+  }
+  expect({
+    fiveHour: scope('five_hour'),
+    week: scope('seven_day'),
+    extraUsage: scope('overage'),
+    opusWeek: scope('seven_day_opus'),
+    unknownFamily: scope('seven_day_fable'),
+    noClaim: scope(undefined),
+  }).toMatchInlineSnapshot(`
+    {
+      "extraUsage": "quota * overage",
+      "fiveHour": "quota * five_hour",
+      "noClaim": "quota claude-fable-5-2 undefined",
+      "opusWeek": "quota claude-fable-5-2 seven_day_opus",
+      "unknownFamily": "quota claude-fable-5-2 seven_day_fable",
+      "week": "quota * seven_day",
+    }
+  `)
+})
+
+test('a dead login is told apart from a token service that did not answer', () => {
+  expect({
+    expired: isDeadLogin('Claude Pro/Max login failed: token endpoint returned 400: {"error": "invalid_grant", "error_description": "Refresh token expired"}'),
+    revoked: isDeadLogin('token endpoint returned 401: {"error":"unauthorized_client"}'),
+    network: isDeadLogin('fetch failed'),
+    serverError: isDeadLogin('Claude Pro/Max login failed: token endpoint returned 503: upstream connect error'),
+    timeout: isDeadLogin('The operation was aborted due to timeout'),
+  }).toMatchInlineSnapshot(`
+    {
+      "expired": true,
+      "network": false,
+      "revoked": true,
+      "serverError": false,
+      "timeout": false,
     }
   `)
 })

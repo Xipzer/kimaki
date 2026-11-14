@@ -175,12 +175,12 @@ beforeAll(async () => {
   await client.credential.create({
     integrationID: 'alpha',
     label: 'also expired',
-    value: { type: 'oauth', methodID: 'expired-test', access: 'older-access', refresh: 'older-refresh', expires: 0 },
+    value: { type: 'oauth', methodID: 'expired-test', access: 'older-access', refresh: 'older-refresh', expires: Date.now() - 3_600_000 },
   })
   await client.credential.create({
     integrationID: 'alpha',
     label: 'expired',
-    value: { type: 'oauth', methodID: 'expired-test', access: 'expired-access', refresh: 'expired-refresh', expires: 0 },
+    value: { type: 'oauth', methodID: 'expired-test', access: 'expired-access', refresh: 'expired-refresh', expires: Date.now() - 3_600_000 },
   })
   await client.credential.create({ integrationID: 'alpha', label: 'first', value: { type: 'key', key: 'key-1' } })
 })
@@ -266,7 +266,8 @@ test('expired refresh and 429 rotate accounts, then fall back and continue the s
     }
   `)
 
-  const result = await client.rpc(FallbackRpc).blocks({})
+  // The plugin runs per location: OpenCode 2.2 no longer starts the default location for an RPC call.
+  const result = await client.rpc(FallbackRpc).blocks({}, { location: { directory: path.join(root, 'project') } })
   const blocks = result && typeof result === 'object' && 'blocks' in result && Array.isArray(result.blocks) ? result.blocks : []
   expect(blocks.filter(isBlock).map((block) => block.credentialID)).not.toContain('env')
   const minutes = blocks.filter(isBlock).map((block) => ({
