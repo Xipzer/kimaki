@@ -14,6 +14,8 @@ export type Block = {
   modelID: string
   until: number
   reason: BlockReason
+  // The limit a rejected Claude subscription request names (five_hour, seven_day, seven_day_opus ...).
+  claim?: string
 }
 
 export type FailedRequest = {
@@ -177,6 +179,15 @@ export function resetAt({
   return undefined
 }
 
+// Claude subscription limits that cover every model of the account. The other
+// claims (seven_day_opus, seven_day_sonnet ...) cap one model family.
+const ACCOUNT_CLAIMS = /^(five_hour|seven_day|overage)$/
+
+// A login whose refresh token is gone: no retry or wait brings it back.
+export function isDeadLogin(message: string): boolean {
+  return /invalid_grant|refresh token|returned 40[013]\b|revoked|unauthorized_client/i.test(message)
+}
+
 const QUOTA_TEXT = /usage_limit_reached|usage[-_\s]limit|insufficient[-_\s]quota|quota[-_\s]exceeded|credit balance|spending[-_\s]limit/i
 const OVERLOAD_TEXT = /overloaded|at capacity|temporarily unavailable|service[-_\s]unavailable/i
 
@@ -189,7 +200,7 @@ export function classify({ failed, now }: { failed: FailedRequest; now: number }
     if (error.type === 'provider.auth') return 'auth'
     if (error.type === 'provider.quota') return 'quota'
     if (error.type === 'provider.rate-limit') {
-      // Subscription windows (Claude Pro/Max, Codex) cover every model of the account.
+      // Subscription windows (Claude Pro/Max, Codex), not a per-minute rate.
       if (QUOTA_TEXT.test(text) || headers['anthropic-ratelimit-unified-status'] === 'rejected') return 'quota'
       return 'rate-limit'
     }
@@ -201,15 +212,31 @@ export function classify({ failed, now }: { failed: FailedRequest; now: number }
   })()
   if (!reason) return undefined
   const reset = reason === 'auth' ? undefined : resetAt({ headers, body: error.response?.body, now })
+  // A rejected Claude subscription request names the limit that was hit. Only the
+  // account limits block every model: a model family's weekly cap (Fable, Opus)
+  // leaves the other models of the same account usable. Without the name, block
+  // the failed model only: a wrong guess costs one more failed request, while a
+  // whole account blocked by mistake is skipped until its weekly reset.
+  const claim = headers['anthropic-ratelimit-unified-representative-claim']
+  const subscription = headers['anthropic-ratelimit-unified-status'] === 'rejected'
+  const everyModel = reason === 'auth' || (reason === 'quota' && (!subscription || (claim !== undefined && ACCOUNT_CLAIMS.test(claim))))
   return {
     providerID: model.providerID,
     // Overload is provider capacity: every account sees it.
     credentialID: reason === 'overloaded' ? '*' : credentialID,
-    // Quota and auth belong to the account, not to one model.
-    modelID: reason === 'quota' || reason === 'auth' ? '*' : model.id,
+    modelID: everyModel ? '*' : model.id,
     until: reset !== undefined && reset > now ? reset : now + DEFAULT_BLOCK_MS[reason],
     reason,
+    ...(claim !== undefined && { claim }),
   }
+}
+
+// An account with a failed login (`auth` block) does not come back by waiting.
+function deadAccount({ blocks, providerID, credentialID, now }: { blocks: readonly Block[]; providerID: string; credentialID: string; now: number }): boolean {
+  return blocks.some(
+    (block) =>
+      block.reason === 'auth' && block.until > now && block.providerID === providerID && (block.credentialID === '*' || block.credentialID === credentialID),
+  )
 }
 
 export function blockedUntil({
@@ -276,7 +303,8 @@ export type Choice = { model: ModelRef; credentialID: string; waitUntil?: number
 
 // Best (model, account) pair that is not blocked. Ranking order wins over
 // accounts; for one model the accounts are tried in the given order (active first).
-// When everything is blocked, returns the pair that recovers first with `waitUntil`.
+// When everything is blocked, returns the pair that recovers first with `waitUntil`,
+// never an account whose login failed: activating it would fail every session.
 export function pick({
   ranking,
   accounts,
@@ -293,11 +321,12 @@ export function pick({
       model,
       credentialID,
       until: blockedUntil({ blocks, providerID: model.providerID, credentialID, modelID: model.id, now }),
+      dead: deadAccount({ blocks, providerID: model.providerID, credentialID, now }),
     })),
   )
   const free = candidates.find((candidate) => candidate.until === undefined)
   if (free) return { model: free.model, credentialID: free.credentialID }
-  const first = candidates.reduce<(typeof candidates)[number] | undefined>(
+  const first = candidates.filter((candidate) => !candidate.dead).reduce<(typeof candidates)[number] | undefined>(
     (best, candidate) => (!best || (candidate.until ?? 0) < (best.until ?? 0) ? candidate : best),
     undefined,
   )
