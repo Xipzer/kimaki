@@ -1,7 +1,7 @@
 # Fork features and how to tell that upstream now covers them (then the fork commit is redundant).
 # id	commit subject (prefix)	upstream files the fork hooks into	probe	pattern (git grep -E)	pathspec
 # probe=present: upstream covers it when the pattern appears. probe=absent: upstream covers it when the pattern disappears.
-foreign-commands	fix(commands): keep other apps' slash commands	kimaki/src/slash-commands.ts	absent	\.set\(built\.commands	kimaki/src/slash-commands.ts
+foreign-commands	fix(commands): keep other apps' slash commands	kimaki/src/slash-commands.ts	present	other apps|not (built|owned) by|foreign	kimaki/src/slash-commands.ts
 thinking-status	feat(reasoning): live thinking status line	kimaki/src/thread-reducer.ts,kimaki/src/effects.ts	present	session\.reasoning\.delta	kimaki/src/thread-reducer.ts
 prompt-metadata	fix(plugin): per-message context on OpenCode 2.2	kimaki/src/plugin/index.ts	present	MIN_OPENCODE_VERSION = .2\.([3-9]|[1-9][0-9])	kimaki/src/opencode-server.ts
 fallback-login-health	fix(fallback): keep saved logins alive	opencode-fallback/src/index.ts,opencode-fallback/src/fallback.ts	present	keepalive	opencode-fallback/src/index.ts
