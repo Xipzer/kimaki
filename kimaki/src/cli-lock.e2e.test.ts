@@ -190,6 +190,12 @@ test('CLI help documents the supported P7 commands', async () => {
       session compact [id]              Summarize the session history after its current turn (default: this session)
         --data-dir <path>               Data directory (default: ~/.kimaki)
 
+      session links                     List, add or remove linked sessions of a session (default: this session)
+        --data-dir <path>               Data directory (default: ~/.kimaki)
+        -s, --session <id>              Session ID, Discord thread ID or thread URL (default: OPENCODE_SESSION_ID)
+        --add <id>                      Link a session ID, thread ID or thread URL
+        --remove <id>                   Remove a link
+
       session title <title>             Rename the session and its Discord thread
         --data-dir <path>               Data directory (default: ~/.kimaki)
         -s, --session <id>              Session ID, Discord thread ID or thread URL (default: OPENCODE_SESSION_ID)

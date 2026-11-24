@@ -98,6 +98,7 @@ test('fresh install gets kimaki.db with the kimaki tables; subcommands never cre
       "global_models",
       "guild_categories",
       "scheduled_tasks",
+      "session_links",
       "session_sleeps",
       "thread_sessions",
     ]

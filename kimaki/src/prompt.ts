@@ -43,6 +43,7 @@ import { discordMessageId, formatEcho } from './queue.ts'
 import { noAnswerError, parseRemoteResult, remoteEnvelope, promptFilePath, REMOTE_TIMEOUT_MS, type RemoteResult } from './remote-send.ts'
 import { parseTextMessage, type Route } from './routes.ts'
 import { allMessages } from './session-events.ts'
+import { recordPromptLinks } from './session-links.ts'
 import { ensureSessionMarker, forkBtw, startSession, switchAgent, conversationProject } from './sessions.ts'
 import { cancelSleep } from './sleeps.ts'
 import type { ScheduledRun } from './system-prompt.ts'
@@ -432,6 +433,8 @@ export async function dispatch(
   }
   const sessionId = rootSession(bot, conversation.id)
   if (sessionId instanceof Error) return sessionId
+  // Fork: the sending session and sessions the text names become linked sessions (session-links.ts).
+  await recordPromptLinks(bot, { sessionId, text: routeText(route), senderSessionId: sender?.sessionId })
   // New input supersedes a pending `kimaki sleep` of this session.
   await cancelSleep(bot, sessionId)
   const project = await conversationProject(bot, conversation)

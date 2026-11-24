@@ -23,6 +23,7 @@ import { RESTART_EXIT_CODE } from './lock-server.ts'
 import { abort, cancelQueuedPrompt, clearQueue, send, shell, upload } from './prompt.ts'
 import { createTask, deleteTask, editTask, runTaskNow } from './scheduler.ts'
 import * as schema from './schema.ts'
+import { linkSessions, listLinks, resolveLinkTarget, unlinkSessions } from './session-links.ts'
 import { channelForDirectory, channelForSession, fork, resume, sessionCwd } from './sessions.ts'
 import { createSleep, sleepsWarm } from './sleeps.ts'
 import { conversationTyping, isBusy, workersTyping } from './thread-reducer.ts'
@@ -572,6 +573,26 @@ export const lockRoutes = {
       const thread = await fetchConversation(bot, target.threadId)
       if (thread instanceof Error) return thread
       return sessionCwd(bot, { conversation: thread, directory: input.directory })
+    },
+  }),
+  // Fork: `kimaki session links` (session-links.ts).
+  'session.links': route({
+    input: sessionInput({ add: text('add').optional(), remove: text('remove').optional() }),
+    run: async (bot, input) => {
+      const target = localSession(bot, input)
+      if (target instanceof Error) return target
+      for (const [id, op] of [[input.add, 'add'], [input.remove, 'remove']] as const) {
+        if (!id) continue
+        const other = await resolveLinkTarget(bot, id)
+        if (!other) return new ConfigError({ reason: `Not a session ID or known Kimaki thread: ${id}` })
+        const changed = op === 'add'
+          ? await linkSessions(bot, { a: target.sessionId, b: other, source: 'manual' })
+          : await unlinkSessions(bot, { a: target.sessionId, b: other })
+        if (changed instanceof Error) return changed
+      }
+      const links = await listLinks(bot, target.sessionId)
+      if (links instanceof Error) return links
+      return { sessionId: target.sessionId, links: links.map((link) => ({ ...link, lastContactAt: link.lastContactAt.toISOString() })) }
     },
   }),
   'session.title': route({

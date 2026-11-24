@@ -135,6 +135,7 @@ test('the coordinator stays warm while its worker runs, then compacts', async ()
       "assistant",
       "assistant",
       "idle",
+      "system",
       "synthetic",
       "assistant",
       "idle",

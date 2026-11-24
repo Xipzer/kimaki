@@ -36,6 +36,7 @@ import { formatEcho, formatEchoReply } from './queue.ts'
 import type { Route } from './routes.ts'
 import * as schema from './schema.ts'
 import { disabledSkillRules } from './builtin-skills.ts'
+import { recordPromptLinks } from './session-links.ts'
 import { baseInstructions, INSTRUCTION_KEY, type ScheduledRun } from './system-prompt.ts'
 import { createWorktree, isLinkedWorktree, resolveWorkingDirectory } from './worktrees.ts'
 
@@ -518,6 +519,8 @@ export async function startSession(
 
   const bound = await bindThread(bot, { threadId: thread.id, sessionId: session.id, channelId, directory, isNew: true })
   if (bound instanceof Error) return bound
+  // Fork: the parent, the sending session and sessions the first prompt names (session-links.ts).
+  await recordPromptLinks(bot, { sessionId: session.id, text, senderSessionId: sender?.sessionId, parentSessionId })
   if (!run) {
     const ready = checkout ? [`Worktree ready: \`${directory}\``, `Branch: \`${checkout.branch ?? 'detached'}\``] : []
     const posted = await thread

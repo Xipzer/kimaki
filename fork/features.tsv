@@ -5,3 +5,4 @@ foreign-commands	fix(commands): keep other apps' slash commands	kimaki/src/slash
 thinking-status	feat(reasoning): live thinking status line	kimaki/src/thread-reducer.ts,kimaki/src/effects.ts	present	session\.reasoning\.delta	kimaki/src/thread-reducer.ts
 prompt-metadata	fix(plugin): per-message context on OpenCode 2.2	kimaki/src/plugin/index.ts	present	MIN_OPENCODE_VERSION = .2\.([3-9]|[1-9][0-9])	kimaki/src/opencode-server.ts
 fallback-login-health	fix(fallback): keep saved logins alive	opencode-fallback/src/index.ts,opencode-fallback/src/fallback.ts	present	keepalive	opencode-fallback/src/index.ts
+session-links	feat(sessions): linked sessions that survive compaction	kimaki/src/prompt.ts,kimaki/src/sessions.ts	present	session_links|[Ll]inked sessions	kimaki/src

@@ -171,6 +171,19 @@ export const session_sleeps = s.sqliteTable('session_sleeps', {
   s.index('session_sleeps_status_wake_at_idx').on(table.status, table.wake_at),
 ])
 
+// Fork: two-way links between sessions that talk to each other (session-links.ts).
+// One row per direction; other local tools may read it.
+export const session_links = s.sqliteTable('session_links', {
+  session_id: s.text('session_id').notNull(),
+  linked_session_id: s.text('linked_session_id').notNull(),
+  source: s.text('source', { enum: ['send', 'parent', 'mention', 'manual'] }).notNull(),
+  created_at: datetime('created_at').default(orm.sql`CURRENT_TIMESTAMP`),
+  last_contact_at: datetime('last_contact_at').default(orm.sql`CURRENT_TIMESTAMP`),
+}, (table) => [
+  s.primaryKey({ columns: [table.session_id, table.linked_session_id] }),
+  s.index('session_links_session_id_last_contact_at_idx').on(table.session_id, table.last_contact_at),
+])
+
 export const relations = defineRelations({
   thread_sessions,
   bot_tokens,

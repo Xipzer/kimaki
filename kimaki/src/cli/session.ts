@@ -179,6 +179,18 @@ export function registerSessionActionCommands(cli: Goke) {
     .option('--data-dir <path>', DATA_DIR_HELP)
     .action(async (id, options) => action({ route: 'session.compact', dataDir: options.dataDir, input: targetOrEnv(id) }))
 
+  // Fork: linked sessions (session-links.ts).
+  cli.command('session links', 'List, add or remove linked sessions of a session (default: this session)')
+    .option('--data-dir <path>', DATA_DIR_HELP)
+    .option('-s, --session <id>', SESSION_HELP)
+    .option('--add <id>', 'Link a session ID, thread ID or thread URL')
+    .option('--remove <id>', 'Remove a link')
+    .action(async (options) => action({
+      route: 'session.links',
+      dataDir: options.dataDir,
+      input: { ...targetOrEnv(options.session), ...(options.add && { add: String(options.add) }), ...(options.remove && { remove: String(options.remove) }) },
+    }))
+
   cli.command('session title <title>', 'Rename the session and its Discord thread')
     .option('--data-dir <path>', DATA_DIR_HELP)
     .option('-s, --session <id>', SESSION_HELP)
