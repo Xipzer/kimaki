@@ -2,7 +2,7 @@
 
 import { expect, test } from 'vitest'
 
-import { formatToolFailed, formatToolLine, isToolVisible, type ToolCall } from './format-parts.ts'
+import { formatError, formatToolFailed, formatToolLine, isToolVisible, type ToolCall } from './format-parts.ts'
 
 const calls: ToolCall[] = [
   { name: 'shell', input: { command: 'pnpm test --run src/*.test.ts' } },
@@ -147,4 +147,8 @@ test('child tool lines carry the agent label, errors keep the first line', () =>
       "-#  ⨯  explore ⋅ read _File not found: notes.md_",
     ]
   `)
+})
+
+test('an error about a project directory that is gone says so and how to fix it', () => {
+  expect(formatError('OpenCode model.list failed: Location not found: /home/u/old/projects/kimaki')).toMatchInlineSnapshot(`"-# ✗ This channel or session points at /home/u/old/projects/kimaki, which no longer exists. Move the project back, or run \`kimaki project add <new path>\` and start a new session there."`)
 })

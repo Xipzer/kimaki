@@ -189,7 +189,15 @@ export function truncate(text: string, max: number): string {
 
 // One subtext line: Discord only renders `-# ` up to the first line break.
 export function formatError(message: string): string {
-  return asSubtext(`✗ ${truncate(message.replace(/\s+/g, ' ').trim() || 'unknown error', 400)}`)
+  return asSubtext(`✗ ${truncate(explainError(message).replace(/\s+/g, ' ').trim() || 'unknown error', 400)}`)
+}
+
+// OpenCode answers "Location not found: <dir>" for every call in a directory that is gone
+// (a project moved or deleted): say what it means and how to fix it.
+function explainError(message: string): string {
+  const missing = message.match(/Location not found: (\S+)/)?.[1]
+  if (!missing) return message
+  return `This channel or session points at ${missing}, which no longer exists. Move the project back, or run \`kimaki project add <new path>\` and start a new session there.`
 }
 
 // The provider error is the whole point: "retrying" alone says nothing.
