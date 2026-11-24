@@ -4,7 +4,7 @@ import { createClient } from '@libsql/client'
 import { expect, test } from 'vitest'
 
 import { tempDataDir } from './test/harness.ts'
-import { chatGPTCredential } from './voice.ts'
+import { chatGPTCredential, isVoiceAttachment } from './voice.ts'
 
 test('chatGPTCredential skips token sharing and expired logins', async () => {
   const dir = tempDataDir()
@@ -26,4 +26,16 @@ test('chatGPTCredential skips token sharing and expired logins', async () => {
   client.close()
   expect(await chatGPTCredential({ dbFile: file, now: 1_000_000 })).toEqual({ accessToken: 'codex', accountId: null })
   fs.rmSync(dir, { recursive: true, force: true })
+})
+
+test('isVoiceAttachment: browser-recorded webm voice notes are voice, webm videos are not', () => {
+  const at = (name: string, contentType: string | null, extra: { waveform?: string; width?: number; height?: number } = {}) =>
+    isVoiceAttachment({ name, contentType, duration: 3, waveform: null, width: null, height: null, ...extra })
+  expect([
+    at('voice-message.webm', 'audio/webm;codecs=opus'),
+    at('voice-message.webm', null, { waveform: 'AAEC' }),
+    at('voice-message.ogg', 'audio/ogg'),
+    at('clip.webm', 'video/webm'),
+    at('clip.webm', 'video/webm', { width: 640, height: 480 }),
+  ]).toEqual([true, true, true, false, false])
 })

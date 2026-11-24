@@ -152,9 +152,10 @@ export function isVoiceAttachment(attachment: AttachmentLike): boolean {
   const extension = path.extname(attachment.name).toLowerCase()
   if ((attachment.width ?? 0) > 0 && (attachment.height ?? 0) > 0) return false
   if (VOICE_EXTENSIONS.has(extension)) return true
+  // A waveform marks a voice message; browsers record those as audio/webm, so the type beats the extension.
+  if (attachment.waveform?.trim() || contentType.startsWith('audio/')) return true
   if (contentType.startsWith('video/') || VIDEO_EXTENSIONS.has(extension)) return false
-  if (contentType.startsWith('audio/')) return true
-  return (attachment.duration ?? 0) > 0 || Boolean(attachment.waveform?.trim())
+  return (attachment.duration ?? 0) > 0
 }
 
 // One canonical media type per container, so every provider path matches it.
