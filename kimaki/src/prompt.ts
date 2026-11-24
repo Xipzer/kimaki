@@ -120,7 +120,8 @@ export async function prompt(
   const { attached, attachments } = await splitPromptFiles(files)
   // The text stays as the user wrote it. The plugin renders the <discord-user>
   // context from this metadata into the model request only (turnContext()).
-  const discord: TurnContext = { userId: author.id, username: author.username, messageId, threadId, threadName, attachments }
+  // Fork (mirror.ts): `home` tells a peer Kimaki serving this session on another chat where the prompt was typed.
+  const discord: TurnContext & { home?: string } = { userId: author.id, username: author.username, messageId, threadId, threadName, attachments, ...(bot.home && { home: bot.home }) }
   const result = await oc(bot, 'session.prompt', (client) =>
     client.session.prompt({
       sessionID: sessionId,

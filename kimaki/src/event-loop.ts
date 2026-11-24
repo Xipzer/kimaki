@@ -71,6 +71,8 @@ export function createEventLoop({
   analytics,
   onRunEnded,
   onTranscriptDue,
+  home = null,
+  adopt,
 }: {
   store: BotStore
   db: KimakiDb
@@ -82,6 +84,11 @@ export function createEventLoop({
   onRunEnded: (run: RunEnded) => void
   // A root session stopped running (also after an interrupt): its transcript file is stale.
   onTranscriptDue: (sessionId: string) => void
+  // Fork (mirror.ts): this Kimaki's side, and adoption of a root session a peer Kimaki on
+  // this machine started: binds it to a thread here and returns that thread, else null.
+  home?: string | null
+  // `held`: its events so far, for a new session to start from (bind's `first`).
+  adopt?: (sessionId: string, held: readonly ThreadEvent[]) => Promise<string | null>
 }) {
   // The client of the current connection, set before hydration starts.
   const connection: { client: OpenCodeClient | null } = { client: null }
@@ -231,7 +238,7 @@ export function createEventLoop({
       return
     }
     if (!store.getState().threads[threadId]) {
-      const view = emptyView({ sessionId, channelId: loaded.channelId, directory: loaded.directory, isNew: false, coordinator: threadId === loaded.channelId })
+      const view = emptyView({ sessionId, channelId: loaded.channelId, directory: loaded.directory, isNew: false, coordinator: threadId === loaded.channelId, home })
       commit({ threadId, update: (current) => ({ threads: { ...current.threads, [threadId]: view } }) })
     }
     for (const event of entry.events) fold(threadId, event)
@@ -275,17 +282,22 @@ export function createEventLoop({
     if (!entry || entry.loading || !client) return
     entry.loading = true
     const found = await findAncestorThread({ client, sessionId })
-    entry.loading = false
+    // An adoption keeps it loading: events meanwhile are held, never a second adoption.
+    if (found || !adopt) entry.loading = false
     if (found instanceof Error) {
       // Keep the held events; the next event of this session retries.
       logger.warn(`cannot resolve session ${sessionId}`, found)
       return
     }
-    unknownSessions.delete(sessionId)
     if (!found) {
-      ignoredSessions.add(sessionId)
+      // Fork (mirror.ts): a peer Kimaki's session gets a thread here. The adoption binds it
+      // with the held events (a new session) or replays its history (an older one).
+      const adopted = adopt ? await adopt(sessionId, entry.events).catch((error: Error) => (logger.warn(`adopt ${sessionId}`, error), null)) : null
+      unknownSessions.delete(sessionId)
+      if (!adopted) ignoredSessions.add(sessionId)
       return
     }
+    unknownSessions.delete(sessionId)
     adoptChain(found)
     for (const event of entry.events) deliver(found.threadId, event)
   }
@@ -404,7 +416,7 @@ export function createEventLoop({
       directory: string
       // New sessions show a banner on their first step; forks do not.
       isNew: boolean
-      first?: readonly KimakiEvent[]
+      first?: readonly ThreadEvent[]
     }): Promise<void> {
       ignoredSessions.delete(sessionId)
       coldThreads.delete(threadId)
@@ -413,7 +425,7 @@ export function createEventLoop({
         update: (current) => ({
           roots: { ...current.roots, [threadId]: sessionId },
           sessionThreads: { ...current.sessionThreads, [sessionId]: threadId },
-          threads: { ...current.threads, [threadId]: emptyView({ sessionId, channelId, directory, isNew, coordinator: threadId === channelId }) },
+          threads: { ...current.threads, [threadId]: emptyView({ sessionId, channelId, directory, isNew, coordinator: threadId === channelId, home }) },
         }),
       })
       // Same synchronous turn as the routing change: no live event can come first.

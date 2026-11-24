@@ -2,6 +2,7 @@
 // Discord login in parallel. Returns a handle so tests can drive the bot
 // in-process and stop it cleanly.
 
+import path from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { Client, Events, GatewayIntentBits, Partials } from 'discord.js'
 import * as errore from 'errore'
@@ -19,6 +20,8 @@ import { createIngress } from './ingress.ts'
 import { runLockRoute } from './lock-routes.ts'
 import { installShim, type LockServer } from './lock-server.ts'
 import { hubBaseUrl, syncHubIcons } from './hub-icons.ts'
+import { adoptPeerSession } from './mirror.ts'
+import type { ThreadEvent } from './thread-reducer.ts'
 import { createLogger } from './logger.ts'
 import { createCoordinatorNotes } from './coordinator.ts'
 import { installPluginShim, watchOpencode, type OpencodeEndpoint } from './opencode-server.ts'
@@ -86,6 +89,10 @@ export type StartBotOptions = {
   // Fork: connected to a Vocorum hub, upload this machine's Discord bot avatar and server icon
   // from the Discord bot in these data dirs (hub-icons.ts). The CLI passes them; tests never do.
   hubIconDataDirs?: readonly string[]
+  // Fork (mirror.ts): this side's name ("Discord", "Vocorum") and the data dirs of the
+  // other Kimaki processes on this machine that serve the same sessions.
+  home?: string | null
+  peerDataDirs?: readonly string[]
 }
 
 export type BotHandle = Bot & {
@@ -175,7 +182,13 @@ export async function startBot(options: StartBotOptions): Promise<Error | BotHan
     voiceCalls.runEnded(run)
     coordinatorNotes.runEnded(run)
   }
-  const eventLoop = createEventLoop({ store, db, discord, effects, recorder, analytics: options.analytics, onRunEnded, onTranscriptDue })
+  // Set once the bot exists: adopting a peer's session needs it (mirror.ts).
+  const mirror: { adopt: ((sessionId: string, held: readonly ThreadEvent[]) => Promise<string | null>) | null } = { adopt: null }
+  const eventLoop = createEventLoop({
+    store, db, discord, effects, recorder, analytics: options.analytics, onRunEnded, onTranscriptDue,
+    home: options.home ?? null,
+    adopt: (sessionId, held) => mirror.adopt?.(sessionId, held) ?? Promise.resolve(null),
+  })
   const loaded = await eventLoop.load()
   if (loaded instanceof Error) return loaded
   // Before the service is used, so a service started by ensure() loads it at once.
@@ -218,8 +231,11 @@ export async function startBot(options: StartBotOptions): Promise<Error | BotHan
     disabledPrompt: options.disabledPrompt ?? [],
     coordinatorDefault: options.coordinator ?? true,
     warmupTimers: options.warmupTimers ?? null,
+    home: options.home ?? null,
+    peerDataDirs: (options.peerDataDirs ?? []).map((dir) => path.resolve(dir)),
     features: { withSleepLock: createSleepLock(), waitForPlugin: createPluginWait({ opencode }), agentUi, voiceCalls, ingress },
   }
+  if (bot.peerDataDirs.length > 0) mirror.adopt = (sessionId, held) => adoptPeerSession(bot, { sessionId, held })
   const scheduler = createScheduler({
     bot,
     intervalMs: options.schedulerIntervalMs === undefined ? 5_000 : options.schedulerIntervalMs,

@@ -102,6 +102,8 @@ export type ToolCall = {
 
 export type ThreadView = {
   sessionId: string
+  // Fork (mirror.ts): this Kimaki's side; prompts typed on another side are echoed with theirs.
+  home: string | null
   // Project channel of the thread: its verbosity applies.
   channelId: string
   // The view is a coordinator channel itself, not a thread.
@@ -219,15 +221,18 @@ export function emptyView({
   directory,
   isNew,
   coordinator,
+  home = null,
 }: {
   sessionId: string
   channelId: string
   directory: string
   isNew: boolean
   coordinator: boolean
+  home?: string | null
 }): ThreadView {
   return {
     sessionId,
+    home,
     channelId,
     coordinator,
     directory,

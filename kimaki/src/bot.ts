@@ -84,6 +84,10 @@ export type Bot = {
   coordinatorDefault: boolean
   // Short warmup windows (tests), written into session markers; null uses the plugin defaults.
   warmupTimers: WarmupTimers | null
+  // Fork (mirror.ts): another Kimaki on this machine serves the same sessions on another chat
+  // (Discord and a Vocorum hub). `home` names this side in prompts; peers are their data dirs.
+  home: string | null
+  peerDataDirs: readonly string[]
   features: BotFeatures
 }
 

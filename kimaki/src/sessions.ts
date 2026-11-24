@@ -29,6 +29,7 @@ import {
 } from './bot.ts'
 import { ConfigError, DbError, DiscordError, OpenCodeError, OpenCodeUnavailableError } from './errors.ts'
 import { asSubtext, SILENT_MESSAGE_FLAGS } from './format-parts.ts'
+import { isPeerMarker } from './mirror.ts'
 import { createLogger } from './logger.ts'
 import type { OpenCodeClient, OpencodeEndpoint } from './opencode-server.ts'
 import { logPrompt, prompt, runInSession, type Sender } from './prompt.ts'
@@ -323,6 +324,8 @@ export async function ensureSessionMarker(
   if (info instanceof Error) return info
   const marker = readMarker(info.metadata)
   if (marker && marker.dataDir === bot.dataDir && marker.lockPort === bot.lockPort) return
+  // Fork (mirror.ts): a mirrored session stays with the Kimaki that started it.
+  if (isPeerMarker(bot, marker)) return
   // Instructions first: the marker means "set up", so a failure here is retried on the next input.
   if (!marker) {
     logger.log(`adopting legacy session ${sessionId} of conversation ${conversation.id}`)
@@ -353,6 +356,7 @@ export async function refreshCliContext(bot: Bot) {
     const marker = readMarker(info.metadata)
     if (!marker) continue
     if (marker.dataDir === bot.dataDir && marker.lockPort === bot.lockPort) continue
+    if (isPeerMarker(bot, marker)) continue
     const metadata = { ...info.metadata, kimaki: { ...marker.fields, ...cliContext(bot) } }
     const result = await oc(bot, 'refresh Kimaki CLI context', (client) => client.session.update({ sessionID: sessionId, metadata }))
     if (result instanceof Error) return result

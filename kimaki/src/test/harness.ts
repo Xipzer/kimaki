@@ -561,6 +561,7 @@ export async function startTestBot({
   coordinator,
   warmupTimers,
   sortChannelsDelayMs,
+  mirror,
 }: {
   dataDir: string
   twin: TestTwin
@@ -586,6 +587,8 @@ export async function startTestBot({
   warmupTimers?: WarmupTimers
   // Turns on `--sort-channels` with this delay.
   sortChannelsDelayMs?: number
+  // Fork (mirror.ts): this side's name and the peer bots' data dirs.
+  mirror?: { home: string; peerDataDirs: readonly string[] }
 }): Promise<BotHandle> {
   // What credential resolution saves in production; `kimaki project add` reads it.
   const credentials: Credentials = twin.discord.botToken.includes(':')
@@ -618,6 +621,7 @@ export async function startTestBot({
     coordinator: coordinator ?? false,
     ...(warmupTimers && { warmupTimers }),
     ...(sortChannelsDelayMs !== undefined && { sortChannels: true, sortChannelsDelayMs }),
+    ...(mirror && { home: mirror.home, peerDataDirs: mirror.peerDataDirs }),
     transcriptionBaseUrls: {
       ...(geminiBaseUrl && { gemini: geminiBaseUrl }),
       ...(openaiBaseUrl && { openai: openaiBaseUrl }),

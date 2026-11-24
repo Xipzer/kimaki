@@ -88,6 +88,7 @@ export function registerStartCommand(cli: Goke) {
     .option('--gateway', 'Use the shared Kimaki bot, no Discord app needed')
     .option('--gateway-callback-url <url>', 'Redirect here after the gateway install (appends ?guild_id=<id>)')
     .option('--install-url', 'Print the install URL and exit (non-interactive onboarding)')
+    .option('--peer-data-dir <dir>', 'Fork: data dir of another Kimaki on this machine serving the same sessions on another chat (Discord and a Vocorum hub); comma-separated for several')
     .option('--machine-name <name>', 'Name in this machine\'s category "Kimaki <name>" (default: hostname)')
     .option('--restart-onboarding', 'Choose credentials again')
     .option('--worktrees', 'Use a fresh Git worktree for new sessions unless the channel overrides it')
@@ -111,6 +112,7 @@ export function registerStartCommand(cli: Goke) {
         { startBot },
         { ensureOpencode, runOnboarding, startCaffeinate },
         { emitEvent, gatewayCredentials, gatewayUrlsFromEnv, installUrlFor, readSavedCredentials, resolveCredentials, restApiUrl },
+        { hubBaseUrl },
         { openDb },
         { createAnalytics },
         { opencodeConfigDir, opencodeDbFile },
@@ -120,6 +122,7 @@ export function registerStartCommand(cli: Goke) {
         import('../main.ts'),
         import('../onboarding.ts'),
         import('../credentials.ts'),
+        import('../hub-icons.ts'),
         import('../db.ts'),
         import('../analytics.ts'),
         import('../opencode-server.ts'),
@@ -219,6 +222,10 @@ export function registerStartCommand(cli: Goke) {
         appId: credentials.appId,
         discordRestUrl: restApiUrl(credentials),
         hubIconDataDirs: [dataDir, path.join(os.homedir(), '.kimaki')],
+        ...(options.peerDataDir && {
+          peerDataDirs: String(options.peerDataDir).split(',').map((dir) => dir.trim()).filter(Boolean),
+          home: restApiUrl(credentials) && hubBaseUrl({ restUrl: restApiUrl(credentials), token: credentials.token }) ? 'Vocorum' : 'Discord',
+        }),
         lock,
         opencodeServiceFile: process.env['KIMAKI_OPENCODE_SERVICE_FILE'],
         ensureOpencode: true,
@@ -269,6 +276,7 @@ export function registerStartCommand(cli: Goke) {
           ...(options.coordinator ? [] : ['--coordinator', 'false']),
           ...(options.sortChannels ? ['--sort-channels'] : []),
           ...(options.machineName ? ['--machine-name', options.machineName] : []),
+          ...(options.peerDataDir ? ['--peer-data-dir', String(options.peerDataDir)] : []),
         ] })
         if (autostart instanceof Error) logger.warn('cannot write the autostart script', autostart)
       }

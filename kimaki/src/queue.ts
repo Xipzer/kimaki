@@ -59,12 +59,18 @@ export function discordMessageId(messageId: string): string | null {
   return /^\d+$/.test(messageId) ? messageId : null
 }
 
-function inputFields({ payload, channelId }: { payload: { text: string; metadata?: { readonly [key: string]: JsonValue } }; channelId: string }) {
+function inputFields({ payload, channelId, home = null }: { payload: { text: string; metadata?: { readonly [key: string]: JsonValue } }; channelId: string; home?: string | null }) {
   const text = stripTurnContext(payload.text)
   const discord = payload.metadata?.['discord']
   // Sent outside Discord (TUI, other clients): echo it like V1 external sync did.
   if (!discord || typeof discord !== 'object' || Array.isArray(discord)) {
     return { external: true, text, username: null, messageId: null, replyTo: null, echo: text.trim() ? formatEcho({ username: 'user', text }) : null }
+  }
+  // Fork (mirror.ts): typed on the other chat of a mirrored session; its message is not in this one.
+  const from = discord['home']
+  if (home && typeof from === 'string' && from !== home) {
+    const who = `${typeof discord['username'] === 'string' ? discord['username'] : 'user'} (${from})`
+    return { external: true, text, username: who, messageId: null, replyTo: null, echo: text.trim() ? formatEcho({ username: who, text }) : null }
   }
   const username = discord['username']
   const raw = discord['messageId']
@@ -166,7 +172,7 @@ export function enqueueInput(
   const { draft, emit, data, busy } = slice
   const { item, inboxID } = data
   if (item.type !== 'user' || draft.inbox.some((candidate) => candidate.inboxID === inboxID)) return
-  const { external, ...fields } = inputFields({ payload: item.payload, channelId: draft.channelId })
+  const { external, ...fields } = inputFields({ payload: item.payload, channelId: draft.channelId, home: draft.home })
   // The expanded prompt of a command Kimaki ran: the queue echo shows the typed command, never the template.
   const command = external ? draft.commandPending : null
   if (external) draft.commandPending = null
@@ -227,7 +233,7 @@ export function hydrateQueue(slice: Slice & { inbox: readonly SessionInboxInfo[]
       if (existing.acked) markStarted(slice, existing)
       return { ...existing, delivery: 'steer' }
     }
-    const { external: _external, ...fields } = inputFields({ payload: item.payload, channelId: draft.channelId })
+    const { external: _external, ...fields } = inputFields({ payload: item.payload, channelId: draft.channelId, home: draft.home })
     return { inboxID: item.id, delivery: item.delivery, ...fields, acked: item.delivery === 'queue' }
   })
 }

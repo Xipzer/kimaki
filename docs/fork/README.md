@@ -62,3 +62,7 @@ cd kimaki && env -u KIMAKI_DATA_DIR -u KIMAKI_LOCK_PORT -u KIMAKI_WHISPER_URL \
 ## Changes that external tools depend on
 
 Changes to anything external scripts call or parse (CLI output, commands, voice) also need an end-to-end run of those consumers in a test channel (results are kept privately, outside git). External consumers use Kimaki's public interfaces; they are not a design constraint.
+
+## Mirrored sessions (`mirror.ts`)
+
+`--peer-data-dir <dir>` pairs two Kimaki processes on one machine (Discord and a Vocorum hub) that share the OpenCode service. A root session one side starts is adopted by the other on its first event (`event-loop.ts` `resolveUnknownSession` → `adoptPeerSession`): same-ID thread when its channel is a project channel here, else a new thread. Prompts carry `metadata.discord.home`; `queue.ts` echoes the other side's as `» **user (Home):**`. `sessions.ts` never takes over a peer's marker (`isPeerMarker`). Hub pictures: `hub-icons.ts`.

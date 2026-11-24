@@ -443,6 +443,7 @@ test('CLI help documents the supported P7 commands', async () => {
       --gateway                     Use the shared Kimaki bot, no Discord app needed
       --gateway-callback-url <url>  Redirect here after the gateway install (appends ?guild_id=<id>)
       --install-url                 Print the install URL and exit (non-interactive onboarding)
+      --peer-data-dir <dir>         Fork: data dir of another Kimaki on this machine serving the same sessions on another chat (Discord and a Vocorum hub); comma-separated for several
       --machine-name <name>         Name in this machine's category "Kimaki <name>" (default: hostname)
       --restart-onboarding          Choose credentials again
       --worktrees                   Use a fresh Git worktree for new sessions unless the channel overrides it
