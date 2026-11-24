@@ -5,6 +5,7 @@
 
 import { spawn, type ChildProcess } from 'node:child_process'
 import fs from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
 import dedent from 'string-dedent'
@@ -217,6 +218,7 @@ export function registerStartCommand(cli: Goke) {
         token: credentials.token,
         appId: credentials.appId,
         discordRestUrl: restApiUrl(credentials),
+        hubIconDataDirs: [dataDir, path.join(os.homedir(), '.kimaki')],
         lock,
         opencodeServiceFile: process.env['KIMAKI_OPENCODE_SERVICE_FILE'],
         ensureOpencode: true,

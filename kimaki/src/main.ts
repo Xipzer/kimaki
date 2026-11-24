@@ -18,6 +18,7 @@ import { createEventLoop, type RunEnded } from './event-loop.ts'
 import { createIngress } from './ingress.ts'
 import { runLockRoute } from './lock-routes.ts'
 import { installShim, type LockServer } from './lock-server.ts'
+import { hubBaseUrl, syncHubIcons } from './hub-icons.ts'
 import { createLogger } from './logger.ts'
 import { createCoordinatorNotes } from './coordinator.ts'
 import { installPluginShim, watchOpencode, type OpencodeEndpoint } from './opencode-server.ts'
@@ -82,6 +83,9 @@ export type StartBotOptions = {
   sortChannels?: boolean
   // Default SORT_CHANNELS_DELAY_MS. Tests pass a short one.
   sortChannelsDelayMs?: number
+  // Fork: connected to a Vocorum hub, upload this machine's Discord bot avatar and server icon
+  // from the Discord bot in these data dirs (hub-icons.ts). The CLI passes them; tests never do.
+  hubIconDataDirs?: readonly string[]
 }
 
 export type BotHandle = Bot & {
@@ -262,6 +266,8 @@ export async function startBot(options: StartBotOptions): Promise<Error | BotHan
   const scheduling = await scheduler.start()
   if (scheduling instanceof Error) return scheduling
   logger.info(`bot ready as ${discord.user?.tag} in ${discord.guilds.cache.size} server(s)`)
+  const hubUrl = options.hubIconDataDirs && hubBaseUrl({ restUrl: options.discordRestUrl, token: options.token })
+  if (hubUrl && options.hubIconDataDirs) void syncHubIcons({ hubUrl, hubToken: options.token, dataDirs: options.hubIconDataDirs })
   const projects = await countUserProjects({ db, dataDir: options.dataDir })
   if (projects instanceof Error) logger.warn(projects)
   options.analytics.track('bot_started', {
