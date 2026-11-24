@@ -4,7 +4,7 @@ import { createClient } from '@libsql/client'
 import { expect, test } from 'vitest'
 
 import { tempDataDir } from './test/harness.ts'
-import { chatGPTCredential, isVoiceAttachment } from './voice.ts'
+import { chatGPTCredential, isVoiceAttachment, NoAudioError, transcribe } from './voice.ts'
 
 test('chatGPTCredential skips token sharing and expired logins', async () => {
   const dir = tempDataDir()
@@ -38,4 +38,20 @@ test('isVoiceAttachment: browser-recorded webm voice notes are voice, webm video
     at('clip.webm', 'video/webm'),
     at('clip.webm', 'video/webm', { width: 640, height: 480 }),
   ]).toEqual([true, true, true, false, false])
+})
+
+test('transcribe: a recording with no sound (container framing only) fails at once, without calling a transcriber', async () => {
+  // What Chrome uploads when it stopped before the microphone delivered audio: a WebM Cues element, no header.
+  const result = await transcribe({
+    db: undefined as never,
+    token: '',
+    opencodeDbFile: '',
+    audio: Buffer.from('1c53bb6b80', 'hex'),
+    mediaType: 'audio/webm',
+    directory: '.',
+    agents: [],
+    inSession: true,
+  })
+  expect(result).toBeInstanceOf(NoAudioError)
+  expect((result as Error).message).toMatchInlineSnapshot(`"The voice message has no sound in it (5 bytes). Check the microphone and record it again."`)
 })

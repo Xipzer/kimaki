@@ -87,6 +87,15 @@ export class NoTranscriptionKeyError extends errore.createTaggedError({
   message: 'Voice transcription needs ChatGPT signed in to OpenCode, or an OpenAI or Gemini API key. Run /transcription-key, or kimaki bot keys set --openai <key>',
 }) {}
 
+// A browser recorder stopped before the microphone delivered sound uploads a WebM without
+// its header, only trailing framing (5 bytes). No transcriber can decode that: fail at once.
+export class NoAudioError extends errore.createTaggedError({
+  name: 'NoAudioError',
+  message: 'The voice message has no sound in it ($bytes bytes). Check the microphone and record it again.',
+}) {}
+
+const WEBM_MAGIC = Buffer.from('1a45dfa3', 'hex')
+
 type TranscriptionFailure = TranscriptionError | TranscriptionApiError | TranscriptionBlockedError | EmptyTranscriptionError
 
 export type VoiceRoute = 'steer' | 'queue' | 'btw' | 'new-session'
@@ -509,7 +518,7 @@ async function transcribeViaGateway({ audio, mediaType, clientId, clientSecret, 
 
 type ChatGPTCredential = { accessToken: string; accountId: string | null }
 
-const AUDIO_EXTENSIONS: Record<string, string> = { 'audio/ogg': 'ogg', 'audio/mp4': 'm4a', 'audio/mpeg': 'mp3', 'audio/wav': 'wav' }
+const AUDIO_EXTENSIONS: Record<string, string> = { 'audio/ogg': 'ogg', 'audio/mp4': 'm4a', 'audio/mpeg': 'mp3', 'audio/wav': 'wav', 'audio/webm': 'webm' }
 
 // Same claim the Codex CLI sends as chatgpt-account-id.
 function chatGPTAccountId(accessToken: string): string | null {
@@ -713,7 +722,8 @@ export async function transcribe({
   inSession: boolean
   // Before each wait between rounds; `attempt` is the number of the coming round.
   onRetry?: (retry: { delayMs: number; attempt: number }) => void
-}): Promise<DbError | NoTranscriptionKeyError | TranscriptionFailure | TranscriptionResult> {
+}): Promise<DbError | NoTranscriptionKeyError | NoAudioError | TranscriptionFailure | TranscriptionResult> {
+  if (mediaType === 'audio/webm' && !audio.subarray(0, 4).equals(WEBM_MAGIC)) return new NoAudioError({ bytes: String(audio.length) })
   const list = await transcribers({ db, token, opencodeDbFile })
   if (list instanceof Error) return list
   const tool = buildTranscriptionTool({ agentNames: agents.map((agent) => agent.name), inSession })
