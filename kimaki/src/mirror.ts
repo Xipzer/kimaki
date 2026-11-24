@@ -19,6 +19,7 @@
 //   prompts:  PUT /hub/mirror/messages/:id shows a Discord-typed prompt as the person's own
 //             message (never delivered to hub bots) instead of the echo line (mirrorPrompt)
 
+import fs from 'node:fs'
 import path from 'node:path'
 
 import { createClient } from '@libsql/client'
@@ -105,12 +106,14 @@ export async function adoptPeerSession(bot: Bot, { sessionId, held }: { sessionI
   return threadId
 }
 
+// `body`: JSON, or a FormData (multipart) or raw bytes as is.
 async function hubPut(bot: Pick<Bot, 'hubUrl' | 'token'>, pathname: string, body: unknown): Promise<boolean> {
   if (!bot.hubUrl) return false
+  const raw = body instanceof FormData || body instanceof Uint8Array
   const response = await fetch(`${bot.hubUrl}${pathname}`, {
     method: 'PUT',
-    headers: { authorization: `Bot ${bot.token}`, 'content-type': 'application/json' },
-    body: JSON.stringify(body),
+    headers: { authorization: `Bot ${bot.token}`, ...(!raw && { 'content-type': 'application/json' }), ...(body instanceof Uint8Array && { 'content-type': 'application/octet-stream' }) },
+    body: raw ? (body as FormData | Uint8Array) : JSON.stringify(body),
     signal: AbortSignal.timeout(30_000),
   }).catch((error: Error) => error)
   if (response instanceof Error || !response.ok) {
@@ -123,16 +126,25 @@ async function hubPut(bot: Pick<Bot, 'hubUrl' | 'token'>, pathname: string, body
 const DISCORD_EPOCH = 1_420_070_400_000
 
 // A Discord-typed prompt in the hub thread, as the person's own message with its Discord id.
+// Attachments go as multipart (payload_json + files[n]) so the hub keeps the files.
 export function mirrorPrompt(bot: Pick<Bot, 'hubUrl' | 'token'>) {
-  return (threadId: string, prompt: MirroredPrompt) =>
-    hubPut(bot, `/hub/mirror/messages/${prompt.messageId}`, {
+  return async (threadId: string, prompt: MirroredPrompt) => {
+    const files = (await Promise.all(prompt.files.map(async (file) => ({ ...file, data: await fs.promises.readFile(file.path).catch(() => null) })))).filter((file) => file.data)
+    const payload = {
       id: prompt.messageId,
       channel_id: threadId,
       author: { id: prompt.userId, username: prompt.username },
       content: prompt.text,
       timestamp: new Date(Number(BigInt(prompt.messageId) >> 22n) + DISCORD_EPOCH).toISOString(),
       type: 0,
-    })
+      attachments: files.map((file, index) => ({ id: String(index), filename: file.name })),
+    }
+    if (files.length === 0) return hubPut(bot, `/hub/mirror/messages/${prompt.messageId}`, payload)
+    const form = new FormData()
+    form.append('payload_json', JSON.stringify(payload))
+    files.forEach((file, index) => form.append(`files[${index}]`, new Blob([new Uint8Array(file.data!)]), file.name))
+    return hubPut(bot, `/hub/mirror/messages/${prompt.messageId}`, form)
+  }
 }
 
 // Hub side at start: the peer's project channels exist here with the same ids and directories.
@@ -168,6 +180,9 @@ export async function syncPeerChannels(bot: Bot): Promise<void> {
       const guild = headers ? await getJson(`${discordApi}/guilds/${guildId}`, headers) : null
       if (!(await hubPut(bot, `/hub/mirror/guilds/${guildId}`, { name: typeof guild?.['name'] === 'string' ? guild['name'] : '' }))) continue
       joined.add(guildId)
+      // Its server icon too, like Discord's.
+      const icon = typeof guild?.['icon'] === 'string' ? await fetch(`https://cdn.discordapp.com/icons/${guildId}/${guild['icon']}.png?size=256`, { signal: AbortSignal.timeout(15_000) }).then((r) => (r.ok ? r.arrayBuffer() : null)).catch(() => null) : null
+      if (icon) await hubPut(bot, `/hub/mirror/guilds/${guildId}/icon`, new Uint8Array(icon))
     }
     // Imported channels exist already; others are created from Discord, category first.
     const exists = await bot.discord.channels.fetch(row.channel_id).catch(() => null)
