@@ -13,6 +13,7 @@
 // message (≤ 2000 chars) so a burst of tool lines does not hit the 5 msg / 5s
 // channel limit.
 
+import type { MirroredPrompt } from './queue.ts'
 import { execFile } from 'node:child_process'
 import path from 'node:path'
 import { promisify } from 'node:util'
@@ -188,7 +189,10 @@ function drop(effects: readonly Effect[]) {
 
 export type MarkViewed = (input: { sessionId: string; idle: number }) => Promise<Error | void>
 
-export function createEffectsRunner({ discord, markViewed, footerDefaults }: { discord: Client; markViewed: MarkViewed; footerDefaults: FooterDefaults }) {
+// Fork (mirror.ts): shows a prompt typed on the other chat as the person's own message; true when it did.
+export type MirrorPrompt = (threadId: string, prompt: MirroredPrompt) => Promise<boolean>
+
+export function createEffectsRunner({ discord, markViewed, footerDefaults, mirrorPrompt }: { discord: Client; markViewed: MarkViewed; footerDefaults: FooterDefaults; mirrorPrompt?: MirrorPrompt }) {
   const workers = new Map<string, ThreadWorker>()
   // After stop(): no more sends or typing, even from effects already queued.
   const lifecycle = { closed: false }
@@ -405,6 +409,10 @@ export function createEffectsRunner({ discord, markViewed, footerDefaults }: { d
         if (!live()) return drop(batch.slice(index))
         await runOne(threadId, effect)
         continue
+      }
+      if (effect.type === 'send' && effect.mirror && mirrorPrompt) {
+        await flush()
+        if (await mirrorPrompt(threadId, effect.mirror)) continue
       }
       const text = effect.type === 'send' ? effect.text : await footerText({ effect, footerDefaults })
       const notify = effect.notify === true

@@ -44,7 +44,12 @@ export type PendingInput = {
   acked: boolean
   // Line from the prompt metadata (scheduled runs) or for prompts sent outside Discord; shown on delivery even without an ack.
   echo: string | null
+  // Fork (mirror.ts): typed on the other chat of a mirrored session. A hub side shows it as
+  // the person's own message instead of the echo line (effects.ts mirrorPrompt).
+  mirror?: MirroredPrompt
 }
+
+export type MirroredPrompt = { messageId: string; userId: string; username: string; text: string }
 
 export function queuedItems(view: Pick<ThreadView, 'inbox'>): readonly PendingInput[] {
   return view.inbox.filter((item) => item.delivery === 'queue')
@@ -64,13 +69,16 @@ function inputFields({ payload, channelId, home = null }: { payload: { text: str
   const discord = payload.metadata?.['discord']
   // Sent outside Discord (TUI, other clients): echo it like V1 external sync did.
   if (!discord || typeof discord !== 'object' || Array.isArray(discord)) {
-    return { external: true, text, username: null, messageId: null, replyTo: null, echo: text.trim() ? formatEcho({ username: 'user', text }) : null }
+    return { external: true, text, username: null, messageId: null, replyTo: null, echo: text.trim() ? formatEcho({ username: 'user', text }) : null, mirror: undefined }
   }
   // Fork (mirror.ts): typed on the other chat of a mirrored session; its message is not in this one.
   const from = discord['home']
   if (home && typeof from === 'string' && from !== home) {
-    const who = `${typeof discord['username'] === 'string' ? discord['username'] : 'user'} (${from})`
-    return { external: true, text, username: who, messageId: null, replyTo: null, echo: text.trim() ? formatEcho({ username: who, text }) : null }
+    const name = typeof discord['username'] === 'string' ? discord['username'] : 'user'
+    const who = `${name} (${from})`
+    const [rawId, userId] = [discord['messageId'], discord['userId']]
+    const mirror = typeof rawId === 'string' && /^\d+$/.test(rawId) && typeof userId === 'string' ? { messageId: rawId, userId, username: name, text } : undefined
+    return { external: true, text, username: who, messageId: null, replyTo: null, echo: text.trim() ? formatEcho({ username: who, text }) : null, mirror }
   }
   const username = discord['username']
   const raw = discord['messageId']
@@ -85,6 +93,7 @@ function inputFields({ payload, channelId, home = null }: { payload: { text: str
     replyTo: discord['threadId'] === channelId ? messageId : null,
     // Shown when a prompt without a Discord message is taken (wake, scheduled run).
     echo: typeof echo === 'string' ? echo : null,
+    mirror: undefined,
   }
 }
 
@@ -183,7 +192,7 @@ export function enqueueInput(
   draft.inbox.push(pending)
   if (item.delivery !== 'queue') {
     if (!meta.echo) return
-    emit({ type: 'send', text: meta.echo, echo: true })
+    emit({ type: 'send', text: meta.echo, echo: true, ...(meta.mirror && { mirror: meta.mirror }) })
     draft.lastKind = null
     return
   }
@@ -199,7 +208,7 @@ export function deliverQueued(slice: Slice & { inboxID: string }) {
   if (!item || (!item.acked && !item.echo)) return
   slice.draft.lastKind = null
   if (item.acked) return markStarted(slice, item)
-  slice.emit({ type: 'send', text: item.echo ?? formatEcho(item), echo: true })
+  slice.emit({ type: 'send', text: item.echo ?? formatEcho(item), echo: true, ...(item.mirror && { mirror: item.mirror }) })
 }
 
 export function cancelQueued(slice: Slice & { inboxID: string }) {

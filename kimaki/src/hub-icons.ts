@@ -38,7 +38,7 @@ export function hubBaseUrl({ restUrl, token }: { restUrl: string | null | undefi
 
 // This machine's Discord bot: the self-hosted token and the most common guild of the
 // project channels, from the first data dir that has one.
-async function discordSource(dataDirs: readonly string[]): Promise<{ token: string; guildId: string | null } | null> {
+export async function discordSource(dataDirs: readonly string[]): Promise<{ token: string; guildId: string | null } | null> {
   for (const dir of [...new Set(dataDirs.map((d) => path.resolve(d)))]) {
     const client = createClient({ url: `file:${path.join(dir, 'kimaki.db')}` })
     const found = await (async () => {
@@ -53,7 +53,7 @@ async function discordSource(dataDirs: readonly string[]): Promise<{ token: stri
   return null
 }
 
-async function getJson(url: string, headers: Record<string, string>): Promise<Record<string, unknown> | null> {
+export async function getJson(url: string, headers: Record<string, string>): Promise<Record<string, unknown> | null> {
   const response = await fetch(url, { headers, signal: AbortSignal.timeout(15_000) }).catch(() => null)
   if (!response?.ok) return null
   const body = (await response.json().catch(() => null)) as unknown

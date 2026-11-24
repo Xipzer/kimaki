@@ -88,6 +88,8 @@ export type Bot = {
   // (Discord and a Vocorum hub). `home` names this side in prompts; peers are their data dirs.
   home: string | null
   peerDataDirs: readonly string[]
+  // Base URL of the Vocorum hub this bot is connected to, when it mirrors a peer (mirror.ts).
+  hubUrl: string | null
   features: BotFeatures
 }
 

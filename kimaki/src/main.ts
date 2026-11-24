@@ -20,7 +20,7 @@ import { createIngress } from './ingress.ts'
 import { runLockRoute } from './lock-routes.ts'
 import { installShim, type LockServer } from './lock-server.ts'
 import { hubBaseUrl, syncHubIcons } from './hub-icons.ts'
-import { adoptPeerSession } from './mirror.ts'
+import { adoptPeerSession, mirrorPrompt, syncPeerChannels } from './mirror.ts'
 import type { ThreadEvent } from './thread-reducer.ts'
 import { createLogger } from './logger.ts'
 import { createCoordinatorNotes } from './coordinator.ts'
@@ -161,8 +161,11 @@ export async function startBot(options: StartBotOptions): Promise<Error | BotHan
   const store = createBotStore()
   const recorder = createEventRecorder({ dataDir: options.dataDir })
   cleanup.defer(() => recorder.close())
+  // Fork (mirror.ts): on a Vocorum hub with a peer, prompts typed on Discord show as the person's own messages.
+  const hubUrl = (options.peerDataDirs?.length ?? 0) > 0 ? hubBaseUrl({ restUrl: options.discordRestUrl, token: options.token }) : null
   const effects = createEffectsRunner({
     discord,
+    ...(hubUrl && { mirrorPrompt: mirrorPrompt({ hubUrl, token: options.token }) }),
     // Viewed effects come from OpenCode events, so `opencode` below is always set by then.
     markViewed: async ({ sessionId, idle }) => {
       const result = await oc({ opencode }, 'mark session viewed', (client) => client.session.view({ sessionID: sessionId, idle }))
@@ -183,11 +186,20 @@ export async function startBot(options: StartBotOptions): Promise<Error | BotHan
     coordinatorNotes.runEnded(run)
   }
   // Set once the bot exists: adopting a peer's session needs it (mirror.ts).
-  const mirror: { adopt: ((sessionId: string, held: readonly ThreadEvent[]) => Promise<string | null>) | null } = { adopt: null }
+  const mirror: { adopt: ((sessionId: string, held: readonly ThreadEvent[]) => Promise<string | null>) | null; ready: Promise<void>; markReady: () => void } = {
+    adopt: null,
+    ready: Promise.resolve(),
+    markReady: () => undefined,
+  }
+  mirror.ready = new Promise((resolve) => (mirror.markReady = resolve))
   const eventLoop = createEventLoop({
     store, db, discord, effects, recorder, analytics: options.analytics, onRunEnded, onTranscriptDue,
     home: options.home ?? null,
-    adopt: (sessionId, held) => mirror.adopt?.(sessionId, held) ?? Promise.resolve(null),
+    // Waits until the hub side has the peer's project channels (syncPeerChannels).
+    adopt: async (sessionId, held) => {
+      await mirror.ready
+      return mirror.adopt ? mirror.adopt(sessionId, held) : null
+    },
   })
   const loaded = await eventLoop.load()
   if (loaded instanceof Error) return loaded
@@ -233,6 +245,7 @@ export async function startBot(options: StartBotOptions): Promise<Error | BotHan
     warmupTimers: options.warmupTimers ?? null,
     home: options.home ?? null,
     peerDataDirs: (options.peerDataDirs ?? []).map((dir) => path.resolve(dir)),
+    hubUrl,
     features: { withSleepLock: createSleepLock(), waitForPlugin: createPluginWait({ opencode }), agentUi, voiceCalls, ingress },
   }
   if (bot.peerDataDirs.length > 0) mirror.adopt = (sessionId, held) => adoptPeerSession(bot, { sessionId, held })
@@ -282,8 +295,11 @@ export async function startBot(options: StartBotOptions): Promise<Error | BotHan
   const scheduling = await scheduler.start()
   if (scheduling instanceof Error) return scheduling
   logger.info(`bot ready as ${discord.user?.tag} in ${discord.guilds.cache.size} server(s)`)
-  const hubUrl = options.hubIconDataDirs && hubBaseUrl({ restUrl: options.discordRestUrl, token: options.token })
-  if (hubUrl && options.hubIconDataDirs) void syncHubIcons({ hubUrl, hubToken: options.token, dataDirs: options.hubIconDataDirs })
+  const iconHub = options.hubIconDataDirs && hubBaseUrl({ restUrl: options.discordRestUrl, token: options.token })
+  if (iconHub && options.hubIconDataDirs) void syncHubIcons({ hubUrl: iconHub, hubToken: options.token, dataDirs: options.hubIconDataDirs })
+  // Before the first event can need a project channel the peer has.
+  if (bot.hubUrl) await syncPeerChannels(bot)
+  mirror.markReady()
   const projects = await countUserProjects({ db, dataDir: options.dataDir })
   if (projects instanceof Error) logger.warn(projects)
   options.analytics.track('bot_started', {
