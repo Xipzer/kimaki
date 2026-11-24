@@ -35,7 +35,13 @@ export function registerSendCommand(cli: Goke) {
     .option('--send-at <when>', 'Schedule: UTC ISO date ending in Z, or cron expression (UTC)')
     .option('--pre-run <command>', 'Scheduled only: run first in the project. Exit 0 starts, stdout is appended')
     .option('--allow-concurrency', 'Scheduled only: allow overlapping runs of this routine')
+    .option('--host <ssh-alias>', 'Send on another machine over ssh, naming this session there so both sides link (fork)')
+    .option('--from-session <id>', 'Sending session on another machine (set by --host)')
+    .option('--from-thread <id>', 'Thread of the sending session (set by --host)')
+    .option('--from-machine <name>', 'Machine of the sending session (set by --host)')
     .action(async (options) => {
+      // Fork: linked sessions across machines (session-links.ts).
+      if (options.host) return sendOverSsh({ host: String(options.host), dataDir: options.dataDir })
       const wait = options.wait === undefined ? undefined : options.wait === '' ? DEFAULT_WAIT_SECONDS : Number(options.wait)
       if (wait !== undefined && !(Number.isFinite(wait) && wait > 0 && wait <= DEFAULT_WAIT_SECONDS)) fail(new Error('--wait takes a positive number of seconds, at most 86400'))
       if (wait !== undefined && options.sendAt) fail(new Error('--wait cannot be used with --send-at: the routine runs later'))
@@ -48,6 +54,7 @@ export function registerSendCommand(cli: Goke) {
         prompt: options.prompt, name: options.name, agent: options.agent, model: options.model, user: options.user,
         cwd: options.cwd, worktree: options.worktree, baseBranch: options.baseBranch, parentSessionId: options.parentSession,
         permissions: options.permission, notifyOnly: options.notifyOnly,
+        sourceSessionId: options.fromSession, sourceThreadId: options.fromThread, sourceMachine: options.fromMachine,
         files: (options.file ?? []).map((file) => ({ uri: pathToFileURL(path.resolve(file)).href, name: path.basename(file) })),
       }
       const result = await callBot({
@@ -84,6 +91,56 @@ export function registerSendCommand(cli: Goke) {
         timeout: `${wait}s`,
       })
     })
+}
+
+// Fork: `kimaki send --host <alias> ...` runs the same send on that machine with
+// --from-* naming this session, prints its answer and links both sides here.
+export function remoteSendArgs({ argv, from }: { argv: readonly string[]; from: { session?: string; thread?: string; machine: string } }): string[] {
+  const args: string[] = []
+  for (let i = argv.indexOf('send') + 1; i < argv.length; i++) {
+    const arg = argv[i]!
+    if (arg === '--host') { i++; continue }
+    if (arg.startsWith('--host=') || arg === '--data-dir' || arg.startsWith('--data-dir=') || arg.startsWith('--from-')) {
+      if (!arg.includes('=')) i++
+      continue
+    }
+    args.push(arg)
+  }
+  if (from.session) args.push('--from-session', from.session)
+  if (from.thread) args.push('--from-thread', from.thread)
+  args.push('--from-machine', from.machine)
+  return args
+}
+
+const shellQuote = (value: string) => `'${value.replace(/'/g, `'\\''`)}'`
+
+async function sendOverSsh({ host, dataDir }: { host: string; dataDir: string | undefined }) {
+  const [{ execFile }, { promisify }, os] = await Promise.all([import('node:child_process'), import('node:util'), import('node:os')])
+  const self = process.env['OPENCODE_SESSION_ID'] || undefined
+  let thread: string | undefined
+  if (self) {
+    const opened = await openCliDb(dataDir)
+    const row = await opened.db.query.thread_sessions.findFirst({ where: { session_id: self } }).catch(() => undefined)
+    opened.close()
+    thread = row?.thread_id
+  }
+  const args = remoteSendArgs({ argv: process.argv, from: { session: self, thread, machine: os.hostname() } })
+  const command = `export PATH="$HOME/.kimaki/bin:$HOME/.local/bin:$HOME/.bun/bin:$PATH"; kimaki send ${args.map(shellQuote).join(' ')}`
+  const ran = await promisify(execFile)('ssh', ['-o', 'BatchMode=yes', host, command], { maxBuffer: 64 * 1024 * 1024, timeout: 26 * 60_000 })
+    .catch((error: Error & { stdout?: string; stderr?: string }) => error)
+  if (ran instanceof Error) fail(new Error(`send on ${host} failed: ${(ran.stderr || ran.message).trim()}`))
+  process.stdout.write(ran.stdout)
+  const first = ran.stdout.split('\n').find((line) => line.startsWith('{'))
+  const answer = first ? (JSON.parse(first) as { threadId?: unknown; sessionId?: unknown }) : null
+  if (!self || !answer || typeof answer.threadId !== 'string') return
+  const sessionId = typeof answer.sessionId === 'string' ? answer.sessionId : `thread:${answer.threadId}`
+  const linked = await callBot({
+    dataDir: dataDirOrDefault(dataDir),
+    route: 'session.links',
+    signal: AbortSignal.timeout(30_000),
+    input: { sessionId: self, add: sessionId, remoteThreadId: answer.threadId, remoteMachine: host },
+  })
+  if (linked instanceof Error) process.stderr.write(`linked on ${host}, but not here: ${linked.message}\n`)
 }
 
 // routine list / edit / delete / run, sleep

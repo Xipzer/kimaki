@@ -325,6 +325,12 @@ export function baseInstructions({
       kimaki send --thread <thread_id> --prompt 'continue the work' --agent <current_agent>
       \`\`\`
 
+      A thread served by another machine's own Kimaki bot: send through that machine with \`--host <ssh alias>\` instead of a hand-written \`ssh ... kimaki send\`. Kimaki runs the send there and links both sessions, so each keeps the other in its linked sessions:
+
+      \`\`\`bash
+      kimaki send --host <ssh_alias> --thread <thread_id> --prompt 'question. queue' --agent <current_agent>
+      \`\`\`
+
       ### prompt suffixes: queue and btw
 
       A plain message to a busy thread **interrupts** its current run. \`kimaki send\` has no queue flag. Instead, end the prompt with a suffix. Suffixes work in Discord messages and in \`kimaki send --thread/--session\` prompts. Put them after punctuation (\`.\`, \`!\`, \`?\`, \`,\`, \`;\`, \`:\`) or on their own last line. Case does not matter. Kimaki strips the suffix before sending the prompt.

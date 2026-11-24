@@ -7,6 +7,11 @@
 //   a prompt to A that names ses_… or a Kimaki thread   ─┘
 //   kimaki session links --add/--remove                  ─▶ same table, same entries
 //
+// Across machines (each with its own bot) the sender names itself in the send:
+//   machine 1: kimaki send --host <ssh alias> --thread X   ─ssh─▶ machine 2: kimaki send --thread X --from-session A --from-thread T --from-machine M
+//   machine 2 links X ⇄ A (thread T, machine M) and shows "from M · thread T · session A" under the prompt;
+//   machine 1 links A ⇄ X from the answer {threadId, sessionId}. Same-bot remote envelopes carry the same fields.
+//
 // The entry lists the 8 most recent links. Sessions of another machine are
 // linked too (their ID is enough to `kimaki send --session`), but only local
 // sessions get the entry. A running session's entry is written once its run
@@ -30,11 +35,16 @@ const MAX_MENTIONS = 5
 const SESSION_ID = /\bses_[0-9A-Za-z]{26}\b/g
 const THREAD_REF = /discord\.com\/channels\/\d+\/(\d{17,20})|<#(\d{17,20})>/g
 
-export type LinkSource = 'send' | 'parent' | 'mention' | 'manual'
+export type LinkSource = 'send' | 'parent' | 'mention' | 'manual' | 'remote'
+
+// The other side when it lives on another machine.
+export type RemoteSide = { sessionId?: string | null; threadId?: string | null; machine?: string | null; title?: string | null }
 
 export type SessionLink = {
+  // `thread:<id>` while the session of another machine's thread is unknown.
   sessionId: string
   threadId: string | null
+  machine: string | null
   title: string | null
   source: string
   lastContactAt: Date
@@ -50,7 +60,8 @@ export function mentionedIds(text: string): { sessionIds: string[]; threadIds: s
 export function linksBlock(links: readonly SessionLink[]): string {
   if (links.length === 0) return ''
   const lines = links.slice(0, MAX_SHOWN_LINKS).map((link) => {
-    const parts = [link.title ?? 'untitled', link.threadId ? `thread ${link.threadId}` : null, `session ${link.sessionId}`, `last contact ${link.lastContactAt.toISOString().slice(0, 10)}`]
+    const session = link.sessionId.startsWith('thread:') ? null : `session ${link.sessionId}`
+    const parts = [link.title ?? 'untitled', link.threadId ? `thread ${link.threadId}` : null, session, link.machine ? `on ${link.machine}` : null, `last contact ${link.lastContactAt.toISOString().slice(0, 10)}`]
     return `- ${parts.filter(Boolean).join(' · ')}`
   })
   return [
@@ -59,7 +70,7 @@ export function linksBlock(links: readonly SessionLink[]): string {
     'Your liaisons: sessions you worked with. Ask them instead of redoing their work. They survive compaction of this session.',
     ...lines,
     '',
-    "Message one with `kimaki send --thread <thread> --prompt '... queue' --agent <current_agent>` (or `--session <session>`); the `queue` suffix waits for its current run.",
+    "Message one with `kimaki send --thread <thread> --prompt '... queue' --agent <current_agent>` (or `--session <session>`); the `queue` suffix waits for its current run. One on another machine: add `--host <ssh alias of that machine>`.",
     'Fix the list with `kimaki session links --add <id>` or `--remove <id>`.',
   ].join('\n')
 }
@@ -95,8 +106,9 @@ export async function listLinks(bot: Bot, sessionId: string): Promise<DbError | 
     const thread = threads.find((entry) => entry.session_id === row.linked_session_id)
     return {
       sessionId: row.linked_session_id,
-      threadId: thread?.thread_id ?? bot.store.getState().sessionThreads[row.linked_session_id] ?? null,
-      title: thread?.last_synced_name ?? null,
+      threadId: row.linked_thread_id ?? thread?.thread_id ?? bot.store.getState().sessionThreads[row.linked_session_id] ?? null,
+      machine: row.linked_machine ?? null,
+      title: row.linked_title ?? thread?.last_synced_name ?? null,
       source: row.source,
       lastContactAt: row.last_contact_at ?? new Date(0),
     }
@@ -151,21 +163,41 @@ export async function refreshLinksEntry(bot: Bot, sessionId: string): Promise<vo
   cache.set(sessionId, value)
 }
 
-export async function linkSessions(bot: Bot, { a, b, source }: { a: string; b: string; source: LinkSource }): Promise<DbError | void> {
+// `remote`: b lives on another machine; its row in a's list keeps how to reach it.
+export async function linkSessions(bot: Bot, { a, b, source, remote }: { a: string; b: string; source: LinkSource; remote?: RemoteSide }): Promise<DbError | void> {
   if (!a || !b || a === b) return
   const now = new Date()
-  for (const [from, to] of [[a, b], [b, a]] as const) {
+  const meta = remote
+    ? Object.fromEntries(Object.entries({ linked_thread_id: remote.threadId, linked_machine: remote.machine, linked_title: remote.title }).filter(([, value]) => value))
+    : {}
+  for (const [from, to, extra] of [[a, b, meta], [b, a, {}]] as const) {
     const saved = await bot.db
       .insert(schema.session_links)
-      .values({ session_id: from, linked_session_id: to, source, last_contact_at: now })
-      .onConflictDoUpdate({ target: [schema.session_links.session_id, schema.session_links.linked_session_id], set: { last_contact_at: now } })
+      .values({ session_id: from, linked_session_id: to, source, last_contact_at: now, ...extra })
+      .onConflictDoUpdate({ target: [schema.session_links.session_id, schema.session_links.linked_session_id], set: { last_contact_at: now, ...extra } })
       .catch((cause) => new DbError({ operation: 'write session_links', cause }))
     if (saved instanceof Error) return saved
   }
+  // The session of a thread that was linked before it was known replaces the placeholder.
+  if (remote?.threadId && !b.startsWith('thread:')) await unlinkSessions(bot, { a, b: `thread:${remote.threadId}`, refresh: false })
   await Promise.all([refreshLinksEntry(bot, a), refreshLinksEntry(bot, b)])
 }
 
-export async function unlinkSessions(bot: Bot, { a, b }: { a: string; b: string }): Promise<DbError | void> {
+// Links a local session with one on another machine, from what the send carried.
+export async function linkRemote(bot: Bot, { sessionId, remote }: { sessionId: string; remote: RemoteSide }): Promise<void> {
+  const other = remote.sessionId ?? (remote.threadId ? `thread:${remote.threadId}` : null)
+  if (!other) return
+  const linked = await linkSessions(bot, { a: sessionId, b: other, source: 'remote', remote })
+  if (linked instanceof Error) logger.warn(linked)
+}
+
+// The line under a prompt from another machine. Stable: other tools parse it.
+export function sourceLine(remote: RemoteSide): string {
+  const parts = [`from ${remote.machine ?? 'another machine'}`, remote.threadId ? `thread ${remote.threadId}` : null, remote.sessionId ? `session ${remote.sessionId}` : null]
+  return `-# ${parts.filter(Boolean).join(' · ')}`
+}
+
+export async function unlinkSessions(bot: Bot, { a, b, refresh = true }: { a: string; b: string; refresh?: boolean }): Promise<DbError | void> {
   const removed = await bot.db
     .delete(schema.session_links)
     .where(orm.or(
@@ -174,7 +206,7 @@ export async function unlinkSessions(bot: Bot, { a, b }: { a: string; b: string 
     ))
     .catch((cause) => new DbError({ operation: 'delete session_links', cause }))
   if (removed instanceof Error) return removed
-  await Promise.all([refreshLinksEntry(bot, a), refreshLinksEntry(bot, b)])
+  if (refresh) await Promise.all([refreshLinksEntry(bot, a), refreshLinksEntry(bot, b)])
 }
 
 // Hook for every prompt that reaches a session: the sending session, the

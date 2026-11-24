@@ -176,9 +176,13 @@ export const session_sleeps = s.sqliteTable('session_sleeps', {
 export const session_links = s.sqliteTable('session_links', {
   session_id: s.text('session_id').notNull(),
   linked_session_id: s.text('linked_session_id').notNull(),
-  source: s.text('source', { enum: ['send', 'parent', 'mention', 'manual'] }).notNull(),
+  source: s.text('source', { enum: ['send', 'parent', 'mention', 'manual', 'remote'] }).notNull(),
   created_at: datetime('created_at').default(orm.sql`CURRENT_TIMESTAMP`),
   last_contact_at: datetime('last_contact_at').default(orm.sql`CURRENT_TIMESTAMP`),
+  // A session of another machine: how to reach and name it (linked_session_id is `thread:<id>` while its session is unknown).
+  linked_thread_id: s.text('linked_thread_id'),
+  linked_machine: s.text('linked_machine'),
+  linked_title: s.text('linked_title'),
 }, (table) => [
   s.primaryKey({ columns: [table.session_id, table.linked_session_id] }),
   s.index('session_links_session_id_last_contact_at_idx').on(table.session_id, table.last_contact_at),

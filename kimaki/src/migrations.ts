@@ -184,6 +184,11 @@ async function prepareDbFile({ dataDir }: { dataDir: string }): Promise<DbError 
 // ALTER TABLE migrations here, before schema.sql when a new index needs them.
 async function migrateSchema({ client }: { client: Client }): Promise<void> {
   for (const statement of schemaStatements()) await client.execute(statement)
+  // Fork: columns added to session_links after it first shipped (session-links.ts).
+  const columns = new Set((await client.execute('PRAGMA table_info(session_links)')).rows.map((row) => String(row['name'])))
+  for (const column of ['linked_thread_id', 'linked_machine', 'linked_title']) {
+    if (!columns.has(column)) await client.execute(`ALTER TABLE session_links ADD COLUMN ${column} text`)
+  }
   await client.execute(`PRAGMA user_version = ${DB_VERSION}`)
 }
 

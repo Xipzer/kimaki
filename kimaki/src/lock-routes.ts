@@ -23,7 +23,7 @@ import { RESTART_EXIT_CODE } from './lock-server.ts'
 import { abort, cancelQueuedPrompt, clearQueue, send, shell, upload } from './prompt.ts'
 import { createTask, deleteTask, editTask, runTaskNow } from './scheduler.ts'
 import * as schema from './schema.ts'
-import { linkSessions, listLinks, resolveLinkTarget, unlinkSessions } from './session-links.ts'
+import { linkRemote, linkSessions, listLinks, resolveLinkTarget, unlinkSessions } from './session-links.ts'
 import { channelForDirectory, channelForSession, fork, resume, sessionCwd } from './sessions.ts'
 import { createSleep, sleepsWarm } from './sleeps.ts'
 import { conversationTyping, isBusy, workersTyping } from './thread-reducer.ts'
@@ -89,6 +89,10 @@ const sendFields = {
   wait: z.number({ error: 'wait must be a number of seconds' }).positive({ error: 'wait must be a positive number of seconds' }).optional(),
   // OPENCODE_SESSION_ID of the shell that ran `kimaki send`: a coordinator wakes when the runs it prompted end.
   senderSessionId: text('senderSessionId').optional(),
+  // Fork: the sending session when it lives on another machine (`--from-*`, session-links.ts).
+  sourceSessionId: text('sourceSessionId').optional(),
+  sourceThreadId: text('sourceThreadId').optional(),
+  sourceMachine: text('sourceMachine').optional(),
   permissions: z.array(z.string(), { error: 'Permission rules must be strings' }).optional(),
   prompt: text('prompt'),
   files: z.array(z.object({ uri: z.string(), name: z.string() }), { error: 'files must contain uri and name strings' }).optional(),
@@ -577,13 +581,25 @@ export const lockRoutes = {
   }),
   // Fork: `kimaki session links` (session-links.ts).
   'session.links': route({
-    input: sessionInput({ add: text('add').optional(), remove: text('remove').optional() }),
+    input: sessionInput({
+      add: text('add').optional(),
+      remove: text('remove').optional(),
+      // --add of a session on another machine: its thread, machine and title.
+      remoteThreadId: text('remoteThreadId').optional(),
+      remoteMachine: text('remoteMachine').optional(),
+      remoteTitle: text('remoteTitle').optional(),
+    }),
     run: async (bot, input) => {
       const target = localSession(bot, input)
       if (target instanceof Error) return target
+      if (input.add && (input.remoteThreadId || input.remoteMachine)) {
+        const add = input.add.startsWith('ses_') ? input.add : null
+        await linkRemote(bot, { sessionId: target.sessionId, remote: { sessionId: add, threadId: input.remoteThreadId ?? null, machine: input.remoteMachine ?? null, title: input.remoteTitle ?? null } })
+        input = { ...input, add: undefined }
+      }
       for (const [id, op] of [[input.add, 'add'], [input.remove, 'remove']] as const) {
         if (!id) continue
-        const other = await resolveLinkTarget(bot, id)
+        const other = id.startsWith('thread:') ? id : await resolveLinkTarget(bot, id)
         if (!other) return new ConfigError({ reason: `Not a session ID or known Kimaki thread: ${id}` })
         const changed = op === 'add'
           ? await linkSessions(bot, { a: target.sessionId, b: other, source: 'manual' })

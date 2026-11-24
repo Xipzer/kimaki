@@ -290,6 +290,10 @@ test('CLI help documents the supported P7 commands', async () => {
         --send-at <when>                Schedule: UTC ISO date ending in Z, or cron expression (UTC)
         --pre-run <command>             Scheduled only: run first in the project. Exit 0 starts, stdout is appended
         --allow-concurrency             Scheduled only: allow overlapping runs of this routine
+        --host <ssh-alias>              Send on another machine over ssh, naming this session there so both sides link (fork)
+        --from-session <id>             Sending session on another machine (set by --host)
+        --from-thread <id>              Thread of the sending session (set by --host)
+        --from-machine <name>           Machine of the sending session (set by --host)
 
       session events <id>               Print the recorded OpenCode events of a thread as JSONL (root + subagents)
         --data-dir <path>               Data directory (default: ~/.kimaki)

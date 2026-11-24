@@ -13,6 +13,7 @@
 // order (prompt, then interrupt with resume) parks queued items for good.
 
 import fs from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 import crypto from 'node:crypto'
 import { Events, MessageFlags, type Message } from 'discord.js'
@@ -43,7 +44,7 @@ import { discordMessageId, formatEcho } from './queue.ts'
 import { noAnswerError, parseRemoteResult, remoteEnvelope, promptFilePath, REMOTE_TIMEOUT_MS, type RemoteResult } from './remote-send.ts'
 import { parseTextMessage, type Route } from './routes.ts'
 import { allMessages } from './session-events.ts'
-import { recordPromptLinks } from './session-links.ts'
+import { linkRemote, recordPromptLinks, sourceLine } from './session-links.ts'
 import { ensureSessionMarker, forkBtw, startSession, switchAgent, conversationProject } from './sessions.ts'
 import { cancelSleep } from './sleeps.ts'
 import type { ScheduledRun } from './system-prompt.ts'
@@ -555,7 +556,12 @@ async function remoteSend(bot: Bot, input: SendInput) {
     .catch((cause) => new DiscordError({ operation: 'fetch remote target', cause }))
   if (target instanceof Error) return target
   if (!target?.isSendable()) return new ConfigError({ reason: 'Remote target is not sendable' })
-  const envelope = remoteEnvelope(input)
+  // Fork: the receiving machine links back to the sending session (session-links.ts).
+  const senderThread = input.senderSessionId ? bot.store.getState().sessionThreads[input.senderSessionId] : undefined
+  const named = input.senderSessionId && !input.sourceSessionId
+    ? { ...input, sourceSessionId: input.senderSessionId, ...(senderThread && { sourceThreadId: senderThread }), sourceMachine: os.hostname() }
+    : input
+  const envelope = remoteEnvelope(named)
   if (envelope instanceof Error) return envelope
   type Result = Error | RemoteResult
   return new Promise<Result>((resolve) => {
@@ -567,6 +573,9 @@ async function remoteSend(bot: Bot, input: SendInput) {
     const receive = (message: Message) => {
       if (message.author.id !== bot.discord.user?.id || message.channelId !== targetId) return
       const result = parseRemoteResult({ footer: message.embeds[0]?.footer?.text, requestId: envelope.requestId })
+      if (result && !(result instanceof Error) && input.senderSessionId) {
+        void linkRemote(bot, { sessionId: input.senderSessionId, remote: { sessionId: result.sessionId, threadId: result.threadId } })
+      }
       if (result) finish(result)
     }
     const timer = setTimeout(() => finish(noAnswerError()), REMOTE_TIMEOUT_MS)
@@ -608,6 +617,11 @@ export async function send(
   const route = parseTextMessage({ content: input.prompt })
   if (!route) return new ConfigError({ reason: 'Prompt is empty' })
   if (input.agent && (route.kind === 'steer' || route.kind === 'btw')) route.agent = input.agent
+  // Fork: a prompt from another machine names its session under the text (session-links.ts).
+  const source = input.sourceSessionId || input.sourceThreadId
+    ? { sessionId: input.sourceSessionId ?? null, threadId: input.sourceThreadId ?? null, machine: input.sourceMachine ?? null }
+    : null
+  if (source && 'text' in route) route.text = `${route.text}\n\n${sourceLine(source)}`
 
   if (input.sessionId || input.threadId) {
     const threadId = input.threadId ?? threadOfSession(bot, input.sessionId!)
@@ -635,6 +649,7 @@ export async function send(
     // --model reaches the agent switch too, so an agent with its own model cannot replace it.
     const result = await dispatch(bot, { conversation: thread, route, author, messageId, files: input.files, echo, sender, parentSessionId: input.parentSessionId, model })
     if (result instanceof Error) return result
+    if (source) await linkRemote(bot, { sessionId, remote: source })
     return result ?? { threadId, sessionId: bot.store.getState().roots[threadId]! }
   }
 
@@ -685,7 +700,7 @@ export async function send(
     : task && input.worktree
       ? `${input.worktree.slice(0, 40)}-${crypto.randomBytes(4).toString('hex')}`
       : input.worktree
-  return startSession(bot, {
+  const started = await startSession(bot, {
     channelId: project.channel_id,
     directory,
     route: first,
@@ -703,6 +718,8 @@ export async function send(
     baseBranch: input.baseBranch,
     ...(model && { model: { ...model, variant: null } }),
   })
+  if (source && !(started instanceof Error) && started.sessionId) await linkRemote(bot, { sessionId: started.sessionId, remote: source })
+  return started
 }
 
 // `kimaki upload-to-discord`: posts local files into the session's thread (or the voice channel chat),
