@@ -20,7 +20,7 @@ import { createIngress } from './ingress.ts'
 import { runLockRoute } from './lock-routes.ts'
 import { installShim, type LockServer } from './lock-server.ts'
 import { hubBaseUrl, syncHubIcons } from './hub-icons.ts'
-import { adoptPeerSession, mirrorPrompt, syncPeerChannels, watchPeerRoutines } from './mirror.ts'
+import { adoptPeerSession, mirrorPrompt, syncPeerChannels, watchHubStatus, watchPeerRoutines } from './mirror.ts'
 import type { ThreadEvent } from './thread-reducer.ts'
 import { createLogger } from './logger.ts'
 import { createCoordinatorNotes } from './coordinator.ts'
@@ -302,6 +302,8 @@ export async function startBot(options: StartBotOptions): Promise<Error | BotHan
   mirror.markReady()
   const stopRoutines = watchPeerRoutines(bot)
   cleanup.defer(stopRoutines)
+  const stopStatus = watchHubStatus(bot)
+  cleanup.defer(stopStatus)
   const projects = await countUserProjects({ db, dataDir: options.dataDir })
   if (projects instanceof Error) logger.warn(projects)
   options.analytics.track('bot_started', {

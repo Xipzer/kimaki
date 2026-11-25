@@ -31,7 +31,8 @@ import type { MirroredPrompt } from './queue.ts'
 import { createLogger } from './logger.ts'
 import * as schema from './schema.ts'
 import { channelForDirectory } from './sessions.ts'
-import type { ThreadEvent } from './thread-reducer.ts'
+import { ActivityType } from 'discord.js'
+import { isBusy, type ThreadEvent } from './thread-reducer.ts'
 
 const logger = createLogger('MIRROR')
 
@@ -306,4 +307,28 @@ export async function followPeerPrompt(bot: Bot, { messageId, text }: { messageI
     type: 0,
   })
   return { followed }
+}
+
+// Hub side: the bot's custom status says whether this machine's agents are working, as the
+// hub shows it under the bot. One status per bot, so a count, not one thread's step.
+export function watchHubStatus(bot: Bot): () => void {
+  if (!bot.hubUrl) return () => undefined
+  let shown = ''
+  let timer: ReturnType<typeof setTimeout> | null = null
+  const update = () => {
+    timer = null
+    const busy = Object.values(bot.store.getState().threads).filter(isBusy).length
+    const state = busy === 0 ? 'Idle' : `Working in ${busy} thread${busy === 1 ? '' : 's'}`
+    if (state === shown) return
+    shown = state
+    bot.discord.user?.setPresence({ activities: [{ type: ActivityType.Custom, name: 'Custom Status', state }] })
+  }
+  update()
+  const off = bot.store.subscribe(() => {
+    timer ??= setTimeout(update, 2_000)
+  })
+  return () => {
+    off()
+    if (timer) clearTimeout(timer)
+  }
 }
