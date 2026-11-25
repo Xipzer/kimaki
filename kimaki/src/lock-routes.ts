@@ -23,7 +23,7 @@ import { RESTART_EXIT_CODE } from './lock-server.ts'
 import { abort, cancelQueuedPrompt, clearQueue, send, shell, upload } from './prompt.ts'
 import { createTask, deleteTask, editTask, runTaskNow } from './scheduler.ts'
 import * as schema from './schema.ts'
-import { fanOutToPeers } from './mirror.ts'
+import { fanOutToPeers, followPeerPrompt } from './mirror.ts'
 import { linkRemote, linkSessions, listLinks, resolveLinkTarget, unlinkSessions } from './session-links.ts'
 import { channelForDirectory, channelForSession, fork, resume, sessionCwd } from './sessions.ts'
 import { createSleep, sleepsWarm } from './sleeps.ts'
@@ -453,6 +453,11 @@ export const lockRoutes = {
       }
       return bot.features.agentUi.request({ ...input, sessionId, content: { buttons }, signal })
     },
+  }),
+  // Fork (mirror.ts): the peer Kimaki says a prompt typed there was edited or deleted.
+  'mirror.echo': route({
+    input: z.object({ messageId: text('messageId'), text: z.string().nullable() }),
+    run: async (bot, input) => followPeerPrompt(bot, input),
   }),
   // Labels of buttons each session showed and the user did not click yet (`kimaki session wait`).
   'session.buttons': route({

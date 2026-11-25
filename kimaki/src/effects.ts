@@ -29,7 +29,7 @@ import {
 import { DISCORD_MEDIA_URL, embedFlags, formatFooter, SILENT_MESSAGE_FLAGS, type UiMessage } from './format-parts.ts'
 import { createThinkingLines } from './thinking-status.ts'
 import { createLogger } from './logger.ts'
-import { echoPayloads } from './queue.ts'
+import { echoPayloads, formatEcho } from './queue.ts'
 import { markdownPayloads, segmentPayloads, type DiscordPayload } from './markdown/components.ts'
 import { DISCORD_TEXT_LIMIT, renderMarkdown } from './markdown/render-markdown.ts'
 import { DiscordError } from './errors.ts'
@@ -194,6 +194,8 @@ export type MirrorPrompt = (threadId: string, prompt: MirroredPrompt) => Promise
 
 export function createEffectsRunner({ discord, markViewed, footerDefaults, mirrorPrompt }: { discord: Client; markViewed: MarkViewed; footerDefaults: FooterDefaults; mirrorPrompt?: MirrorPrompt }) {
   const workers = new Map<string, ThreadWorker>()
+  // Fork (mirror.ts): echo messages posted here for prompts typed on the other chat, by its message id.
+  const echoes = new Map<string, { threadId: string; ids: string[]; label: string }>()
   // After stop(): no more sends or typing, even from effects already queued.
   const lifecycle = { closed: false }
 
@@ -416,9 +418,19 @@ export function createEffectsRunner({ discord, markViewed, footerDefaults, mirro
         await runOne(threadId, effect)
         continue
       }
-      if (effect.type === 'send' && effect.mirror && mirrorPrompt) {
+      if (effect.type === 'send' && effect.mirror) {
         await flush()
-        if (await mirrorPrompt(threadId, effect.mirror)) continue
+        if (mirrorPrompt && (await mirrorPrompt(threadId, effect.mirror))) continue
+        // Fork (mirror.ts): the echo of a prompt typed on the other chat follows its edits and deletes.
+        const ids: string[] = []
+        for (const payload of echoPayloads(effect.text)) {
+          const id = await post({ threadId, options: payload, notify: false, mentions: false })
+          if (id) ids.push(id)
+        }
+        echoes.set(effect.mirror.messageId, { threadId, ids, label: effect.mirror.label })
+        if (echoes.size > 500) echoes.delete(echoes.keys().next().value!)
+        await refreshTyping(threadId)
+        continue
       }
       const text = effect.type === 'send' ? effect.text : await footerText({ effect, footerDefaults })
       const notify = effect.notify === true
@@ -463,6 +475,24 @@ export function createEffectsRunner({ discord, markViewed, footerDefaults, mirro
 
   return {
     run,
+    // Fork (mirror.ts): the other chat's prompt was edited (text) or deleted (null). False: no echo here.
+    async editEcho(messageId: string, text: string | null): Promise<boolean> {
+      const echo = echoes.get(messageId)
+      if (!echo) return false
+      const channel = await sendableChannel(echo.threadId)
+      if (!channel || lifecycle.closed) return false
+      const [first, ...rest] = echo.ids
+      if (text === null || !first) {
+        for (const id of echo.ids) await channel.messages.delete(id).catch(() => undefined)
+        echoes.delete(messageId)
+        return true
+      }
+      const payload = echoPayloads(formatEcho({ username: echo.label, text }))[0]
+      await channel.messages.edit(first, { content: payload && 'content' in payload ? payload.content : '' }).catch((e: Error) => logger.warn(`edit echo ${first}`, e))
+      for (const id of rest) await channel.messages.delete(id).catch(() => undefined)
+      echo.ids = [first]
+      return true
+    },
     // The thread no longer shows a session: drop what is pending and stop typing.
     dispose(threadId: string): void {
       const thread = workers.get(threadId)

@@ -43,6 +43,7 @@ import type { InteractionRoutes } from './interaction-context.ts'
 import { createLogger } from './logger.ts'
 import { parseInput, sendInput } from './lock-routes.ts'
 import { cancelQueuedPrompt, dispatch, requeueEdited, send } from './prompt.ts'
+import { fanOutToPeers } from './mirror.ts'
 import { REMOTE_PROMPT_FILE, REMOTE_RESULT_PREFIX, REMOTE_SEND_PREFIX } from './remote-send.ts'
 import { echoPayloads, formatEcho, queuedItemFor } from './queue.ts'
 import { parseTextMessage, type Route } from './routes.ts'
@@ -437,6 +438,8 @@ export function createIngress() {
     })
     // Deleting a queued Discord message removes it from the queue.
     bot.discord.on(Events.MessageDelete, (message) => {
+      // Fork (mirror.ts): the other chat's copy of a prompt in a session thread goes too.
+      if (bot.peerDataDirs.length > 0 && bot.store.getState().roots[message.channelId]) fanOutToPeers(bot, 'mirror.echo', { messageId: message.id, text: null })
       serialize({ bot, channelId: message.channelId, task: async () => {
         const item = queuedItemFor(bot, { threadId: message.channelId, messageId: message.id })
         if (!item) return
@@ -448,6 +451,9 @@ export function createIngress() {
     // option A: the inbox has no API to change an item's text).
     bot.discord.on(Events.MessageUpdate, (_old, message) => {
       if (message.author?.bot) return
+      if (bot.peerDataDirs.length > 0 && bot.store.getState().roots[message.channelId] && typeof message.content === 'string') {
+        fanOutToPeers(bot, 'mirror.echo', { messageId: message.id, text: message.content })
+      }
       serialize({ bot, channelId: message.channelId, task: async () => {
         const full = message.partial ? await message.fetch().catch(() => null) : message
         if (!full?.guild || !queuedItemFor(bot, { threadId: full.channelId, messageId: full.id })) return

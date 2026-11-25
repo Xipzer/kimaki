@@ -102,3 +102,17 @@ test('prompts queued on Discord while the session is busy (typed and from the CL
   })
   expect(hubText).toContain('» **tommy (Discord):** Then this one')
 }, 120_000)
+
+test('editing or deleting a prompt on one chat edits or deletes its echo on the other', async () => {
+  const sessionThreads = Object.keys(discord.store.getState().roots)
+  const discordThread = sessionThreads[0]!
+  const hubThread = threadOf(hub, discord.store.getState().roots[discordThread]!)!
+  const user = twin.discord.thread(hubThread).user(TEST_USER_ID)
+  const footers = (await twin.discord.thread(discordThread).text()).match(/deterministic-v2\*/g)?.length ?? 0
+  const sent = await user.sendMessage({ content: 'Typed in Vocorum, edit me' })
+  await waitForFooter({ discord: twin.discord, threadId: discordThread, count: footers + 1 })
+  await user.editMessage({ messageId: sent.id, content: 'Typed in Vocorum, edited' })
+  await waitFor({ label: 'edited echo', timeout: 10_000, check: async () => (await twin.discord.thread(discordThread).text()).includes('» **tommy (Vocorum):** Typed in Vocorum, edited') })
+  await user.deleteMessage({ messageId: sent.id })
+  await waitFor({ label: 'deleted echo', timeout: 10_000, check: async () => !(await twin.discord.thread(discordThread).text()).includes('Typed in Vocorum') })
+}, 120_000)

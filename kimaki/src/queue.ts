@@ -50,7 +50,8 @@ export type PendingInput = {
 }
 
 // `files`: the prompt's attachments as saved on this machine (the peer's data dir).
-export type MirroredPrompt = { messageId: string; userId: string; username: string; text: string; files: Array<{ name: string; path: string }> }
+// `label`: the name its echo line shows ("Xipz (Vocorum)").
+export type MirroredPrompt = { messageId: string; userId: string; username: string; label: string; text: string; files: Array<{ name: string; path: string }> }
 
 export function queuedItems(view: Pick<ThreadView, 'inbox'>): readonly PendingInput[] {
   return view.inbox.filter((item) => item.delivery === 'queue')
@@ -80,7 +81,7 @@ function inputFields({ payload, channelId, home = null }: { payload: { text: str
     const [rawId, userId] = [discord['messageId'], discord['userId']]
     const attached = Array.isArray(discord['attachments']) ? discord['attachments'] : []
     const files = attached.flatMap((file) => (file && typeof file === 'object' && !Array.isArray(file) && typeof file['name'] === 'string' && typeof file['path'] === 'string' ? [{ name: file['name'], path: file['path'] }] : []))
-    const mirror = typeof rawId === 'string' && /^\d+$/.test(rawId) && typeof userId === 'string' ? { messageId: rawId, userId, username: name, text, files } : undefined
+    const mirror = typeof rawId === 'string' && /^\d+$/.test(rawId) && typeof userId === 'string' ? { messageId: rawId, userId, username: name, label: who, text, files } : undefined
     // A prompt that carries its own line (a wake, a scheduled run) shows that line on both sides.
     const own = typeof discord['echo'] === 'string' ? discord['echo'] : null
     return { external: true, text, username: who, messageId: null, replyTo: null, echo: own ?? (text.trim() ? formatEcho({ username: who, text }) : null), mirror: own ? undefined : mirror }

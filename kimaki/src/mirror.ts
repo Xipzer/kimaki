@@ -127,9 +127,14 @@ async function hubPut(bot: Pick<Bot, 'hubUrl' | 'token'>, pathname: string, body
 const DISCORD_EPOCH = 1_420_070_400_000
 
 // A Discord-typed prompt in the hub thread, as the person's own message with its Discord id.
+// Prompts this process put into the hub, for their later edit or delete on Discord.
+const mirroredPrompts = new Map<string, { threadId: string; prompt: MirroredPrompt }>()
+
 // Attachments go as multipart (payload_json + files[n]) so the hub keeps the files.
 export function mirrorPrompt(bot: Pick<Bot, 'hubUrl' | 'token'>) {
   return async (threadId: string, prompt: MirroredPrompt) => {
+    mirroredPrompts.set(prompt.messageId, { threadId, prompt })
+    if (mirroredPrompts.size > 500) mirroredPrompts.delete(mirroredPrompts.keys().next().value!)
     const files = (await Promise.all(prompt.files.map(async (file) => ({ ...file, data: await fs.promises.readFile(file.path).catch(() => null) })))).filter((file) => file.data)
     const payload = {
       id: prompt.messageId,
@@ -263,7 +268,7 @@ export function watchPeerRoutines(bot: Bot): () => void {
 
 // `kimaki buttons` and `upload-to-discord` run on the Kimaki that owns the session; the peer
 // shows the same on its chat. Fire and forget: the other chat must never slow or fail the call.
-export function fanOutToPeers(bot: Pick<Bot, 'peerDataDirs'>, route: 'buttons' | 'upload', input: Record<string, unknown>): void {
+export function fanOutToPeers(bot: Pick<Bot, 'peerDataDirs'>, route: 'buttons' | 'upload' | 'mirror.echo', input: Record<string, unknown>): void {
   for (const dir of bot.peerDataDirs) {
     void (async () => {
       const [token, port] = await Promise.all(['lock-token', 'lock-port'].map((file) => fs.promises.readFile(path.join(dir, file), 'utf8').catch(() => null)))
@@ -277,4 +282,28 @@ export function fanOutToPeers(bot: Pick<Bot, 'peerDataDirs'>, route: 'buttons' |
       if (response instanceof Error || !response.ok) logger.warn(`${route} on the other chat failed: ${response instanceof Error ? response.message : response.status}`)
     })()
   }
+}
+
+// A prompt typed on the other chat was edited (text) or deleted (null): its copy here follows.
+// Discord side: the echo line. Hub side: the person's message the hub mirror holds.
+export async function followPeerPrompt(bot: Bot, { messageId, text }: { messageId: string; text: string | null }): Promise<{ followed: boolean }> {
+  if (!bot.hubUrl) return { followed: await bot.effects.editEcho(messageId, text) }
+  const mirrored = mirroredPrompts.get(messageId)
+  if (!mirrored) return { followed: false }
+  if (text === null) {
+    mirroredPrompts.delete(messageId)
+    const response = await fetch(`${bot.hubUrl}/hub/mirror/messages/${messageId}`, { method: 'DELETE', headers: { authorization: `Bot ${bot.token}` }, signal: AbortSignal.timeout(30_000) }).catch(() => null)
+    return { followed: Boolean(response?.ok) }
+  }
+  const { threadId, prompt } = mirrored
+  const followed = await hubPut(bot, `/hub/mirror/messages/${messageId}`, {
+    id: messageId,
+    channel_id: threadId,
+    author: { id: prompt.userId, username: prompt.username },
+    content: text,
+    timestamp: new Date(Number(BigInt(messageId) >> 22n) + DISCORD_EPOCH).toISOString(),
+    edited_timestamp: new Date().toISOString(),
+    type: 0,
+  })
+  return { followed }
 }
