@@ -18,6 +18,7 @@
 //   adoption: PUT /hub/mirror/channels/:threadId creates the Discord thread's twin with its id
 //   prompts:  PUT /hub/mirror/messages/:id shows a Discord-typed prompt as the person's own
 //             message (never delivered to hub bots) instead of the echo line (mirrorPrompt)
+//   routines: PUT /hub/mirror/routines, read-only, at start and when they change (watchPeerRoutines)
 
 import fs from 'node:fs'
 import path from 'node:path'
@@ -202,4 +203,60 @@ export async function syncPeerChannels(bot: Bot): Promise<void> {
     else added++
   }
   logger.log(`project channels from the other chat: ${added} added, in ${joined.size} hub guild(s)`)
+}
+
+export type MirroredRoutine = { id: number; prompt: string; schedule: string; channel_id: string | null; thread_id: string | null; agent: string | null; model: string | null; next_run: string; status: string }
+
+// The peer's planned routines, as `kimaki routine list` shows them; editing stays in Kimaki.
+async function peerRoutines(dirs: readonly string[]): Promise<MirroredRoutine[]> {
+  const routines: MirroredRoutine[] = []
+  for (const dir of dirs) {
+    const client = createClient({ url: `file:${path.join(dir, 'kimaki.db')}` })
+    const read = await client
+      .execute("SELECT id, status, schedule_kind, run_at, cron_expr, timezone, next_run_at, prompt_preview, payload_json, channel_id, thread_id FROM scheduled_tasks WHERE status IN ('planned', 'running') ORDER BY next_run_at")
+      .catch((error: Error) => error)
+    client.close()
+    if (read instanceof Error) continue
+    for (const row of read.rows) {
+      const payload = (() => {
+        try {
+          return JSON.parse(String(row['payload_json'])) as Record<string, unknown>
+        } catch {
+          return {}
+        }
+      })()
+      const model = payload['model']
+      const schedule = row['schedule_kind'] === 'cron' ? `${String(row['cron_expr'])}${row['timezone'] ? ` (${String(row['timezone'])})` : ''}` : `at ${String(row['run_at'])}`
+      routines.push({
+        id: Number(row['id']),
+        prompt: String(row['prompt_preview']),
+        schedule,
+        channel_id: row['channel_id'] ? String(row['channel_id']) : null,
+        thread_id: row['thread_id'] ? String(row['thread_id']) : typeof payload['threadId'] === 'string' ? payload['threadId'] : null,
+        agent: typeof payload['agent'] === 'string' ? payload['agent'] : null,
+        model: typeof model === 'string' ? model : model && typeof model === 'object' && 'id' in model ? `${String((model as Record<string, unknown>)['providerID'])}/${String((model as Record<string, unknown>)['id'])}` : null,
+        next_run: String(row['next_run_at']),
+        status: String(row['status']),
+      })
+    }
+  }
+  return routines
+}
+
+// Hub side: sends the peer's routines at start and whenever they change (checked every minute).
+export function watchPeerRoutines(bot: Bot): () => void {
+  if (!bot.hubUrl) return () => undefined
+  let last = ''
+  const sync = async () => {
+    const routines = await peerRoutines(bot.peerDataDirs)
+    const body = JSON.stringify({ routines })
+    if (body === last) return
+    // A failure (an older hub without the route) is retried at the next change, not every minute.
+    last = body
+    await hubPut(bot, '/hub/mirror/routines', { routines })
+  }
+  void sync()
+  const timer = setInterval(() => void sync(), 60_000)
+  timer.unref()
+  return () => clearInterval(timer)
 }
