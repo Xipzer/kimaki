@@ -23,6 +23,7 @@ import { RESTART_EXIT_CODE } from './lock-server.ts'
 import { abort, cancelQueuedPrompt, clearQueue, send, shell, upload } from './prompt.ts'
 import { createTask, deleteTask, editTask, runTaskNow } from './scheduler.ts'
 import * as schema from './schema.ts'
+import { fanOutToPeers } from './mirror.ts'
 import { linkRemote, linkSessions, listLinks, resolveLinkTarget, unlinkSessions } from './session-links.ts'
 import { channelForDirectory, channelForSession, fork, resume, sessionCwd } from './sessions.ts'
 import { createSleep, sleepsWarm } from './sleeps.ts'
@@ -338,8 +339,15 @@ export const lockRoutes = {
     input: z.object({
       id: z.string({ error: 'Upload needs a session and files' }).min(1, { error: 'Upload needs a session and files' }),
       files: z.array(z.object({ path: z.string(), name: z.string() }, { error: 'Invalid upload file' }), { error: 'Upload needs a session and files' }),
+      // Fork (mirror.ts): sent by a peer Kimaki; not passed on again.
+      mirrored: z.boolean().optional(),
     }, { error: 'Upload needs a session and files' }),
-    run: async (bot, input) => upload(bot, input),
+    run: async (bot, { mirrored, ...input }) => {
+      const result = await upload(bot, input)
+      const sessionId = bot.store.getState().roots[bot.store.getState().sessionThreads[input.id] ?? input.id] ?? (input.id.startsWith('ses_') ? input.id : null)
+      if (!(result instanceof Error) && !mirrored && sessionId) fanOutToPeers(bot, 'upload', { id: sessionId, files: input.files, mirrored: true })
+      return result
+    },
   }),
   status: route({
     input: z.object({}),
@@ -434,10 +442,15 @@ export const lockRoutes = {
       buttons: z.array(buttonSpec, { error: 'Use 1 to 3 --button flags' })
         .min(1, { error: 'Use 1 to 3 --button flags' })
         .max(3, { error: 'Use 1 to 3 --button flags' }),
+      mirrored: z.boolean().optional(),
     }, { error: 'Expected agent UI input' }),
-    run: async (bot, { buttons, threadId, ...input }, signal) => {
+    run: async (bot, { buttons, threadId, mirrored, ...input }, signal) => {
       const sessionId = sessionOf(bot, { ...input, threadId })
       if (sessionId instanceof Error) return sessionId
+      // Fork (mirror.ts): the other chat shows the same buttons; a click on either side is the same prompt.
+      if (!mirrored) {
+        fanOutToPeers(bot, 'buttons', { sessionId, buttons: buttons.map((b) => `${b.label}:${b.color}`), fromShell: input.fromShell, toolCall: input.toolCall, mirrored: true })
+      }
       return bot.features.agentUi.request({ ...input, sessionId, content: { buttons }, signal })
     },
   }),

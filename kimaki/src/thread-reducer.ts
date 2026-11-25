@@ -162,7 +162,9 @@ export type Effect =
   | { type: 'show'; key: string; messages: readonly UiMessage[]; replyTo: string | null; notify: boolean; echo?: boolean }
   // Edits the messages `show` posted under `key` (by index; the last one covers the rest),
   // then posts `reply` as a reply to `replyTo`, or to the first of them when null.
-  | { type: 'edit'; key: string; messages: readonly UiMessage[]; reply?: string; replyTo?: string | null }
+  // `fallback`: posted instead when this process never showed the keyed messages (an ack from
+  // before a restart, or one the peer side of a mirrored session posted), so the prompt still shows.
+  | { type: 'edit'; key: string; messages: readonly UiMessage[]; reply?: string; replyTo?: string | null; fallback?: string }
   // Marks the root execution that went idle at `idle` as read in OpenCode, once
   // the lines before it are posted. Bots cannot see Discord read state.
   | { type: 'viewed'; sessionId: string; idle: number }

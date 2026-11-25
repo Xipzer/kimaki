@@ -198,6 +198,8 @@ export async function startLockServer({ port, dataDir, supervised = false, evict
   const written = await fs.promises.mkdir(dataDir, { recursive: true, mode: 0o700 })
     .then(() => fs.promises.writeFile(tokenFile, token, { mode: 0o600 }))
     .then(() => fs.promises.chmod(tokenFile, 0o600))
+    // Fork (mirror.ts): a peer Kimaki on this machine finds this bot's port here.
+    .then(() => fs.promises.writeFile(path.join(dataDir, 'lock-port'), String(port), { mode: 0o600 }))
     .catch((cause) => new LockPortError({ port, reason: 'cannot write lock-token', cause }))
   if (written instanceof Error) {
     await new Promise<void>((resolve) => server.close(() => resolve()))

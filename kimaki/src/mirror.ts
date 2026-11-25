@@ -260,3 +260,21 @@ export function watchPeerRoutines(bot: Bot): () => void {
   timer.unref()
   return () => clearInterval(timer)
 }
+
+// `kimaki buttons` and `upload-to-discord` run on the Kimaki that owns the session; the peer
+// shows the same on its chat. Fire and forget: the other chat must never slow or fail the call.
+export function fanOutToPeers(bot: Pick<Bot, 'peerDataDirs'>, route: 'buttons' | 'upload', input: Record<string, unknown>): void {
+  for (const dir of bot.peerDataDirs) {
+    void (async () => {
+      const [token, port] = await Promise.all(['lock-token', 'lock-port'].map((file) => fs.promises.readFile(path.join(dir, file), 'utf8').catch(() => null)))
+      if (!token || !port) return
+      const response = await fetch(`http://127.0.0.1:${port.trim()}/kimaki/${route}`, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${token.trim()}`, 'content-type': 'application/json' },
+        body: JSON.stringify(input),
+        signal: AbortSignal.timeout(60_000),
+      }).catch((error: Error) => error)
+      if (response instanceof Error || !response.ok) logger.warn(`${route} on the other chat failed: ${response instanceof Error ? response.message : response.status}`)
+    })()
+  }
+}

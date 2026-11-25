@@ -5,7 +5,8 @@ import fs from 'node:fs'
 import { afterAll, beforeAll, expect, test } from 'vitest'
 
 import type { BotHandle } from './main.ts'
-import { TEST_USER_ID, seedProjectChannel, startOpencodeTestServer, startTestBot, startTwin, tempDataDir, waitFor, waitForFooter, warmUp, type OpencodeTestServer, type TestTwin } from './test/harness.ts'
+import { send } from './prompt.ts'
+import { TEST_USER_ID, slowTextMatcher, seedProjectChannel, startOpencodeTestServer, startTestBot, startTwin, tempDataDir, waitFor, waitForFooter, warmUp, type OpencodeTestServer, type TestTwin } from './test/harness.ts'
 
 const dataDiscord = tempDataDir()
 const dataHub = tempDataDir()
@@ -15,7 +16,7 @@ let discord: BotHandle
 let hub: BotHandle
 
 beforeAll(async () => {
-  ;[server, twin] = await Promise.all([startOpencodeTestServer({ matchers: [] }), startTwin()])
+  ;[server, twin] = await Promise.all([startOpencodeTestServer({ matchers: [slowTextMatcher({ marker: 'slow-marker', text: 'slow-done', delayMs: 1_500 })] }), startTwin()])
   await seedProjectChannel({ dataDir: dataDiscord, channelId: twin.channelId, guildId: twin.discord.guildId, directory: server.projectDirectory })
   await seedProjectChannel({ dataDir: dataHub, channelId: twin.quietChannelId, guildId: twin.discord.guildId, directory: server.projectDirectory })
   await warmUp({ server })
@@ -74,4 +75,30 @@ test('a session started on one side is mirrored on the other; a prompt from eith
   // The side that started the session keeps it: the agent's `kimaki` calls go there.
   const info = await (await server.client()).session.get({ sessionID: sessionId })
   expect((info.metadata?.['kimaki'] as { dataDir?: string }).dataDir).toBe(dataDiscord)
+}, 120_000)
+
+test('prompts queued on Discord while the session is busy (typed and from the CLI) show in the hub', async () => {
+  await twin.discord.channel(twin.channelId).user(TEST_USER_ID).sendMessage({ content: 'Start the queue case' })
+  const discordThread = await waitFor({
+    label: 'second Discord thread',
+    timeout: 10_000,
+    check: async () => Object.keys(discord.store.getState().roots).find((id) => id !== Object.keys(discord.store.getState().roots)[0]),
+  })
+  await waitForFooter({ discord: twin.discord, threadId: discordThread })
+  const sessionId = discord.store.getState().roots[discordThread]!
+  const hubThread = await waitFor({ label: 'hub thread', timeout: 10_000, check: async () => threadOf(hub, sessionId) })
+  await twin.discord.thread(discordThread).user(TEST_USER_ID).sendMessage({ content: 'slow-marker please' })
+  await waitFor({ label: 'busy', timeout: 10_000, check: async () => (await twin.discord.thread(hubThread).text()).includes('slow-marker please') })
+  await twin.discord.thread(discordThread).user(TEST_USER_ID).sendMessage({ content: 'Then this one. queue' })
+  const queued = await send(discord, { threadId: discordThread, prompt: 'And one from the CLI. queue' })
+  if (queued instanceof Error) throw queued
+  const hubText = await waitFor({
+    label: 'queued prompts in the hub',
+    timeout: 10_000,
+    check: async () => {
+      const text = await twin.discord.thread(hubThread).text()
+      return text.includes('Then this one') && text.includes('And one from the CLI') && (text.match(/deterministic-v2\*/g) ?? []).length >= 4 ? text : null
+    },
+  })
+  expect(hubText).toContain('» **tommy (Discord):** Then this one')
 }, 120_000)

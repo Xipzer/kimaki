@@ -81,7 +81,9 @@ function inputFields({ payload, channelId, home = null }: { payload: { text: str
     const attached = Array.isArray(discord['attachments']) ? discord['attachments'] : []
     const files = attached.flatMap((file) => (file && typeof file === 'object' && !Array.isArray(file) && typeof file['name'] === 'string' && typeof file['path'] === 'string' ? [{ name: file['name'], path: file['path'] }] : []))
     const mirror = typeof rawId === 'string' && /^\d+$/.test(rawId) && typeof userId === 'string' ? { messageId: rawId, userId, username: name, text, files } : undefined
-    return { external: true, text, username: who, messageId: null, replyTo: null, echo: text.trim() ? formatEcho({ username: who, text }) : null, mirror }
+    // A prompt that carries its own line (a wake, a scheduled run) shows that line on both sides.
+    const own = typeof discord['echo'] === 'string' ? discord['echo'] : null
+    return { external: true, text, username: who, messageId: null, replyTo: null, echo: own ?? (text.trim() ? formatEcho({ username: who, text }) : null), mirror: own ? undefined : mirror }
   }
   const username = discord['username']
   const raw = discord['messageId']
@@ -167,7 +169,8 @@ function closeAck({ emit }: Slice, item: PendingInput, status: string) {
 // second copy. Also in a coordinator, where the answer may post no text (IDLE).
 function markStarted({ emit }: Slice, item: PendingInput) {
   const ack = textOnly(ackContent(item, item.messageId ? 'Queued' : null))
-  emit({ type: 'edit', key: ackKey(item.inboxID), messages: [ack], reply: asSubtext('Queued message sent'), replyTo: item.messageId })
+  const fallback = item.messageId ? undefined : item.echo ?? formatEcho(item)
+  emit({ type: 'edit', key: ackKey(item.inboxID), messages: [ack], reply: asSubtext('Queued message sent'), replyTo: item.messageId, ...(fallback && { fallback }) })
 }
 
 // Removes the item from the inbox; returns it when it was still queued.

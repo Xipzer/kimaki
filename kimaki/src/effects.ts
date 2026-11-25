@@ -344,6 +344,12 @@ export function createEffectsRunner({ discord, markViewed, footerDefaults, mirro
     if (effect.type === 'edit') {
       const ids = thread.prompts.get(effect.key) ?? []
       thread.prompts.delete(effect.key)
+      // No ack here to edit: show the prompt itself where it starts running.
+      if (ids.length === 0 && effect.fallback) {
+        for (const payload of echoPayloads(effect.fallback)) await post({ threadId, options: payload, notify: false, mentions: false })
+        await refreshTyping(threadId)
+        return
+      }
       const channel = ids.length > 0 ? await sendableChannel(threadId) : null
       if (lifecycle.closed) return
       for (const [index, messageId] of ids.entries()) {
