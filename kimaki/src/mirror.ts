@@ -205,7 +205,7 @@ export async function syncPeerChannels(bot: Bot): Promise<void> {
   logger.log(`project channels from the other chat: ${added} added, in ${joined.size} hub guild(s)`)
 }
 
-export type MirroredRoutine = { id: number; prompt: string; schedule: string; channel_id: string | null; thread_id: string | null; agent: string | null; model: string | null; next_run: string; status: string }
+export type MirroredRoutine = { id: string; prompt: string; schedule: string; channel_id: string | null; thread_id: string | null; agent: string | null; model: string | null; next_run: string; status: string }
 
 // The peer's planned routines, as `kimaki routine list` shows them; editing stays in Kimaki.
 async function peerRoutines(dirs: readonly string[]): Promise<MirroredRoutine[]> {
@@ -228,7 +228,7 @@ async function peerRoutines(dirs: readonly string[]): Promise<MirroredRoutine[]>
       const model = payload['model']
       const schedule = row['schedule_kind'] === 'cron' ? `${String(row['cron_expr'])}${row['timezone'] ? ` (${String(row['timezone'])})` : ''}` : `at ${String(row['run_at'])}`
       routines.push({
-        id: Number(row['id']),
+        id: String(row['id']),
         prompt: String(row['prompt_preview']),
         schedule,
         channel_id: row['channel_id'] ? String(row['channel_id']) : null,
