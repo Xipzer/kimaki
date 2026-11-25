@@ -105,6 +105,9 @@ export type ThreadView = {
   sessionId: string
   // Fork (mirror.ts): this Kimaki's side; prompts typed on another side are echoed with theirs.
   home: string | null
+  // `created` of the newest OpenCode event folded in. A snapshot read before it is stale about
+  // what runs: it must not end a run or forget a tool that started after the read began.
+  seenAt: number
   // Project channel of the thread: its verbosity applies.
   channelId: string
   // The view is a coordinator channel itself, not a thread.
@@ -237,6 +240,7 @@ export function emptyView({
   return {
     sessionId,
     home,
+    seenAt: 0,
     channelId,
     coordinator,
     directory,
@@ -306,7 +310,10 @@ export function reduce({ view, event, prefs }: { view: ThreadView; event: Thread
   const emit: Emit = (effect) => void effects.push(effect)
   const next = produce(view, (draft) => {
     if (isKimakiEvent(event)) applyKimaki({ draft, event, prefs, emit })
-    else applyOpencode({ draft, event, prefs, emit })
+    else {
+      if ('created' in event && typeof event.created === 'number' && event.created > draft.seenAt) draft.seenAt = event.created
+      applyOpencode({ draft, event, prefs, emit })
+    }
   })
   const typing = isTyping(next)
   // Typing goes first: on before the banner, off before the footer or a prompt.
@@ -759,15 +766,18 @@ function applyKimaki({ draft, event, prefs, emit }: Context & { event: KimakiEve
       if (event.directory) draft.directory = event.directory
       // Executions that started or ended while disconnected. Their footer is lost.
       const active = new Set(event.activeSessionIds)
-      for (const [id, child] of Object.entries(draft.children)) child.running = active.has(id)
-      if (!active.has(draft.sessionId)) draft.turn = null
-      else {
+      // Events newer than the read already said what runs (a run or tool that started meanwhile).
+      const stale = draft.seenAt > event.at
+      for (const [id, child] of Object.entries(draft.children)) child.running = active.has(id) || (stale && child.running)
+      if (!active.has(draft.sessionId)) {
+        if (!stale) draft.turn = null
+      } else {
         draft.turn ??= newTurn(event.at)
         // A run that started before this process (a restart mid-run) still ends with a footer.
         if (!draft.turn.model && event.model) draft.turn.model = event.model
       }
       // Nothing runs: tool calls whose end was missed while disconnected are over.
-      if (!isBusy(draft)) draft.tools = {}
+      if (!isBusy(draft) && !stale) draft.tools = {}
       for (const session of event.sessions) {
         const isRoot = session.sessionId === draft.sessionId
         const child = draft.children[session.sessionId]

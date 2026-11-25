@@ -561,3 +561,18 @@ test('execute: final metadata shows inner calls whose progress was missed, then 
     ]
   `)
 })
+
+test('a snapshot read before newer events does not end the run or forget a started tool', () => {
+  const events = loadFixture('tools.events.jsonl')
+  const index = events.findIndex((event) => event.type === 'session.tool.input.started')
+  const started = events[index]
+  const called = events.slice(index).find((event) => event.type === 'session.tool.called')
+  if (started?.type !== 'session.tool.input.started' || !called) return expect.fail('fixture has no tool call')
+  const { view } = replay({ events: events.slice(0, index + 1) })
+  // Read when nothing ran yet, applied after the tool started.
+  const stale: ThreadEvent = { type: 'kimaki.snapshot', at: started.created - 1, directory: null, activeSessionIds: [], sessions: [] }
+  const afterSnapshot = reduce({ view, event: stale, prefs: DEFAULT_PREFS }).view
+  expect(afterSnapshot.turn).not.toBeNull()
+  const { effects } = reduce({ view: afterSnapshot, event: called, prefs: DEFAULT_PREFS })
+  expect(effectLines(effects).join('\n')).toMatch(/┣ (?!tool )/)
+})
