@@ -199,7 +199,8 @@ export type KimakiEvent =
   | { type: 'kimaki.replay'; messages: readonly SessionMessageInfo[]; note: string }
   // After a (re)connect: which sessions of the thread run, and what they wait on.
   // `directory`: the root session's location now, null when it could not be read.
-  | { type: 'kimaki.snapshot'; at: number; directory: string | null; activeSessionIds: readonly string[]; sessions: readonly SessionSnapshot[] }
+  // `model`: the root session's current model, so a run that was already going gets its footer.
+  | { type: 'kimaki.snapshot'; at: number; directory: string | null; activeSessionIds: readonly string[]; sessions: readonly SessionSnapshot[]; model?: ModelRef | null }
 
 export type ThreadEvent = V2Event | KimakiEvent
 
@@ -760,7 +761,11 @@ function applyKimaki({ draft, event, prefs, emit }: Context & { event: KimakiEve
       const active = new Set(event.activeSessionIds)
       for (const [id, child] of Object.entries(draft.children)) child.running = active.has(id)
       if (!active.has(draft.sessionId)) draft.turn = null
-      else draft.turn ??= newTurn(event.at)
+      else {
+        draft.turn ??= newTurn(event.at)
+        // A run that started before this process (a restart mid-run) still ends with a footer.
+        if (!draft.turn.model && event.model) draft.turn.model = event.model
+      }
       // Nothing runs: tool calls whose end was missed while disconnected are over.
       if (!isBusy(draft)) draft.tools = {}
       for (const session of event.sessions) {

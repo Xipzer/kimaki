@@ -357,6 +357,7 @@ export function createEventLoop({
           directory,
           activeSessionIds,
           sessions: sessions.filter((session): session is SessionSnapshot => !(session instanceof Error)),
+          model: info?.model ? { providerID: info.model.providerID, id: info.model.id, ...(info.model.variant && { variant: info.model.variant }) } : null,
         }
         return { threadId, event }
       }),
