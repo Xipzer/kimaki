@@ -386,7 +386,12 @@ function applyOpencode({ draft, event, prefs, emit }: Context & { event: V2Event
   }
   // A new user message dismisses the agent's pending buttons and upload requests.
   if (event.type === 'session.inbox.enqueued' && event.data.item.type === 'user') {
-    dismissAgentPrompts({ draft, emit, ids: draft.agentUi.filter((prompt) => prompt.sessionId === event.data.sessionID).map((prompt) => prompt.id) })
+    const pending = draft.agentUi.filter((prompt) => prompt.sessionId === event.data.sessionID)
+    // A click on the same buttons in the other chat of a mirrored session (agent-ui.ts click prompt) shows as that click here too.
+    const clicked = event.data.item.payload.text.match(/^User clicked: (.+)$/)?.[1]
+    const match = clicked ? pending.find((prompt) => prompt.buttons?.some((item) => item.label === clicked)) : undefined
+    if (match) dismissAgentPrompts({ draft, emit, ids: [match.id], result: `clicked "${clicked}"` })
+    dismissAgentPrompts({ draft, emit, ids: pending.filter((prompt) => prompt !== match).map((prompt) => prompt.id) })
   }
   const sessionId = eventSessionId(event)
   if (!sessionId) return
